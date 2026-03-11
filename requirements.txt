@@ -36,3 +36,9 @@ tenacity==9.0.0
 
 # [HTML→텍스트] HTML 태그 제거 후 순수 텍스트 추출
 html2text==2024.2.26
+
+# [Google Gemini] AI 분석 1단계 (매크로 보고서 생성)
+google-genai>=1.0.0
+
+# [주식 데이터] 미국 주식 실시간 종가 조회
+yfinance>=1.2.0

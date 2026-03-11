@@ -7,12 +7,12 @@
       "name": "한국경제",
       "name_en": "Hankyung",
       "type": "RSS",
-      "url": "https://www.hankyung.com/feed/all-news",
+      "url": "https://www.hankyung.com/feed/finance",
       "category": "경제/금융",
       "language": "ko",
       "enabled": true,
       "fetch_limit": 10,
-      "notes": "한국경제신문 전체 뉴스 RSS 피드"
+      "notes": "한국경제신문 금융 전용 RSS (증권·금리·외환 중심)"
     },
     {
       "id": "mk",
@@ -24,7 +24,7 @@
       "language": "ko",
       "enabled": true,
       "fetch_limit": 10,
-      "notes": "매일경제 증권/금융 섹션 RSS 피드"
+      "notes": "매일경제 증권 섹션 RSS (주식·채권·금융 중심, 비경제 기사는 GPT 필터 처리)"
     },
     {
       "id": "yahoo_finance",

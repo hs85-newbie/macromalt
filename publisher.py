@@ -73,12 +73,18 @@ def publish_draft(title: str, content: str) -> dict:
         "Content-Type": "application/json",
     }
 
+    # 워드프레스 카테고리 ID 설정
+    # 여기에 워드프레스 카테고리 ID를 입력하세요.
+    # 관리자 → 글 → 카테고리에서 해당 카테고리 편집 시 URL의 tag_ID 값을 확인하세요.
+    CATEGORY_IDS = [2]  # 예: [2] = '매크로 브리핑' 카테고리
+
     payload = {
         "title": title,
         "content": content,
         "status": "draft",       # 임시저장 (자동 발행하려면 "publish"로 변경)
         "format": "standard",
         "comment_status": "open",
+        "categories": CATEGORY_IDS,
     }
 
     logger.info(f"WordPress 업로드 시작 | 제목: '{title}'")
