@@ -1,12 +1,12 @@
 """
-macromalt 자동화 시스템 - AI 블로그 생성 모듈 v5.0
+macromalt 자동화 시스템 - AI 블로그 생성 모듈 v5.1
 =====================================================
 교차 퇴고 파이프라인 (Generator-Evaluator):
   Step 1 — Gemini 2.5-flash  : 뉴스 → 매크로 분석 보고서 (애널리스트)
   Step 2 — GPT-4o            : 보고서 → 블로그 초고 (바텐더 캐시)
   Step 3 — Gemini 2.5-flash  : 초고 → 편집장 비평 (PASS or 수정 가이드)
   Step 4 — GPT-4o            : 비평 반영 → 재작성 (최대 2회 루프)
-  yfinance                   : 최종본 티커 실시간 종가 조회
+  yfinance / 네이버금융       : 최종본 티커 실시간 종가 + 기준일 조회
   portfolio.json             : 픽 히스토리 누적 저장
   cost_tracker               : 실제 토큰 기반 예상 비용 계산 + 예산 알림
 """
@@ -18,7 +18,10 @@ import re
 from datetime import datetime
 from typing import Optional
 
+import markdown as md_lib
+import requests
 import yfinance as yf
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from openai import OpenAI
 from google import genai
@@ -82,11 +85,17 @@ GPT_WRITER_SYSTEM = """
 주 독자: 여의도·월스트리트 펀드매니저, Level 6-7 개인 투자자.
 
 아래 매크로 분석 보고서를 바탕으로 블로그 포스팅을 작성해라.
-보고서에 등장한 수치와 티커를 그대로 사용해라.
 
 [목표 분량]
 총 2,500자 이상. 한국경제·매일경제 심층 분석 기사 수준의 밀도로 작성해라.
 각 섹션을 압축하지 말고 논거를 충분히 전개해라.
+
+[데이터 강제 인용 규칙 — 최우선]
+분석 보고서에 등장하는 모든 숫자(가격·지수·퍼센트·bp·환율·수급 금액 등)를
+본문 전체에서 최소 3회 이상 직접 인용해라.
+- 금지: "유가가 올랐다", "달러가 강세를 보였다", "코스피가 상승했다"
+- 필수: "WTI가 $76.40까지 밀렸다", "달러 인덱스 104.3으로 0.6% 반등", "코스피 2,730 돌파"
+수치 없이 방향성만 서술하는 문장은 작성 금지다.
 
 [Negative Prompt — 절대 사용 금지]
 - "결론적으로", "요약하자면", "정리하면"
@@ -103,35 +112,46 @@ GPT_WRITER_SYSTEM = """
 2. 오프닝: "안녕하세요, 매크로몰트의 바텐더 캐시입니다."로 시작.
    오늘 시황 전반을 싱글몰트 위스키(피트향·셰리캐스크·숙성연도·피니시 등)에 비유해 3~4문장으로 묘사해라.
    비유는 구체적이고 감각적이어야 하며, 투자자가 오늘 시장의 온도를 직감할 수 있어야 한다.
+   오프닝에도 핵심 수치 1개 이상을 자연스럽게 녹여라.
 
 3. ## 글로벌 매크로 브리핑
    반드시 아래 두 섹션으로 나눠라.
 
    ### 🌐 미국 시장
-   - 연준 금리·국채 수익률·달러 인덱스·S&P500·나스닥 중 해당 수치를 모두 인용.
-   - 테마 중심 소제목 1~2개. 예: '4.5%의 벽 — 연준이 버티는 이유'
+   - 연준 금리·국채 수익률·달러 인덱스·S&P500·나스닥 중 해당 수치를 전부 인용해라.
+   - 테마 중심 소제목 정확히 3개. 예: '4.5%의 벽 — 연준이 버티는 이유' / '달러 인덱스 104.3의 함의' / 'S&P500 지지선 공방'
    - 각 단락 최소 4문장. 수치 → 인과 → 파급 → 포지션 시사점 순서로 전개.
+   - 수치 없는 단락은 작성 금지.
 
    ### 🇰🇷 국내 시장
-   - 코스피·코스닥·원/달러 환율·외국인 수급 중 해당 수치를 모두 인용.
-   - 테마 중심 소제목 1~2개. 예: '외국인 5,200억 순매수의 진짜 의미'
-   - 각 단락 최소 4문장. 글로벌 매크로와의 연결고리를 반드시 서술해라.
+   - 코스피·코스닥·원/달러 환율·외국인 수급 중 해당 수치를 전부 인용해라.
+   - 테마 중심 소제목 정확히 3개. 예: '외국인 5,200억 순매수의 진짜 의미' / '원/달러 1,320원 공방' / '코스닥 기술주 수급 변화'
+   - 각 단락 최소 4문장. 글로벌 매크로(미국 시장 섹션의 수치)와의 연결고리를 반드시 서술해라.
+   - 수치 없는 단락은 작성 금지.
 
 4. ## 캐시의 테이스팅 노트
    내일 당장 포트폴리오를 손봐야 하는 섹터·전략 3가지를 제시해라.
    각 항목은 아래 형식으로 3~4문장씩 작성해라:
-   - **[섹터/전략명]**: 오늘 매크로 데이터에서 나온 구체적 근거 1문장.
-     그 근거가 해당 섹터에 미치는 1~2차 연쇄 효과 1~2문장.
-     내일 당장 취해야 할 행동(매수·매도·비중 확대·헷지) 1문장.
+   - **[섹터/전략명]**: 오늘 매크로 데이터의 구체적 수치를 인용한 근거 1문장.
+     그 수치가 해당 섹터에 미치는 1~2차 연쇄 효과 1~2문장 (수치 포함).
+     내일 당장 취해야 할 구체적 행동(매수·매도·비중 확대·헷지) 1문장.
    "장기 투자", "분산 투자" 표현 금지. 단기 포지션 중심으로만 작성해라.
 
 5. ### 🥃 캐시의 픽
    반드시 4번(테이스팅 노트)의 논리적 연장선에서 2~3개 티커를 선정해라.
    테이스팅 노트에서 언급하지 않은 섹터의 티커는 선정 금지.
-   JSON 블록 형식 엄수:
+
+   JSON 블록 형식 엄수 (시스템이 파싱하므로 형식 절대 변경 금지):
    <!-- PICKS: [{"ticker": "NVDA", "reason": "반도체 수요 회복 + 달러 약세 수혜"}, {"ticker": "XLE", "reason": "유가 반등 수혜 에너지 ETF"}] -->
-   JSON 블록 바로 아래에는 각 티커를 마크다운 리스트로 작성해라:
-   - **NVDA** — 반도체 수요 회복 + 달러 약세 수혜 | 현재가: {PRICE_PLACEHOLDER}
+
+   JSON 블록 아래에 각 티커를 다음 형식으로 작성해라:
+
+   **[티커명]** | 현재가: {PRICE_PLACEHOLDER}
+   > [추천 근거 — 최소 3문장]
+   > 첫째, 오늘 분석된 구체적 매크로 수치와 이 종목의 상관관계를 설명해라. (예: 중동 리스크 고조로 WTI $80 돌파 → 정제마진 수혜 → 에너지주 단기 강세)
+   > 둘째, 그 매크로 흐름이 이 종목의 실적·밸류에이션·수급에 미치는 직접적 영향을 서술해라.
+   > 셋째, 단기(1~5거래일) 트레이딩 관점에서 왜 지금 이 종목인지 한 줄로 확언해라.
+
    (실제 주가는 시스템이 자동 삽입하므로 {PRICE_PLACEHOLDER}를 그대로 두어라)
 
 6. ### 🔗 오늘의 참고 문헌
@@ -158,39 +178,55 @@ GPT_FALLBACK_USER = """
 # ──────────────────────────────────────────────
 GEMINI_CRITIC_SYSTEM = """
 너는 여의도 최고급 투자 블로그 'MacroMalt'의 수석 편집장이다.
-ChatGPT가 작성한 초고를 읽고 아래 5가지 기준으로 냉정하게 평가해라.
+숫자에 집착하는 깐깐한 완벽주의자로, 수치 없는 분석은 분석이 아니라는 철학을 가지고 있다.
+ChatGPT가 쓴 글을 읽고 아래 기준으로 무자비하게 평가해라.
+내용이 평이하거나 수치가 부족하면 무조건 반려(FAIL)하고 재작성을 지시해라.
+웬만한 글은 FAIL이 정상이다. PASS는 진짜 완벽할 때만 허용해라.
 
-[평가 기준 5가지]
+[평가 기준 — 하나라도 미달이면 즉시 FAIL]
 
-① 분량·밀도: 총 글자 수가 2,500자 이상인가?
-   한국경제·매일경제 심층 기사 수준의 논거 전개인가, 아니면 단순 나열인가?
+① 수치 밀도 (가장 중요):
+   본문 전체에서 구체 수치(가격·지수·퍼센트·bp·환율·수급 금액)가 최소 8개 이상 직접 인용됐는가?
+   "유가가 올랐다", "달러가 강세를 보였다"처럼 방향성만 서술하고 수치가 없는 문장이 있는가?
+   → 수치 없는 방향 서술 문장을 하나씩 직접 인용하고, 어떤 숫자로 대체해야 하는지 명시해라.
+
+② 분량·밀도:
+   총 글자 수가 2,500자 이상인가?
+   한국경제·매일경제 심층 기사 수준의 논거 전개인가, 아니면 개조식 나열인가?
    → 부족하면 어느 섹션을 얼마나 확장해야 하는지 명시해라.
 
-② 브리핑 구조: '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 섹션이 각각 존재하는가?
-   각 섹션에 구체 수치(금리%, bp, 환율, 지수, 수급 금액 등)가 충분히 인용됐는가?
-   분석이 1차원("금리가 올라서 주가가 내렸다" 수준)에 머물지 않는가?
-   → 없거나 부족하면 어느 섹션에 어떤 수치·분석이 추가돼야 하는지 명시해라.
+③ 브리핑 2세션 구조 및 소제목 3개:
+   '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 소제목이 각각 명확히 존재하는가?
+   각 세션에 해당 시장의 핵심 수치(금리·수익률·지수·환율·수급)가 빠짐없이 인용됐는가?
+   미국 시장 섹션에 테마 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
+   국내 시장 섹션에 테마 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
+   국내 시장 섹션이 미국 시장과의 인과 연결 없이 독립적으로 서술됐는가?
+   → 소제목이 부족하거나 연결이 빠졌으면 구체적으로 지적해라.
 
-③ 참고문헌 정합성: 본문(브리핑·테이스팅 노트)에서 실제로 언급·인용한 기사만 참고문헌에 있는가?
-   본문에서 다뤘는데 참고문헌에 없는 기사, 또는 본문에 없는데 참고문헌에만 있는 기사가 있는가?
-   → 불일치 항목을 구체적으로 지적해라.
+④ 참고문헌 정합성:
+   본문(브리핑·테이스팅 노트)에서 언급한 모든 기사가 참고문헌에 있는가?
+   반대로, 본문에서 다루지 않은 기사가 참고문헌에 끼어 있지 않은가?
+   → 불일치 항목을 구체적으로 나열해라.
 
-④ 테이스팅 노트 깊이: 각 액션 포인트가 3~4문장(근거→연쇄효과→행동)으로 충분히 서술됐는가?
-   1~2문장으로 압축된 항목이 있는가?
-   → 있으면 해당 항목을 지적하고 어떻게 확장해야 하는지 방향을 제시해라.
+⑤ 테이스팅 노트 깊이:
+   각 액션 포인트가 3~4문장(수치 근거→연쇄효과→단기 행동)으로 서술됐는가?
+   1~2문장으로 압축된 항목이 하나라도 있으면 FAIL이다.
+   → 해당 항목을 직접 인용하고 어떻게 확장해야 하는지 방향을 제시해라.
 
-⑤ 픽 일관성 및 형식: <!-- PICKS: [...] --> JSON 블록이 존재하는가? 티커가 2~3개인가?
-   픽이 테이스팅 노트에서 언급된 섹터·논리에서 직접 파생됐는가?
-   테이스팅 노트에 없는 섹터의 티커가 뜬금없이 등장하진 않는가?
-   → 문제 있으면 어떤 티커가 왜 부적절한지, 대신 무엇이 나와야 하는지 명시해라.
+⑥ 픽 논리 연결·형식·추천 근거:
+   <!-- PICKS: [...] --> JSON 블록이 정확히 존재하는가? 티커가 2~3개인가?
+   각 티커 아래에 최소 3문장 추천 근거(매크로 수치→종목 상관관계→단기 확언)가 있는가?
+   픽이 테이스팅 노트 논리에서 직접 파생됐는가? 뜬금없는 티커는 없는가?
+   → 문제 있으면 어떤 티커가 왜 부적절한지, 추천 근거가 왜 부족한지 명시해라.
 
-[AI 어투 추가 점검]
-"결론적으로", "요약하자면", "중요합니다", "~할 수 있겠습니다", "~라고 볼 수 있습니다" 등 뻔한 표현이 있으면
-해당 문장을 직접 인용하고 구체적 대안 문장을 제시해라.
+[AI 어투 점검]
+"결론적으로", "요약하자면", "중요합니다", "~할 수 있겠습니다", "~라고 볼 수 있습니다" 등
+뻔한 표현이 있으면 해당 문장을 직접 인용하고 구체적 대안 문장을 제시해라.
 
 [출력 규칙 — 엄수]
-- 위 5가지 기준을 모두 통과하면 오직 "PASS" 한 단어만 반환해라. 부연 설명 금지.
-- 하나라도 미달이면 "FAIL\n" 뒤에 항목별 번호(①~⑤)를 붙여 구체 수정 가이드를 작성해라.
+- 위 6가지 기준을 단 하나의 예외도 없이 모두 통과한 경우에만 "PASS" 한 단어를 반환해라.
+- 하나라도 미달이면 반드시 "FAIL\n" 뒤에 ①~⑥ 번호를 붙여 구체 수정 지시를 작성해라.
+- "전반적으로 잘 썼지만..." 같은 칭찬 멘트는 절대 금지. 지적과 지시만 써라.
 """
 
 GEMINI_CRITIC_USER = """
@@ -205,21 +241,27 @@ GEMINI_CRITIC_USER = """
 # 4. GPT-4o Step 4 프롬프트 (바텐더 캐시 — 재작성)
 # ──────────────────────────────────────────────
 GPT_REWRITE_USER = """
-수석 편집장(Gemini)이 아래 초고에 다음과 같은 수정 가이드를 제시했다.
-편집장의 모든 지적 사항을 반영해 글을 전면 수정하고 다시 작성해라.
+수석 편집장(Gemini)이 아래 초고를 반려하고 수정 지시를 내렸다.
+편집장의 모든 지적 사항을 한 줄도 빠짐없이 반영해 글을 전면 재작성해라.
 
-[편집장 수정 가이드]
+[편집장 수정 지시]
 {feedback}
 
 [수정할 초고]
 {draft}
 
-[재작성 지시]
-- 편집장 지적 사항을 하나도 빠짐없이 반영해라.
-- 글 구조(제목→오프닝→브리핑→테이스팅노트→픽→참고문헌) 순서는 유지해라.
-- <!-- PICKS: [...] --> JSON 블록은 반드시 포함해라.
-- 총 글자 수 1,500자 이상 유지해라.
-- AI 어투 Negative Prompt(결론적으로, 요약하자면 등)는 절대 사용 금지.
+[재작성 필수 체크리스트 — 전부 지켜야 한다]
+□ 본문 전체에 구체 수치(가격·지수·%·bp·환율·수급)를 최소 8개 이상 직접 인용할 것.
+  "유가가 올랐다" → "WTI가 $76.40으로 2.3% 하락했다" 같이 반드시 숫자로 대체.
+□ 글 구조(제목→오프닝→브리핑→테이스팅노트→캐시의픽→참고문헌) 순서 유지.
+□ 브리핑은 '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 섹션으로 분리.
+□ 미국 시장 섹션에 테마 소제목 정확히 3개, 국내 시장 섹션에 테마 소제목 정확히 3개.
+□ 테이스팅 노트 각 항목은 3~4문장(수치 근거→연쇄효과→단기 행동) 필수.
+□ <!-- PICKS: [...] --> JSON 블록 형식 유지. 티커 2~3개.
+□ 각 픽 아래에 추천 근거 최소 3문장(매크로 수치 상관관계→실적 영향→단기 확언) 작성.
+□ 참고문헌은 본문에서 실제 인용한 기사만 포함. 불일치 없을 것.
+□ 총 글자 수 2,500자 이상.
+□ AI 어투(결론적으로·요약하자면·중요합니다 등) 절대 사용 금지.
 """
 
 
@@ -390,10 +432,72 @@ def parse_picks_from_content(content: str) -> list:
 
 
 # ──────────────────────────────────────────────
-# 13. yfinance 종가 조회
+# 13a. 네이버 금융 해외주식 종가 폴백 조회
+# ──────────────────────────────────────────────
+def _fetch_naver_price(ticker: str) -> Optional[str]:
+    """
+    네이버 금융 해외주식 페이지에서 종가를 스크래핑합니다.
+    yfinance가 N/A를 반환할 때 폴백으로 호출됩니다.
+    NASDAQ(.O) → NYSE(.N) 순서로 시도합니다.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        "Referer": "https://finance.naver.com/",
+    }
+
+    for suffix in [".O", ".N", ".K"]:
+        url = f"https://finance.naver.com/world/sise.naver?symbol={ticker}{suffix}"
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code != 200:
+                continue
+
+            resp.encoding = resp.apparent_encoding or "utf-8"
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # 네이버 금융 해외주식 현재가 선택자 (여러 후보 순차 탐색)
+            price_elem = (
+                soup.select_one(".now")
+                or soup.select_one("#rate_view .now")
+                or soup.select_one(".price_now .num")
+                or soup.select_one("strong.tit_sd")
+            )
+
+            if price_elem:
+                raw = price_elem.get_text(strip=True).replace(",", "")
+                # 숫자(소수점 허용)만 추출
+                digits = re.sub(r"[^\d.]", "", raw)
+                if digits:
+                    price_float = float(digits)
+                    date_str = datetime.now().strftime("%Y-%m-%d")
+                    logger.info(
+                        f"네이버금융 종가 조회 성공: {ticker}{suffix} = ${price_float:,.2f}"
+                    )
+                    return f"${price_float:,.2f} ({date_str} 기준, 네이버금융)"
+
+        except Exception as e:
+            logger.debug(f"네이버금융 조회 실패 ({ticker}{suffix}): {e}")
+            continue
+
+    logger.warning(f"네이버금융에서도 {ticker} 종가를 찾지 못했습니다.")
+    return None
+
+
+# ──────────────────────────────────────────────
+# 13b. yfinance 종가 조회 (네이버 금융 폴백 포함)
 # ──────────────────────────────────────────────
 def fetch_stock_prices(tickers: list) -> dict:
-    """티커 리스트의 최신 종가를 조회합니다. 실패 시 'N/A' 반환."""
+    """
+    티커 리스트의 최신 종가를 조회합니다.
+    - 성공 시: '$184.77 (2026-03-11 기준)' 형식 반환
+    - yfinance N/A → 네이버 금융 폴백
+    - 모두 실패 시: 'N/A' 반환
+    """
     prices = {}
     for ticker_str in tickers:
         try:
@@ -401,13 +505,18 @@ def fetch_stock_prices(tickers: list) -> dict:
             hist = t.history(period="1d")
             if not hist.empty:
                 price = round(hist["Close"].iloc[-1], 2)
-                prices[ticker_str] = f"${price:,.2f}"
+                price_date = hist.index[-1].strftime("%Y-%m-%d")
+                prices[ticker_str] = f"${price:,.2f} ({price_date} 기준)"
             else:
-                prices[ticker_str] = "N/A"
+                logger.info(f"{ticker_str} yfinance N/A → 네이버금융 폴백 시도")
+                naver = _fetch_naver_price(ticker_str)
+                prices[ticker_str] = naver if naver else "N/A"
         except Exception as e:
-            logger.warning(f"{ticker_str} 종가 조회 실패: {e}")
-            prices[ticker_str] = "N/A"
-    logger.info(f"yfinance 종가 조회 완료: {prices}")
+            logger.warning(f"{ticker_str} yfinance 조회 실패: {e} → 네이버금융 폴백 시도")
+            naver = _fetch_naver_price(ticker_str)
+            prices[ticker_str] = naver if naver else "N/A"
+
+    logger.info(f"종가 조회 완료: {prices}")
     return prices
 
 
@@ -474,31 +583,99 @@ def extract_title(markdown_content: str) -> str:
 
 
 # ──────────────────────────────────────────────
-# 17. 최종 콘텐츠 조립 (PICKS 블록 제거 + 실제 종가 삽입)
+# 17. 마크다운 → HTML 변환 (인라인 스타일 적용)
 # ──────────────────────────────────────────────
-def assemble_final_content(raw_content: str, picks_section: str) -> str:
-    # PICKS JSON 블록 제거
+def convert_to_html(content: str) -> str:
+    """
+    마크다운을 WordPress용 HTML로 변환하고 인라인 스타일을 적용합니다.
+    # → h1, ## → h2, ### → h3, ** → strong, > → blockquote
+    """
+    # 1. markdown 라이브러리로 HTML 변환
+    html = md_lib.markdown(content, extensions=["tables", "fenced_code"])
+
+    # 2. 태그별 인라인 스타일 적용
+    style_map = [
+        (
+            "<h1>",
+            '<h1 style="font-size:2em;font-weight:800;color:#1a1a2e;'
+            "margin:1.2em 0 0.5em;padding-bottom:10px;"
+            'border-bottom:3px solid #3b5998;">',
+        ),
+        (
+            "<h2>",
+            '<h2 style="font-size:1.5em;font-weight:700;color:#2c3e7a;'
+            "margin:1.8em 0 0.5em;padding-bottom:4px;"
+            'border-bottom:1px solid #c8d0e8;">',
+        ),
+        (
+            "<h3>",
+            '<h3 style="font-size:1.2em;font-weight:700;color:#3b5998;'
+            'margin:1.4em 0 0.3em;">',
+        ),
+        (
+            "<p>",
+            '<p style="font-size:15px;line-height:1.9;color:#2d2d2d;margin:0.8em 0;">',
+        ),
+        (
+            "<blockquote>",
+            '<blockquote style="border-left:4px solid #3b5998;margin:12px 0;'
+            'padding:10px 18px;background:#f5f7ff;color:#444;font-style:normal;">',
+        ),
+        (
+            "<ul>",
+            '<ul style="margin:0.5em 0 0.8em 1.4em;padding:0;">',
+        ),
+        (
+            "<ol>",
+            '<ol style="margin:0.5em 0 0.8em 1.4em;padding:0;">',
+        ),
+        (
+            "<li>",
+            '<li style="font-size:15px;line-height:1.8;color:#2d2d2d;margin:0.3em 0;">',
+        ),
+    ]
+
+    for old_tag, new_tag in style_map:
+        html = html.replace(old_tag, new_tag)
+
+    # 링크 스타일 (속성 있는 태그이므로 regex 사용)
+    html = re.sub(
+        r"<a ",
+        '<a style="color:#3b5998;text-decoration:underline;" ',
+        html,
+    )
+
+    return html
+
+
+# ──────────────────────────────────────────────
+# 18. 최종 콘텐츠 조립 (PICKS 블록 제거 + 실제 종가 삽입)
+# ──────────────────────────────────────────────
+def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
+    """
+    GPT 초고에서 PICKS JSON 주석을 제거하고,
+    각 티커의 {PRICE_PLACEHOLDER}를 실제 종가(기준일 포함)로 교체합니다.
+    GPT-written 상세 추천 근거를 그대로 보존합니다.
+    """
+    # 1. PICKS JSON 블록 제거
     content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", raw_content, flags=re.DOTALL)
 
-    if picks_section:
-        picks_pattern = re.compile(
-            r"(###\s*🥃\s*캐시의\s*픽.*?)(?=###\s*🔗|$)", re.DOTALL
-        )
-        if picks_pattern.search(content):
-            content = picks_pattern.sub(picks_section + "\n\n", content)
-        else:
-            ref_pattern = re.compile(r"(###\s*🔗\s*오늘의\s*참고\s*문헌)", re.DOTALL)
-            if ref_pattern.search(content):
-                content = ref_pattern.sub(picks_section + "\n\n" + r"\1", content)
-            else:
-                content = content.strip() + "\n\n" + picks_section
+    # 2. 각 티커의 {PRICE_PLACEHOLDER}를 실제 종가로 순차 교체
+    for pick in picks:
+        ticker = pick.get("ticker", "")
+        price = prices.get(ticker, "N/A")
+        if "{PRICE_PLACEHOLDER}" in content:
+            content = content.replace("{PRICE_PLACEHOLDER}", price, 1)
+
+    # 3. GPT가 플레이스홀더를 누락한 경우 잔여 처리
+    content = content.replace("{PRICE_PLACEHOLDER}", "N/A")
 
     content = re.sub(r"\n{3,}", "\n\n", content)
     return content.strip()
 
 
 # ──────────────────────────────────────────────
-# 18. 메인 생성 함수 (교차 퇴고 루프 포함)
+# 19. 메인 생성 함수 (교차 퇴고 루프 포함)
 # ──────────────────────────────────────────────
 def generate_blog_post(articles: list) -> dict:
     """
@@ -507,7 +684,7 @@ def generate_blog_post(articles: list) -> dict:
     흐름:
       Step1 Gemini 분석 → Step2 GPT 초고
       → [Step3 Gemini 비평 → Step4 GPT 재작성] × 최대 MAX_RETRIES회
-      → yfinance 종가 조회 → 최종 조립 → portfolio 저장
+      → yfinance/네이버금융 종가 조회 → 최종 조립 → HTML 변환 → portfolio 저장
 
     반환값:
         {"title": str, "content": str, "generated_at": str, "picks": list}
@@ -538,32 +715,33 @@ def generate_blog_post(articles: list) -> dict:
         if attempt == MAX_RETRIES:
             logger.info(f"⏹ 최대 퇴고 횟수 도달 ({MAX_RETRIES}회) — 마지막 수정본으로 확정")
 
-    # ── 최종본 기준으로 picks·yfinance 처리 ──────
+    # ── 최종본 기준으로 picks·종가 처리 ──────────
     picks = parse_picks_from_content(draft)
     tickers = [p.get("ticker", "") for p in picks if p.get("ticker")]
     prices = fetch_stock_prices(tickers) if tickers else {}
 
-    picks_section = build_picks_section(picks, prices)
-
     if picks:
         save_portfolio(picks, prices)
 
-    # ── 최종 조립 ────────────────────────────────
-    final_content = assemble_final_content(draft, picks_section)
-    title = extract_title(final_content)
+    # ── 최종 조립: PICKS 블록 제거 + 실제 종가 주입 ─
+    title = extract_title(draft)  # HTML 변환 전 마크다운에서 제목 추출
+    final_content = assemble_final_content(draft, picks, prices)
 
-    logger.info(f"블로그 포스팅 생성 완료 | 제목: '{title}' | 길이: {len(final_content)}자")
+    # ── 마크다운 → WordPress용 HTML 변환 ─────────
+    final_html = convert_to_html(final_content)
+
+    logger.info(f"블로그 포스팅 생성 완료 | 제목: '{title}' | HTML 길이: {len(final_html)}자")
 
     return {
         "title": title,
-        "content": final_content,
+        "content": final_html,
         "generated_at": datetime.now().isoformat(),
         "picks": picks,
     }
 
 
 # ──────────────────────────────────────────────
-# 19. 직접 실행 진입점 (테스트용)
+# 20. 직접 실행 진입점 (테스트용)
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
     import sys

@@ -42,3 +42,6 @@ google-genai>=1.0.0
 
 # [주식 데이터] 미국 주식 실시간 종가 조회
 yfinance>=1.2.0
+
+# [마크다운 변환] 마크다운 → WordPress HTML 변환
+markdown>=3.9
