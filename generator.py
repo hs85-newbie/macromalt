@@ -1,12 +1,14 @@
 """
-macromalt 자동화 시스템 - AI 블로그 생성 모듈 v4.1
+macromalt 자동화 시스템 - AI 블로그 생성 모듈 v5.0
 =====================================================
-듀얼 코어 파이프라인:
-  Step 1 — Google Gemini (gemini-2.5-flash): 원본 뉴스 → 매크로 분석 보고서
-  Step 2 — OpenAI GPT-4o: Gemini 보고서 → 블로그 본문 + 추천 티커
-  yfinance: 추천 티커 실시간 종가 조회
-  portfolio.json: 픽 히스토리 누적 저장
-  cost_tracker: 실제 토큰 기반 예상 비용 계산 + 예산 알림
+교차 퇴고 파이프라인 (Generator-Evaluator):
+  Step 1 — Gemini 2.5-flash  : 뉴스 → 매크로 분석 보고서 (애널리스트)
+  Step 2 — GPT-4o            : 보고서 → 블로그 초고 (바텐더 캐시)
+  Step 3 — Gemini 2.5-flash  : 초고 → 편집장 비평 (PASS or 수정 가이드)
+  Step 4 — GPT-4o            : 비평 반영 → 재작성 (최대 2회 루프)
+  yfinance                   : 최종본 티커 실시간 종가 조회
+  portfolio.json             : 픽 히스토리 누적 저장
+  cost_tracker               : 실제 토큰 기반 예상 비용 계산 + 예산 알림
 """
 
 import json
@@ -28,11 +30,14 @@ load_dotenv()
 
 logger = logging.getLogger("macromalt")
 
+# 퇴고 루프 최대 반복 횟수
+MAX_RETRIES = 2
+
 
 # ──────────────────────────────────────────────
 # 1. Gemini Step 1 프롬프트 (수석 매크로 애널리스트)
 # ──────────────────────────────────────────────
-GEMINI_SYSTEM_PROMPT = """
+GEMINI_ANALYST_SYSTEM = """
 너는 여의도 탑티어 운용사 출신 수석 매크로 애널리스트다.
 주어진 뉴스 목록을 분석해 기관 투자자용 내부 보고서를 작성해라.
 
@@ -62,7 +67,7 @@ GEMINI_SYSTEM_PROMPT = """
 - 반드시 실존하는 NYSE/NASDAQ 티커만 사용할 것.
 """
 
-GEMINI_USER_TEMPLATE = """
+GEMINI_ANALYST_USER = """
 아래 뉴스 데이터를 분석해 내부 보고서를 작성해라.
 
 {articles_text}
@@ -70,9 +75,9 @@ GEMINI_USER_TEMPLATE = """
 
 
 # ──────────────────────────────────────────────
-# 2. GPT-4o Step 2 프롬프트 (바텐더 캐시)
+# 2. GPT-4o Step 2 프롬프트 (바텐더 캐시 — 초고 작성)
 # ──────────────────────────────────────────────
-GPT_SYSTEM_PROMPT = """
+GPT_WRITER_SYSTEM = """
 너는 'MacroMalt(매크로몰트)'의 바텐더 캐시(Cash)다.
 주 독자: 여의도·월스트리트 펀드매니저, Level 6-7 개인 투자자.
 
@@ -113,14 +118,13 @@ GPT_SYSTEM_PROMPT = """
    형식: - [기사 제목](원본 URL) *— 출처명*
 """
 
-GPT_USER_TEMPLATE = """
+GPT_WRITER_USER = """
 [매크로 분석 보고서]
 
 {gemini_report}
 """
 
-# Gemini 폴백: GPT가 직접 원본 뉴스를 분석해 블로그 작성
-GPT_FALLBACK_USER_TEMPLATE = """
+GPT_FALLBACK_USER = """
 아래 원본 뉴스 데이터를 직접 분석해 블로그 포스팅을 작성해라.
 
 {articles_text}
@@ -128,7 +132,188 @@ GPT_FALLBACK_USER_TEMPLATE = """
 
 
 # ──────────────────────────────────────────────
-# 3. 뉴스 데이터 → 텍스트 변환
+# 3. Gemini Step 3 프롬프트 (수석 편집장 — 교차 비평)
+# ──────────────────────────────────────────────
+GEMINI_CRITIC_SYSTEM = """
+너는 여의도 최고급 투자 블로그 'MacroMalt'의 수석 편집장이다.
+ChatGPT가 작성한 초고를 읽고 냉정하게 평가해라.
+
+[평가 기준 3가지]
+① AI 어투: "결론적으로", "요약하자면", "중요합니다", "~할 수 있겠습니다" 등 뻔한 표현이 있는가?
+   → 있으면 해당 문장을 직접 인용해 지적하고, 어떻게 고쳐야 하는지 구체적 대안 문장을 제시해라.
+
+② 매크로 깊이: 수치(금리%, 달러 환율, bp, 자금 규모 등)가 충분히 인용됐는가?
+   분석이 1차원("금리가 올라서 주가가 떨어졌다" 수준)에 머물지 않는가?
+   → 부족하면 어느 섹션에 어떤 수치가 추가돼야 하는지 명시해라.
+
+③ 픽 섹션 완결성: 본문에 <!-- PICKS: [...] --> JSON 블록이 정확히 있는가?
+   티커 심볼이 2개 이상 명시됐는가?
+   → 없거나 형식이 틀리면 반드시 지적해라.
+
+[출력 규칙 — 엄수]
+- 위 3가지 기준을 모두 통과하면 오직 "PASS" 한 단어만 반환해라. 부연 설명 금지.
+- 하나라도 미달이면 "FAIL\n" 뒤에 항목별 구체 수정 가이드를 작성해라.
+  예:
+  FAIL
+  ① [AI 어투] "결론적으로 이번 Fed 결정은..." → "Fed는 시장 예상을 정면으로 꺾었다..."로 교체
+  ② [매크로 깊이] 브리핑 섹션에 미 10Y 국채 수익률 수치 누락. 현재 4.52% (+8bp) 삽입 필요
+  ③ [픽 섹션] <!-- PICKS: [...] --> 블록 없음. 반드시 추가할 것
+"""
+
+GEMINI_CRITIC_USER = """
+아래는 ChatGPT가 작성한 블로그 초고다. 수석 편집장으로서 평가해라.
+
+[초고]
+{draft}
+"""
+
+
+# ──────────────────────────────────────────────
+# 4. GPT-4o Step 4 프롬프트 (바텐더 캐시 — 재작성)
+# ──────────────────────────────────────────────
+GPT_REWRITE_USER = """
+수석 편집장(Gemini)이 아래 초고에 다음과 같은 수정 가이드를 제시했다.
+편집장의 모든 지적 사항을 반영해 글을 전면 수정하고 다시 작성해라.
+
+[편집장 수정 가이드]
+{feedback}
+
+[수정할 초고]
+{draft}
+
+[재작성 지시]
+- 편집장 지적 사항을 하나도 빠짐없이 반영해라.
+- 글 구조(제목→오프닝→브리핑→테이스팅노트→픽→참고문헌) 순서는 유지해라.
+- <!-- PICKS: [...] --> JSON 블록은 반드시 포함해라.
+- 총 글자 수 1,500자 이상 유지해라.
+- AI 어투 Negative Prompt(결론적으로, 요약하자면 등)는 절대 사용 금지.
+"""
+
+
+# ──────────────────────────────────────────────
+# 5. 내부 유틸: GPT-4o 공통 호출 (비용 기록 포함)
+# ──────────────────────────────────────────────
+def _call_gpt(system: str, user: str, label: str, temperature: float = 0.75) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY가 .env에 설정되지 않았습니다.")
+
+    client = OpenAI(api_key=api_key)
+    logger.info(f"GPT-4o 호출 시작 ({label})")
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system.strip()},
+            {"role": "user", "content": user.strip()},
+        ],
+        max_tokens=3000,
+        temperature=temperature,
+    )
+
+    content = response.choices[0].message.content or ""
+    logger.info(f"GPT-4o 완료 ({label}) | 길이: {len(content)}자")
+
+    if response.usage:
+        cost_tracker.record_openai_usage(
+            input_tokens=response.usage.prompt_tokens,
+            output_tokens=response.usage.completion_tokens,
+        )
+
+    return content
+
+
+# ──────────────────────────────────────────────
+# 6. 내부 유틸: Gemini 공통 호출 (비용 기록 포함)
+# ──────────────────────────────────────────────
+def _call_gemini(system: str, user: str, label: str, temperature: float = 0.3) -> Optional[str]:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        logger.warning(f"GEMINI_API_KEY 없음 — {label} 건너뜀")
+        return None
+
+    try:
+        client = genai.Client(api_key=api_key)
+        logger.info(f"Gemini 호출 시작 ({label})")
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user.strip(),
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system.strip(),
+                max_output_tokens=3000,
+                temperature=temperature,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+
+        result = response.text or ""
+        logger.info(f"Gemini 완료 ({label}) | 길이: {len(result)}자")
+
+        if response.usage_metadata:
+            cost_tracker.record_gemini_usage(
+                input_tokens=response.usage_metadata.prompt_token_count or 0,
+                output_tokens=response.usage_metadata.candidates_token_count or 0,
+            )
+
+        return result
+
+    except Exception as e:
+        logger.warning(f"Gemini 호출 실패 ({label}): {e}")
+        return None
+
+
+# ──────────────────────────────────────────────
+# 7. Step 1 — Gemini 매크로 분석 보고서
+# ──────────────────────────────────────────────
+def step1_gemini_analysis(articles_text: str) -> Optional[str]:
+    user_msg = GEMINI_ANALYST_USER.format(articles_text=articles_text)
+    return _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, label="Step1:매크로분석")
+
+
+# ──────────────────────────────────────────────
+# 8. Step 2 — GPT-4o 블로그 초고 작성
+# ──────────────────────────────────────────────
+def step2_gpt_draft(gemini_report: Optional[str], articles_text: str = "") -> str:
+    if gemini_report:
+        user_msg = GPT_WRITER_USER.format(gemini_report=gemini_report)
+        label = "Step2:초고(듀얼코어)"
+    else:
+        user_msg = GPT_FALLBACK_USER.format(articles_text=articles_text)
+        label = "Step2:초고(GPT단독폴백)"
+
+    return _call_gpt(GPT_WRITER_SYSTEM, user_msg, label=label)
+
+
+# ──────────────────────────────────────────────
+# 9. Step 3 — Gemini 편집장 비평 (교차 검토)
+# ──────────────────────────────────────────────
+def step3_gemini_critic(draft: str) -> str:
+    """
+    Gemini가 GPT 초고를 평가합니다.
+    반환값: "PASS" 또는 "FAIL\n{수정 가이드}"
+    Gemini 호출 실패 시 "PASS"를 반환해 루프를 우회합니다.
+    """
+    user_msg = GEMINI_CRITIC_USER.format(draft=draft)
+    result = _call_gemini(GEMINI_CRITIC_SYSTEM, user_msg, label="Step3:편집장비평", temperature=0.1)
+
+    if result is None:
+        logger.warning("Gemini 편집장 호출 실패 — 비평 없이 PASS 처리")
+        return "PASS"
+
+    return result.strip()
+
+
+# ──────────────────────────────────────────────
+# 10. Step 4 — GPT-4o 재작성 (편집장 피드백 반영)
+# ──────────────────────────────────────────────
+def step4_gpt_rewrite(draft: str, feedback: str) -> str:
+    user_msg = GPT_REWRITE_USER.format(feedback=feedback, draft=draft)
+    return _call_gpt(GPT_WRITER_SYSTEM, user_msg, label="Step4:재작성")
+
+
+# ──────────────────────────────────────────────
+# 11. 뉴스 데이터 → 텍스트 변환
 # ──────────────────────────────────────────────
 def format_articles_for_prompt(articles: list) -> str:
     today = datetime.now().strftime("%Y년 %m월 %d일")
@@ -155,99 +340,7 @@ def format_articles_for_prompt(articles: list) -> str:
 
 
 # ──────────────────────────────────────────────
-# 4. Step 1 — Gemini 매크로 분석 보고서
-# ──────────────────────────────────────────────
-def step1_gemini_analysis(articles_text: str) -> Optional[str]:
-    """
-    Gemini로 매크로 분석 보고서를 생성합니다.
-    API 키가 없거나 할당량 초과 시 None을 반환해 GPT 폴백을 유도합니다.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("GEMINI_API_KEY 없음 — GPT-4o 단독 모드로 폴백")
-        return None
-
-    try:
-        client = genai.Client(api_key=api_key)
-        user_message = GEMINI_USER_TEMPLATE.format(articles_text=articles_text)
-        logger.info("Gemini gemini-2.5-flash 호출 시작 (Step 1: 매크로 분석)")
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_message,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=GEMINI_SYSTEM_PROMPT.strip(),
-                max_output_tokens=3000,
-                temperature=0.3,
-                # thinking 비활성화: 뉴스 요약은 추론 불필요 → 속도 10배, 비용 95% 절감
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-
-        report = response.text or ""
-        logger.info(f"Gemini 분석 완료 | 보고서 길이: {len(report)}자")
-
-        # 비용 기록
-        usage = response.usage_metadata
-        if usage:
-            cost_tracker.record_gemini_usage(
-                input_tokens=usage.prompt_token_count or 0,
-                output_tokens=usage.candidates_token_count or 0,
-            )
-
-        return report
-
-    except Exception as e:
-        logger.warning(f"Gemini 호출 실패 ({e}) — GPT-4o 단독 모드로 폴백")
-        return None
-
-
-# ──────────────────────────────────────────────
-# 5. Step 2 — GPT-4o 블로그 본문 생성
-# ──────────────────────────────────────────────
-def step2_gpt_blog(gemini_report: Optional[str], articles_text: str = "") -> str:
-    """
-    gemini_report가 있으면 듀얼 코어 모드, None이면 GPT 단독 폴백 모드.
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY가 .env에 설정되지 않았습니다.")
-
-    client = OpenAI(api_key=api_key)
-
-    if gemini_report:
-        user_message = GPT_USER_TEMPLATE.format(gemini_report=gemini_report)
-        logger.info("GPT-4o 호출 시작 (Step 2: 듀얼 코어 모드)")
-    else:
-        user_message = GPT_FALLBACK_USER_TEMPLATE.format(articles_text=articles_text)
-        logger.info("GPT-4o 호출 시작 (Step 2: 단독 폴백 모드 — Gemini 미사용)")
-
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": GPT_SYSTEM_PROMPT.strip()},
-            {"role": "user", "content": user_message},
-        ],
-        max_tokens=3000,
-        temperature=0.75,
-    )
-
-    content = response.choices[0].message.content or ""
-    logger.info(f"GPT-4o 생성 완료 | 본문 길이: {len(content)}자")
-
-    # 비용 기록
-    usage = response.usage
-    if usage:
-        cost_tracker.record_openai_usage(
-            input_tokens=usage.prompt_tokens,
-            output_tokens=usage.completion_tokens,
-        )
-
-    return content
-
-
-# ──────────────────────────────────────────────
-# 6. 추천 티커 파싱
+# 12. 추천 티커 파싱
 # ──────────────────────────────────────────────
 def parse_picks_from_content(content: str) -> list:
     """<!-- PICKS: [...] --> 블록에서 티커 리스트를 추출합니다."""
@@ -264,7 +357,7 @@ def parse_picks_from_content(content: str) -> list:
 
 
 # ──────────────────────────────────────────────
-# 7. yfinance 종가 조회
+# 13. yfinance 종가 조회
 # ──────────────────────────────────────────────
 def fetch_stock_prices(tickers: list) -> dict:
     """티커 리스트의 최신 종가를 조회합니다. 실패 시 'N/A' 반환."""
@@ -286,7 +379,7 @@ def fetch_stock_prices(tickers: list) -> dict:
 
 
 # ──────────────────────────────────────────────
-# 8. 캐시의 픽 섹션 조립 (실제 종가 삽입)
+# 14. 캐시의 픽 섹션 조립 (실제 종가 삽입)
 # ──────────────────────────────────────────────
 def build_picks_section(picks: list, prices: dict) -> str:
     """실제 종가를 포함한 '캐시의 픽' 마크다운 섹션을 생성합니다."""
@@ -304,7 +397,7 @@ def build_picks_section(picks: list, prices: dict) -> str:
 
 
 # ──────────────────────────────────────────────
-# 9. portfolio.json 저장
+# 15. portfolio.json 저장
 # ──────────────────────────────────────────────
 def save_portfolio(picks: list, prices: dict) -> None:
     """픽 히스토리를 portfolio.json에 누적 저장합니다."""
@@ -336,7 +429,7 @@ def save_portfolio(picks: list, prices: dict) -> None:
 
 
 # ──────────────────────────────────────────────
-# 10. 제목 추출
+# 16. 제목 추출
 # ──────────────────────────────────────────────
 def extract_title(markdown_content: str) -> str:
     for line in markdown_content.splitlines():
@@ -348,19 +441,12 @@ def extract_title(markdown_content: str) -> str:
 
 
 # ──────────────────────────────────────────────
-# 11. 최종 콘텐츠 조립
+# 17. 최종 콘텐츠 조립 (PICKS 블록 제거 + 실제 종가 삽입)
 # ──────────────────────────────────────────────
 def assemble_final_content(raw_content: str, picks_section: str) -> str:
-    """
-    GPT 출력에서:
-      - <!-- PICKS: [...] --> 블록 제거
-      - {PRICE_PLACEHOLDER} → 실제 종가로 대체된 picks_section으로 교체
-    최종 순서: 제목→오프닝→브리핑→테이스팅노트→캐시의픽→참고문헌
-    """
     # PICKS JSON 블록 제거
     content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", raw_content, flags=re.DOTALL)
 
-    # 기존 ### 🥃 캐시의 픽 섹션 교체 (GPT가 {PRICE_PLACEHOLDER} 포함해서 썼을 경우)
     if picks_section:
         picks_pattern = re.compile(
             r"(###\s*🥃\s*캐시의\s*픽.*?)(?=###\s*🔗|$)", re.DOTALL
@@ -368,57 +454,69 @@ def assemble_final_content(raw_content: str, picks_section: str) -> str:
         if picks_pattern.search(content):
             content = picks_pattern.sub(picks_section + "\n\n", content)
         else:
-            # 참고문헌 앞에 삽입
             ref_pattern = re.compile(r"(###\s*🔗\s*오늘의\s*참고\s*문헌)", re.DOTALL)
             if ref_pattern.search(content):
                 content = ref_pattern.sub(picks_section + "\n\n" + r"\1", content)
             else:
                 content = content.strip() + "\n\n" + picks_section
 
-    # 연속 빈 줄 정리
     content = re.sub(r"\n{3,}", "\n\n", content)
     return content.strip()
 
 
 # ──────────────────────────────────────────────
-# 12. 메인 생성 함수
+# 18. 메인 생성 함수 (교차 퇴고 루프 포함)
 # ──────────────────────────────────────────────
 def generate_blog_post(articles: list) -> dict:
     """
-    수집된 기사를 바탕으로 듀얼 코어 AI로 블로그 포스팅을 생성합니다.
+    교차 퇴고 파이프라인으로 블로그 포스팅을 생성합니다.
+
+    흐름:
+      Step1 Gemini 분석 → Step2 GPT 초고
+      → [Step3 Gemini 비평 → Step4 GPT 재작성] × 최대 MAX_RETRIES회
+      → yfinance 종가 조회 → 최종 조립 → portfolio 저장
 
     반환값:
-        {
-            "title": str,
-            "content": str,
-            "generated_at": str,
-            "picks": list,
-        }
+        {"title": str, "content": str, "generated_at": str, "picks": list}
     """
     if not articles:
         raise ValueError("기사 데이터 없음")
 
-    # Step 1: Gemini 분석 (실패 시 None 반환)
+    # ── Step 1: Gemini 매크로 분석 ──────────────
     articles_text = format_articles_for_prompt(articles)
     gemini_report = step1_gemini_analysis(articles_text)
 
-    # Step 2: GPT-4o 블로그 생성 (gemini_report=None이면 폴백 모드)
-    raw_content = step2_gpt_blog(gemini_report, articles_text)
+    # ── Step 2: GPT-4o 초고 작성 ────────────────
+    draft = step2_gpt_draft(gemini_report, articles_text)
 
-    # 티커 파싱 + 종가 조회
-    picks = parse_picks_from_content(raw_content)
+    # ── Step 3-4: 교차 퇴고 루프 ────────────────
+    for attempt in range(1, MAX_RETRIES + 1):
+        logger.info(f"▶ 퇴고 루프 {attempt}/{MAX_RETRIES} — Gemini 편집장 비평 시작")
+        feedback = step3_gemini_critic(draft)
+
+        if feedback.upper().startswith("PASS"):
+            logger.info(f"✅ Gemini 편집장 PASS 승인 (퇴고 {attempt}회차)")
+            break
+
+        logger.info(f"📝 Gemini 피드백 수신 ({attempt}회차) | GPT 재작성 시작")
+        logger.debug(f"편집장 피드백:\n{feedback}")
+        draft = step4_gpt_rewrite(draft, feedback)
+
+        if attempt == MAX_RETRIES:
+            logger.info(f"⏹ 최대 퇴고 횟수 도달 ({MAX_RETRIES}회) — 마지막 수정본으로 확정")
+
+    # ── 최종본 기준으로 picks·yfinance 처리 ──────
+    picks = parse_picks_from_content(draft)
     tickers = [p.get("ticker", "") for p in picks if p.get("ticker")]
     prices = fetch_stock_prices(tickers) if tickers else {}
 
-    # 캐시의 픽 섹션 조립
     picks_section = build_picks_section(picks, prices)
 
-    # portfolio.json 저장
     if picks:
         save_portfolio(picks, prices)
 
-    # 최종 콘텐츠 조립
-    final_content = assemble_final_content(raw_content, picks_section)
+    # ── 최종 조립 ────────────────────────────────
+    final_content = assemble_final_content(draft, picks_section)
     title = extract_title(final_content)
 
     logger.info(f"블로그 포스팅 생성 완료 | 제목: '{title}' | 길이: {len(final_content)}자")
@@ -432,7 +530,7 @@ def generate_blog_post(articles: list) -> dict:
 
 
 # ──────────────────────────────────────────────
-# 13. 직접 실행 진입점 (테스트용)
+# 19. 직접 실행 진입점 (테스트용)
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
     import sys
