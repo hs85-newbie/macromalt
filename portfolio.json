@@ -94,5 +94,23 @@
     "ticker": "XLE",
     "price": "$55.60",
     "reason": "유가 반등 수혜 에너지 ETF"
+  },
+  {
+    "date": "2026-03-11",
+    "ticker": "NVDA",
+    "price": "$184.77",
+    "reason": "반도체 수요 회복 + AI 투자 확대"
+  },
+  {
+    "date": "2026-03-11",
+    "ticker": "KAI",
+    "price": "$330.29",
+    "reason": "방산 수주 확대 기대"
+  },
+  {
+    "date": "2026-03-11",
+    "ticker": "HMM",
+    "price": "N/A",
+    "reason": "해운 운임 상승 수혜 단기 트레이딩"
   }
 ]
