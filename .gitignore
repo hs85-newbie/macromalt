@@ -1,0 +1,42 @@
+# ============================================================
+# macromalt - .gitignore
+# 깃허브 업로드 시 아래 파일/폴더는 자동으로 제외됩니다.
+# ============================================================
+
+# [보안] 환경 변수 / API 키 - 절대 공개 금지
+.env
+.env.*
+!.env.example
+
+# [파이썬] 가상환경
+venv/
+.venv/
+env/
+ENV/
+
+# [파이썬] 캐시 및 컴파일 파일
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# [로그] 수집 작업 일지
+logs/
+*.log
+
+# [macOS] 시스템 파일
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# [IDE] 에디터 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# [데이터] 수집된 원시 데이터 (선택적 제외)
+data/raw/
+output/
+.claude/
