@@ -174,8 +174,10 @@ def step1_gemini_analysis(articles_text: str) -> Optional[str]:
             contents=user_message,
             config=genai_types.GenerateContentConfig(
                 system_instruction=GEMINI_SYSTEM_PROMPT.strip(),
-                max_output_tokens=8000,  # 2.5-flash는 thinking 토큰 포함이라 여유있게
+                max_output_tokens=3000,
                 temperature=0.3,
+                # thinking 비활성화: 뉴스 요약은 추론 불필요 → 속도 10배, 비용 95% 절감
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
