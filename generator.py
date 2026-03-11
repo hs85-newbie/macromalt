@@ -1,11 +1,12 @@
 """
-macromalt 자동화 시스템 - AI 블로그 생성 모듈 v4.0
+macromalt 자동화 시스템 - AI 블로그 생성 모듈 v4.1
 =====================================================
 듀얼 코어 파이프라인:
-  Step 1 — Google Gemini (gemini-1.5-pro): 원본 뉴스 → 매크로 분석 보고서
+  Step 1 — Google Gemini (gemini-2.5-flash): 원본 뉴스 → 매크로 분석 보고서
   Step 2 — OpenAI GPT-4o: Gemini 보고서 → 블로그 본문 + 추천 티커
   yfinance: 추천 티커 실시간 종가 조회
   portfolio.json: 픽 히스토리 누적 저장
+  cost_tracker: 실제 토큰 기반 예상 비용 계산 + 예산 알림
 """
 
 import json
@@ -20,6 +21,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
+
+import cost_tracker
 
 load_dotenv()
 
@@ -183,6 +186,15 @@ def step1_gemini_analysis(articles_text: str) -> Optional[str]:
 
         report = response.text or ""
         logger.info(f"Gemini 분석 완료 | 보고서 길이: {len(report)}자")
+
+        # 비용 기록
+        usage = response.usage_metadata
+        if usage:
+            cost_tracker.record_gemini_usage(
+                input_tokens=usage.prompt_token_count or 0,
+                output_tokens=usage.candidates_token_count or 0,
+            )
+
         return report
 
     except Exception as e:
@@ -222,6 +234,15 @@ def step2_gpt_blog(gemini_report: Optional[str], articles_text: str = "") -> str
 
     content = response.choices[0].message.content or ""
     logger.info(f"GPT-4o 생성 완료 | 본문 길이: {len(content)}자")
+
+    # 비용 기록
+    usage = response.usage
+    if usage:
+        cost_tracker.record_openai_usage(
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
+        )
+
     return content
 
 
