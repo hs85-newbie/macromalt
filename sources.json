@@ -1,6 +1,6 @@
 {
   "_comment": "macromalt 자동화 시스템 - 뉴스 데이터 소스 정의 파일",
-  "_updated": "2026-03-11",
+  "_updated": "2026-03-12",
   "sources": [
     {
       "id": "hankyung",
@@ -55,6 +55,32 @@
         "link": "a.title"
       },
       "notes": "인베스팅 닷컴 한국어판 - RSS 미제공으로 웹 크롤링 방식 사용"
+    },
+    {
+      "id": "naver_research",
+      "name": "네이버금융 리서치",
+      "name_en": "Naver Finance Research",
+      "type": "RESEARCH_WEB",
+      "url": "https://finance.naver.com/research/",
+      "category": "리서치/시황",
+      "language": "ko",
+      "enabled": true,
+      "fetch_limit": 10,
+      "days_filter": 7,
+      "notes": "네이버금융 시황·채권 리포트 (공개 접근, 인증 불필요). run_research_sources()에서 처리"
+    },
+    {
+      "id": "hankyung_consensus",
+      "name": "한경 컨센서스",
+      "name_en": "Hankyung Consensus",
+      "type": "RESEARCH_AUTH",
+      "url": "https://consensus.hankyung.com/",
+      "category": "애널리스트 리포트",
+      "language": "ko",
+      "enabled": true,
+      "fetch_limit": 15,
+      "days_filter": 30,
+      "notes": "한경 컨센서스 애널리스트 리포트. .env의 HANKYUNG_ID/HANKYUNG_PW 필요. run_research_sources()에서 처리"
     }
   ]
 }

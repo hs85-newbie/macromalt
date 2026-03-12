@@ -52,13 +52,14 @@ def _get_wp_config() -> dict:
 # ──────────────────────────────────────────────
 # 2. 마크다운 → WordPress 발행 함수
 # ──────────────────────────────────────────────
-def publish_draft(title: str, content: str) -> dict:
+def publish_draft(title: str, content: str, category_ids: list = None) -> dict:
     """
     마크다운 콘텐츠를 WordPress에 임시저장(Draft)으로 업로드합니다.
 
     Args:
-        title:   포스팅 제목
-        content: 마크다운 본문 전체
+        title:        포스팅 제목
+        content:      마크다운 본문 전체
+        category_ids: WordPress 카테고리 ID 목록 (None이면 .env의 WP_CATEGORY_DEFAULT 또는 [2] 사용)
 
     반환값:
         {
@@ -67,16 +68,26 @@ def publish_draft(title: str, content: str) -> dict:
             "status": str,    # "draft"
         }
     """
+    import os as _os
     config = _get_wp_config()
 
     headers = {
         "Content-Type": "application/json",
     }
 
-    # 워드프레스 카테고리 ID 설정
-    # 여기에 워드프레스 카테고리 ID를 입력하세요.
-    # 관리자 → 글 → 카테고리에서 해당 카테고리 편집 시 URL의 tag_ID 값을 확인하세요.
-    CATEGORY_IDS = [2]  # 예: [2] = '매크로 브리핑' 카테고리
+    # 카테고리 ID 결정 우선순위:
+    # 1. 호출 시 직접 전달한 category_ids
+    # 2. .env의 WP_CATEGORY_DEFAULT (쉼표 구분 숫자)
+    # 3. 하드코딩 기본값 [2]
+    if category_ids is None:
+        env_val = _os.getenv("WP_CATEGORY_DEFAULT", "").strip()
+        if env_val:
+            try:
+                category_ids = [int(x.strip()) for x in env_val.split(",") if x.strip()]
+            except ValueError:
+                category_ids = [2]
+        else:
+            category_ids = [2]
 
     payload = {
         "title": title,
@@ -84,7 +95,7 @@ def publish_draft(title: str, content: str) -> dict:
         "status": "draft",       # 임시저장 (자동 발행하려면 "publish"로 변경)
         "format": "standard",
         "comment_status": "open",
-        "categories": CATEGORY_IDS,
+        "categories": category_ids,
     }
 
     logger.info(f"WordPress 업로드 시작 | 제목: '{title}'")

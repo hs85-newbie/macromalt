@@ -10,12 +10,14 @@ macromalt 자동화 시스템 - 뉴스 수집 모듈
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
+from dateutil import parser as dateutil_parser
 from dotenv import load_dotenv
 
 # ──────────────────────────────────────────────
@@ -236,7 +238,295 @@ def run_all_sources() -> list[dict]:
 
 
 # ──────────────────────────────────────────────
-# 6. 결과 출력 헬퍼 (디버깅용)
+# 6. 날짜 필터 유틸
+# ──────────────────────────────────────────────
+def _filter_by_date(items: list[dict], days: int = 7) -> list[dict]:
+    """
+    published 필드 기준, 최근 N일 이내 항목만 반환합니다.
+    날짜 파싱 실패 시 해당 항목을 포함(안전 기본값)합니다.
+    """
+    cutoff = datetime.now() - timedelta(days=days)
+    filtered = []
+    for item in items:
+        pub_str = item.get("published", "")
+        if not pub_str:
+            filtered.append(item)  # 날짜 없으면 포함
+            continue
+        try:
+            pub_dt = dateutil_parser.parse(pub_str, ignoretz=True)
+            if pub_dt >= cutoff:
+                filtered.append(item)
+        except Exception:
+            filtered.append(item)  # 파싱 실패 시 포함
+    return filtered
+
+
+# ──────────────────────────────────────────────
+# 7. 네이버금융 리서치 수집 (공개 접근, 인증 불필요)
+# ──────────────────────────────────────────────
+_NAVER_RESEARCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9",
+    "Referer": "https://finance.naver.com/",
+}
+
+def fetch_naver_research(days: int = 7) -> list[dict]:
+    """
+    네이버금융 리서치 시황 페이지에서 애널리스트 리포트를 수집합니다.
+    - 로그인 불필요 (공개 페이지)
+    - 최근 N일 이내 데이터만 반환
+    - data_type='research' 필드 포함
+    """
+    results = []
+    # 시황 리포트 목록
+    target_pages = [
+        ("https://finance.naver.com/research/market_info_list.naver", "시황"),
+        ("https://finance.naver.com/research/debenture_list.naver", "채권"),
+    ]
+
+    for page_url, category in target_pages:
+        try:
+            resp = requests.get(
+                page_url,
+                headers=_NAVER_RESEARCH_HEADERS,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"[네이버리서치:{category}] HTTP {resp.status_code}")
+                continue
+
+            resp.encoding = "utf-8"
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # 리포트 테이블 행 파싱
+            rows = soup.select("table.type_1 tr") or soup.select("table tr")
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) < 3:
+                    continue
+
+                # 제목 + URL
+                title_el = row.select_one("td.file a") or row.select_one("td a")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                href = title_el.get("href", "")
+                if href and not href.startswith("http"):
+                    href = "https://finance.naver.com" + href
+
+                # 날짜 (보통 마지막 또는 두번째 컬럼)
+                date_text = ""
+                for col in reversed(cols):
+                    text = col.get_text(strip=True)
+                    if re.match(r"\d{4}\.\d{2}\.\d{2}", text):
+                        date_text = text
+                        break
+
+                # 증권사 (두 번째 컬럼 등)
+                broker = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+
+                results.append({
+                    "source": "네이버금융 리서치",
+                    "type": "RESEARCH_WEB",
+                    "data_type": "research",
+                    "category": category,
+                    "title": title,
+                    "summary": f"[{broker}] {category} 리포트",
+                    "url": href,
+                    "broker": broker,
+                    "published": date_text,
+                    "collected_at": datetime.now().isoformat(),
+                })
+
+        except Exception as e:
+            logger.warning(f"[네이버리서치:{category}] 수집 실패: {e}")
+
+    # 날짜 필터 적용
+    before_count = len(results)
+    results = _filter_by_date(results, days=days)
+    logger.info(
+        f"[네이버금융 리서치] 수집: {before_count}건 → "
+        f"최근 {days}일 필터 후 {len(results)}건"
+    )
+    return results
+
+
+# ──────────────────────────────────────────────
+# 8. 한경 컨센서스 수집 (인증 필요)
+# ──────────────────────────────────────────────
+_HANKYUNG_BASE = "https://consensus.hankyung.com"
+_HANKYUNG_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9",
+    "Referer": _HANKYUNG_BASE + "/",
+}
+
+def _hankyung_login():
+    """
+    한경 컨센서스 로그인 세션을 반환합니다.
+    HANKYUNG_ID / HANKYUNG_PW 환경 변수가 없거나 로그인 실패 시 None 반환.
+    """
+    user_id = os.getenv("HANKYUNG_ID", "").strip()
+    user_pw = os.getenv("HANKYUNG_PW", "").strip()
+
+    if not user_id or not user_pw:
+        logger.warning("[한경컨센서스] HANKYUNG_ID/PW 미설정 — 수집 건너뜀")
+        return None
+
+    session = requests.Session()
+    session.headers.update(_HANKYUNG_HEADERS)
+
+    try:
+        # 1. 로그인 페이지 접근 (CSRF 토큰 수집)
+        login_page_url = _HANKYUNG_BASE + "/apps.login/login.form"
+        resp = session.get(login_page_url, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # hidden input 필드 수집 (CSRF 등)
+        hidden_inputs = {}
+        for inp in soup.select("input[type=hidden]"):
+            name = inp.get("name")
+            value = inp.get("value", "")
+            if name:
+                hidden_inputs[name] = value
+
+        # 2. 로그인 POST
+        login_url = _HANKYUNG_BASE + "/apps.login/login.process"
+        payload = {
+            **hidden_inputs,
+            "user_id": user_id,
+            "user_password": user_pw,
+        }
+        resp = session.post(login_url, data=payload, timeout=10)
+
+        # 로그인 성공 여부 확인 (리다이렉트 또는 쿠키로 판단)
+        if resp.status_code in (200, 302) and session.cookies:
+            logger.info("[한경컨센서스] 로그인 성공")
+            return session
+        else:
+            logger.warning(f"[한경컨센서스] 로그인 실패 (HTTP {resp.status_code})")
+            return None
+
+    except Exception as e:
+        logger.warning(f"[한경컨센서스] 로그인 오류: {e}")
+        return None
+
+
+def fetch_hankyung_consensus(days: int = 30) -> list[dict]:
+    """
+    한경 컨센서스에서 애널리스트 리포트 목록을 수집합니다.
+    - 로그인 성공 시에만 수집 (실패 시 빈 리스트 반환)
+    - 최근 N일 이내 데이터만 반환
+    - data_type='consensus' 필드 포함
+    """
+    session = _hankyung_login()
+    if session is None:
+        return []
+
+    results = []
+    try:
+        list_url = _HANKYUNG_BASE + "/apps.analysis/analysis.list"
+        params = {"pageSize": 30, "pageIndex": 1}
+        resp = session.get(list_url, params=params, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(f"[한경컨센서스] 리포트 목록 HTTP {resp.status_code}")
+            return []
+
+        resp.encoding = "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # 리포트 목록 행 파싱
+        rows = soup.select("table tbody tr") or soup.select(".report_list li")
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) < 3:
+                continue
+
+            title_el = row.select_one("a.report_title") or row.select_one("td a")
+            if not title_el:
+                continue
+
+            title = title_el.get_text(strip=True)
+            href = title_el.get("href", "")
+            if href and not href.startswith("http"):
+                href = _HANKYUNG_BASE + href
+
+            # 증권사, 목표가, 날짜 추출
+            broker = cols[1].get_text(strip=True) if len(cols) > 1 else ""
+            target_price = ""
+            date_text = ""
+            for col in cols:
+                text = col.get_text(strip=True)
+                if re.match(r"\d{4}[.\-]\d{2}[.\-]\d{2}", text):
+                    date_text = text
+                elif re.match(r"[\d,]+원?$", text) and not date_text:
+                    target_price = text
+
+            results.append({
+                "source": "한경 컨센서스",
+                "type": "RESEARCH_AUTH",
+                "data_type": "consensus",
+                "title": title,
+                "summary": f"[{broker}] 목표가: {target_price}" if target_price else f"[{broker}] 애널리스트 리포트",
+                "url": href,
+                "broker": broker,
+                "target_price": target_price,
+                "published": date_text,
+                "collected_at": datetime.now().isoformat(),
+            })
+
+    except Exception as e:
+        logger.warning(f"[한경컨센서스] 리포트 수집 실패: {e}")
+        return []
+
+    # 날짜 필터 적용
+    before_count = len(results)
+    results = _filter_by_date(results, days=days)
+    logger.info(
+        f"[한경 컨센서스] 수집: {before_count}건 → "
+        f"최근 {days}일 필터 후 {len(results)}건"
+    )
+    return results
+
+
+# ──────────────────────────────────────────────
+# 9. 리서치 통합 수집 함수
+# ──────────────────────────────────────────────
+def run_research_sources() -> list[dict]:
+    """
+    네이버금융 리서치 + 한경 컨센서스를 통합 수집합니다.
+    기존 run_all_sources()와 독립적으로 동작합니다.
+
+    반환값:
+        data_type='research' 또는 'consensus' 필드를 포함한 리포트 리스트
+    """
+    logger.info("=" * 60)
+    logger.info("macromalt 리서치 데이터 수집 시작")
+    logger.info("=" * 60)
+
+    research = fetch_naver_research(days=7)
+    consensus = fetch_hankyung_consensus(days=30)
+    combined = research + consensus
+
+    logger.info("=" * 60)
+    logger.info(
+        f"리서치 수집 완료: 총 {len(combined)}건 "
+        f"(네이버리서치 {len(research)}건 / 한경컨센서스 {len(consensus)}건)"
+    )
+    logger.info("=" * 60)
+    return combined
+
+
+# ──────────────────────────────────────────────
+# 10. 결과 출력 헬퍼 (디버깅용)
 # ──────────────────────────────────────────────
 def print_articles(articles: list[dict]) -> None:
     """수집된 기사를 콘솔에 보기 좋게 출력합니다."""
