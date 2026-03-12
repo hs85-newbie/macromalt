@@ -812,11 +812,13 @@ GEMINI_THEME_SELECTOR_SYSTEM = """
 GEMINI_THEME_SELECTOR_USER = """
 아래 데이터를 분석해 오늘의 핵심 경제 테마를 선정해라.
 
-[뉴스 기사]
-{news_text}
-
-[애널리스트 리포트]
+[⭐ 핵심 리서치 — 최우선 참고]
+애널리스트 컨센서스 및 리서치 데이터를 뉴스보다 우선시해 테마를 선정해라.
+[⭐ 핵심 리서치] 마커가 붙은 항목은 전문 애널리스트 의견이므로 가장 높은 가중치로 반영해라.
 {research_text}
+
+[뉴스 기사 — 보조 참고]
+{news_text}
 """
 
 
@@ -976,7 +978,9 @@ GEMINI_TICKER_SELECTOR_USER = """
 [심층 분석 내용 요약]
 {analysis_summary}
 
-[참고 리서치 데이터]
+[⭐ 핵심 리서치 — 최우선 참고]
+[⭐ 핵심 리서치] 마커가 붙은 컨센서스 리포트의 종목/섹터를 우선적으로 고려해라.
+섹터 정보가 있으면 관련 대표 종목을 선정에 적극 반영해라.
 {research_text}
 """
 
@@ -1109,28 +1113,67 @@ def _get_price_for_ticker(ticker: str) -> str:
 
 
 # ──────────────────────────────────────────────
-# 26. 리서치 데이터 → 텍스트 변환
+# 26. 리서치/뉴스 컨텍스트 구분자 상수
+# ──────────────────────────────────────────────
+# 리서치(우선) — 뉴스(보조) 섹션 구분선
+RESEARCH_NEWS_SEPARATOR = (
+    "─" * 40 + "\n[뉴스 기사 — 보조 컨텍스트]\n" + "─" * 40
+)
+
+
+# ──────────────────────────────────────────────
+# 27. 리서치 데이터 → 텍스트 변환
 # ──────────────────────────────────────────────
 def format_research_for_prompt(research: list) -> str:
-    """리서치 데이터를 프롬프트용 텍스트로 변환합니다."""
+    """
+    리서치 데이터를 프롬프트용 텍스트로 변환합니다.
+
+    Phase 6 변경:
+    - weight 내림차순 정렬 (높은 우선순위 항목 먼저)
+    - weight >= 5 → [⭐ 핵심 리서치] 마커 접두
+    - sector 필드 포함
+    - 섹션 헤더에 "우선순위순" 표기
+    """
     if not research:
         return "(리서치 데이터 없음)"
+
     today = datetime.now().strftime("%Y년 %m월 %d일")
-    lines = [f"[{today} 리서치·컨센서스 데이터]\n"]
-    for i, item in enumerate(research, 1):
-        source = item.get("source", "기타")
-        title = item.get("title", "제목 없음")
+    lines = [f"[{today} 리서치·컨센서스 데이터 — 우선순위순]\n"]
+
+    # weight 내림차순 정렬
+    sorted_research = sorted(research, key=lambda x: x.get("weight", 1), reverse=True)
+
+    for i, item in enumerate(sorted_research, 1):
+        source  = item.get("source", "기타")
+        title   = item.get("title", "제목 없음")
         summary = item.get("summary", "")
-        url = item.get("url", "")
-        broker = item.get("broker", "")
-        target = item.get("target_price", "")
-        lines.append(f"{i}. [{source}] {title}")
+        url     = item.get("url", "")
+        broker  = item.get("broker", "")
+        target  = item.get("target_price", "")
+        sector  = item.get("sector", "")
+        weight  = item.get("weight", 1)
+
+        # 우선순위 마커 (컨센서스급 weight=5 이상)
+        priority_marker = "[⭐ 핵심 리서치] " if weight >= 5 else ""
+
+        lines.append(f"{i}. {priority_marker}[{source}] {title}")
+
+        # 메타 라인: 증권사·섹터·목표가
+        meta_parts = []
         if broker:
-            lines.append(f"   증권사: {broker}" + (f" | 목표가: {target}" if target else ""))
+            meta_parts.append(f"증권사: {broker}")
+        if sector:
+            meta_parts.append(f"섹터: {sector}")
+        if target:
+            meta_parts.append(f"목표가: {target}")
+        if meta_parts:
+            lines.append(f"   {' | '.join(meta_parts)}")
+
         if url:
             lines.append(f"   URL: {url}")
         if summary:
             lines.append(f"   요약: {summary[:200]}")
+
     return "\n".join(lines)
 
 
@@ -1189,7 +1232,8 @@ def generate_deep_analysis(news: list, research: list) -> dict:
         theme=theme,
         key_data=", ".join(key_data) if key_data else "오늘의 핵심 매크로 수치",
     )
-    context_text = f"{news_text}\n\n{research_text}"
+    # Phase 6: 리서치 선행, 뉴스 후행 (리서치가 AI 분석의 핵심 재료)
+    context_text = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
     analyst_user = GPT_DEEP_ANALYST_USER.format(
         gemini_report=gemini_report or context_text,
         context_text=context_text,
@@ -1303,7 +1347,8 @@ def generate_stock_picks_report(
 
     # ── Step 3: GPT-4o — 종목 리포트 초고 ────────
     tickers_json_str = json.dumps(picks, ensure_ascii=False, indent=2)
-    context_text = f"{news_text}\n\n{research_text}"
+    # Phase 6: 리서치 선행, 뉴스 후행
+    context_text = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
     report_user = GPT_STOCK_REPORT_USER.format(
         theme=theme,
         analysis_summary=analysis_summary,
