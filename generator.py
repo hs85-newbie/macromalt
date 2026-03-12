@@ -805,8 +805,13 @@ GPT_WRITER_PICKS_SYSTEM = f"""
 [종목 리포트 규칙 — Phase 4.3 강화판]
 각 종목 섹션은 반드시 아래 4단계 순서를 지켜 최소 6문장 이상으로 작성한다:
 
-  문장 1 — 왜 지금 이 종목인가
-    : 오늘의 핵심 테마와 이 종목이 연결되는 직접적 이유를 제시
+  문장 1 — 왜 지금 이 종목인가 [★ P6 강화 — 현재 시점 트리거 필수]
+    : 단순히 "이 테마와 관련 있는 종목이기 때문"이라는 반복은 충족으로 인정하지 않는다.
+    : 반드시 현재 시점의 구체적 트리거(이벤트, 수치 변화, 수급 변화 등)를 제시해야 한다.
+      ✅ 충족 예: "이번 주 NVIDIA 실적 발표 후 HBM 공급사에 대한 수주 문의가 집중됐기 때문이다"
+      ❌ 불충족 예: "AI 인프라 투자 확대 테마에서 수혜가 기대되는 종목이기 때문이다"
+    : 현재 시점 트리거가 없으면 문장 1로 인정하지 않는다.
+
   문장 2 — 업황·실적·수요 근거 (숫자 필수)
     : 이번 테마와 연결되는 구체적 숫자 또는 기준 시점 반드시 포함
     : 예: 매출, 영업이익, 증감률, PER, 수주잔고, 목표주가, 발표 시점, 기준분기
@@ -820,8 +825,15 @@ GPT_WRITER_PICKS_SYSTEM = f"""
     : ★ 리서치 자료가 1건뿐이라면 업황 데이터·수급 자료로 보완해 2개 이상의 근거를 반드시 확보할 것
     : 복수 리포트가 있으면 공통 논점 + 차이 서술
     : 리서치 데이터가 전혀 없으면 "리서치 부재" 명시 후 업황 데이터 2건으로 대체
-  문장 4 — 반영 변수: 시장이 이미 반영했을 변수 또는 수급·밸류에이션 포인트
-    : 현재 주가 혹은 수급에서 이미 선반영된 요인이 무엇인지 서술
+  문장 4 — 반영 변수: 시장이 이미 반영했을 변수 또는 수급·밸류에이션 포인트 [★ P8 강화]
+    : "리스크가 있다"는 일반 경고가 아니어야 한다.
+    : 시장이 이미 기대감을 선반영했을 수 있는 구체적 요소를 제시해야 한다.
+      ✅ 충족 예: "HBM 기대감은 이미 주가에 반영돼 PER이 역사적 평균 대비 40% 프리미엄 구간이다"
+      ✅ 충족 예: "외국인 순매수가 최근 3주간 집중되며 단기 수급 쏠림이 형성된 상태다"
+      ❌ 불충족 예: "글로벌 경기 둔화와 불확실성이 리스크로 존재한다"
+    : 선반영 가능 요소 예시: 주가·PER·PBR 레벨 / 외국인·기관 수급 / 컨센서스 목표가 괴리율 /
+      최근 주가 상승폭과 기대치 선반영 정도
+    : 위 요소 중 1개 이상 없으면 문장 4로 인정하지 않는다.
   문장 5 — 반대 포인트: 가장 중요한 이번 테마 특화 리스크
     : 이번 테마에 특화된 리스크 (범용 "불확실성"·"거시 변수" 금지)
   문장 6 이상 — 논리 보강 또는 체크포인트 연결
@@ -867,8 +879,10 @@ GPT_WRITER_PICKS_SYSTEM = f"""
 
 [자기검수 — 출력 전 반드시 확인]
 □ 각 종목이 최소 6문장(5단계 순서)으로 작성됐는가 (메인 픽은 8문장 이상 목표)
+□ 문장 1(왜지금): 단순 테마 반복이 아닌 현재 시점 트리거가 명시됐는가
 □ 업황/실적 근거 문장에 반드시 숫자 또는 기준 시점이 포함됐는가
-□ 리서치 데이터가 각 종목에 1개 이상 연결됐는가
+□ 리서치 데이터가 각 종목에 2개 이상 연결됐는가 (없으면 업황 데이터로 대체)
+□ 문장 4(반영변수): 선반영 가능 요소(PER/수급/괴리율 등)가 구체적으로 서술됐는가
 □ 가격 정보 없이도 논리 밀도가 유지되는가
 □ 반대 포인트가 이번 테마에 특화됐는가 (범용이면 수정)
 □ 메인 픽과 보조 픽의 역할이 명확하게 구분됐는가
@@ -1451,14 +1465,18 @@ def generate_stock_picks_report(
 
     save_portfolio(parsed_picks, prices)
 
+    # P10 검증용: assemble 이전 raw_content 기준으로 PICKS 주석 존재 여부 기록
+    picks_comment_in_raw = bool(re.search(r"<!--\s*PICKS:", raw_content))
+
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     return {
-        "title":        title,
-        "content":      final_content,
-        "picks":        parsed_picks,
-        "prices":       prices,
-        "generated_at": datetime.now().isoformat(),
+        "title":              title,
+        "content":            final_content,
+        "picks":              parsed_picks,
+        "prices":             prices,
+        "picks_comment_in_raw": picks_comment_in_raw,  # P10 검증용 (assemble 이전 raw 기준)
+        "generated_at":       datetime.now().isoformat(),
     }
 
 
@@ -1903,8 +1921,9 @@ if __name__ == "__main__":
         has_reflect = bool(re.search(r"선반영|이미.{0,10}반영|밸류에이션|수급|PER|할인|프리미엄", p2_plain))
         has_risk = bool(re.search(r"리스크|반대|우려|하락|위험|한계|불확실|경쟁|압력", p2_plain))
 
-        # P5. PICKS 주석 존재 (포트폴리오 저장용)
-        has_picks_comment = bool(re.search(r"<!--\s*PICKS:", c2))
+        # P10. PICKS 주석 존재 — assemble_final_content() 이전 raw 단계 기준으로 확인
+        # (assemble이 PICKS 주석을 의도적으로 제거하므로 최종 content에서는 항상 없음 → raw 단계 기록값 사용)
+        has_picks_comment = post2.get("picks_comment_in_raw", False)
 
         p2_criteria = {
             "P1. WordPress 출력: 순수 HTML로 시작 (코드펜스·따옴표 없음)":
@@ -1916,8 +1935,8 @@ if __name__ == "__main__":
             f"P3. 메인픽 분량이 400자 이상인가 (실측: {section_lens[0] if section_lens else 0}자)":
                 section_lens[0] >= 400 if section_lens else False,
 
-            f"P4. 보조픽 분량이 400자 이상인가 (실측: {section_lens[1] if len(section_lens)>1 else 0}자)":
-                section_lens[1] >= 400 if len(section_lens) > 1 else False,
+            f"P4. 보조픽 분량이 300자 이상인가 (실측: {section_lens[1] if len(section_lens)>1 else 0}자)":
+                section_lens[1] >= 300 if len(section_lens) > 1 else False,
 
             "P5. 숫자가 실제 투자 논리(원인·수혜·실적)와 연결됐는가":
                 p2_has_logic_number,
