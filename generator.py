@@ -997,6 +997,10 @@ GEMINI_REVISER_SYSTEM = """
 5. 완충 문장이 구체 근거 없이 단독 등장 → 해당 문장 뒤에 근거 문장 1개 추가
    (삭제 금지 — 근거를 추가하는 방향으로 처리)
 6. 동일 사실 중복 서술 → 중복 문장 1개 제거 (핵심 숫자 있는 문장을 남길 것)
+7. [★ 위스키/바텐더 비유 추가 금지]
+   도입부에 이미 있는 경우 새로운 비유를 보강 목적으로 삽입하지 말 것.
+   위스키·바텐더·캐스크·싱글몰트 관련 표현은 "보존 대상"이지 "보강 대상"이 아님.
+   수정 중 새로운 비유 문장을 추가하거나 기존 비유를 다른 위치에 재삽입하는 행위는 엄격히 금지.
 """
 
 GEMINI_REVISER_USER = """
@@ -1528,20 +1532,35 @@ def _postprocess_density_check(content: str, label: str = "") -> None:
     prefix = f"[{label}] " if label else ""
 
     soup = BeautifulSoup(content, "html.parser")
-    paragraphs = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 30]
 
-    # ── 1. 숫자 없는 문단 연속 탐지 ──────────────────────────────────────
+    # ── 1. 숫자 없는 문단 연속 탐지 (반대시각/체크포인트 섹션 제외) ─────────
+    # 질적 서술이 정상인 섹션은 연속 무숫자 카운터에서 제외
+    EXEMPT_H3_KEYWORDS = ["반대 시각", "체크포인트", "반대포인트", "리스크 요인", "불확실"]
     number_pattern = re.compile(r"\d[\d,]*\.?\d*[%억만달러원배럴위안엔]?")
     consecutive_no_num = 0
     max_consecutive_no_num = 0
-    for para in paragraphs:
-        if number_pattern.search(para):
-            consecutive_no_num = 0
-        else:
-            consecutive_no_num += 1
-            max_consecutive_no_num = max(max_consecutive_no_num, consecutive_no_num)
+    current_h3_text = ""
+    for tag in soup.find_all(["h3", "p"]):
+        if tag.name == "h3":
+            current_h3_text = tag.get_text(strip=True)
+            consecutive_no_num = 0  # 섹션 경계에서 카운터 리셋
+        elif tag.name == "p":
+            para = tag.get_text(strip=True)
+            if len(para) <= 30:
+                continue
+            # 반대시각/체크포인트 섹션은 연속 카운터 제외
+            if any(kw in current_h3_text for kw in EXEMPT_H3_KEYWORDS):
+                continue
+            if number_pattern.search(para):
+                consecutive_no_num = 0
+            else:
+                consecutive_no_num += 1
+                max_consecutive_no_num = max(max_consecutive_no_num, consecutive_no_num)
     if max_consecutive_no_num >= 2:
-        logger.warning(f"{prefix}밀도 경고: 숫자/시점 없는 문단이 {max_consecutive_no_num}개 연속 감지")
+        logger.warning(f"{prefix}밀도 경고: 숫자/시점 없는 문단이 {max_consecutive_no_num}개 연속 감지 (반대시각/체크포인트 섹션 제외)")
+
+    # 완충 문장 탐지용 전체 문단 목록 (기존 방식 유지)
+    paragraphs = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 30]
 
     # ── 2. 완충 문장 과잉 탐지 ────────────────────────────────────────────
     buffer_phrases = [
@@ -1768,16 +1787,27 @@ if __name__ == "__main__":
             r"(긍정적이다|영향을 줄 수 있다|수혜가 예상된다|중요한 요소다|기대된다|주목받고 있다)"
         )
 
-        # 숫자 없는 문단 연속 최대치
+        # 숫자 없는 문단 연속 최대치 — 반대시각/체크포인트 섹션 제외
+        _EXEMPT_SECTIONS = ["반대 시각", "체크포인트", "반대포인트", "리스크 요인", "불확실"]
+        _soup_test = BeautifulSoup(content, "html.parser")
         max_consec_no_num = 0
         cur = 0
-        for p in para_texts:
-            clean_p = re.sub(r"<[^>]+>", "", p)
-            if number_pat.search(clean_p):
+        _cur_h3 = ""
+        for _tag in _soup_test.find_all(["h3", "p"]):
+            if _tag.name == "h3":
+                _cur_h3 = _tag.get_text(strip=True)
                 cur = 0
-            else:
-                cur += 1
-                max_consec_no_num = max(max_consec_no_num, cur)
+            elif _tag.name == "p":
+                _txt = _tag.get_text(strip=True)
+                if len(_txt) <= 30:
+                    continue
+                if any(kw in _cur_h3 for kw in _EXEMPT_SECTIONS):
+                    continue  # 반대시각·체크포인트 섹션 제외
+                if number_pat.search(_txt):
+                    cur = 0
+                else:
+                    cur += 1
+                    max_consec_no_num = max(max_consec_no_num, cur)
 
         # 완충 문장 총 횟수
         buffer_count = sum(len(buffer_pat.findall(re.sub(r"<[^>]+>", "", p))) for p in para_texts)
@@ -1829,7 +1859,7 @@ if __name__ == "__main__":
             "10. [단일 테마] h3 소제목에서 테마 분산이 2개 미만인가?":
                 len(active_themes_in_h3) < 2,
 
-            "11. [문단 밀도] 숫자 없는 문단이 연속 2개 미만인가?":
+            "11. [문단 밀도] 숫자 없는 문단이 연속 2개 미만인가? (반대시각·체크포인트 섹션 제외)":
                 max_consec_no_num < 2,
 
             "12. [완충 문장] 완충·일반론 문장이 4회 미만인가?":
