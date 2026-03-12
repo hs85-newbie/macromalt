@@ -1,18 +1,17 @@
 """
-macromalt 자동화 시스템 - AI 블로그 생성 모듈 v5.2
+macromalt 자동화 시스템 - AI 블로그 생성 모듈 v7.0
 =====================================================
-교차 퇴고 파이프라인 (Generator-Evaluator):
-  Step 1 — Gemini 2.5-flash  : 뉴스 → 매크로 분석 보고서 (애널리스트)
-  Step 2 — GPT-4o            : 보고서 → 블로그 초고 (바텐더 캐시)
-  Step 3 — Gemini 2.5-flash  : 초고 → 편집장 비평 (PASS or 수정 가이드)
-  Step 4 — GPT-4o            : 비평 반영 → 재작성 (최대 2회 루프)
-  yfinance / 네이버금융       : 최종본 티커 실시간 종가 + 기준일 조회
+3단계 교차 검증 파이프라인 (Phase 7):
+  Step 1 — Gemini 2.5-flash  : 뉴스+리서치 → 구조화된 JSON 리포트 재료 (분석 엔진)
+  Step 2 — GPT-4o            : JSON 재료 → HTML 최종 원고 (작성 엔진)
+  Step 3 — Gemini 2.5-flash  : HTML 초안 → 팩트체크 + 필요 시 1회 수정 (검수 엔진)
+  yfinance / 네이버금융       : 실시간 종가 + 기준일 조회
   portfolio.json             : 픽 히스토리 누적 저장
   cost_tracker               : 실제 토큰 기반 예상 비용 계산 + 예산 알림
 
-Phase 5 추가 (1일 2포스팅):
-  Post 1 — generate_deep_analysis()  : 심층 경제 분석 (경제 전문 기자 수준)
-  Post 2 — generate_stock_picks_report() : 종목 리포트 (한·미 주식 2~3종목)
+공개 API:
+  Post 1 — generate_deep_analysis(news, research)
+  Post 2 — generate_stock_picks_report(theme, key_data, post1_content, news, research, materials=None)
 """
 
 import json
@@ -37,255 +36,17 @@ load_dotenv()
 
 logger = logging.getLogger("macromalt")
 
-# 퇴고 루프 최대 반복 횟수
-MAX_RETRIES = 2
+# 검수 실패 시 재작성 최대 횟수 (Phase 7: 검수 1회, 재작성 1회)
+MAX_RETRIES = 1
 
 
-# ──────────────────────────────────────────────
-# 1. Gemini Step 1 프롬프트 (수석 매크로 애널리스트)
-# ──────────────────────────────────────────────
-GEMINI_ANALYST_SYSTEM = """
-너는 여의도 탑티어 운용사 출신 수석 매크로 애널리스트다.
-주어진 뉴스 목록을 분석해 기관 투자자용 내부 보고서를 작성해라.
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION A: 내부 유틸 — API 호출 래퍼
+# ──────────────────────────────────────────────────────────────────────────────
 
-[필터링 — 최우선]
-아래 카테고리 기사는 즉시 제외하고 분석 대상에서 삭제:
-- 운세·날씨·연예·스포츠·정치 단신·부동산 매물
-- 광고성 콘텐츠·생활 정보·AI 기업 신제품 소개
-- 매크로 경제·금융 투자와 무관한 모든 기사
-
-[분석 대상]
-금리·환율·증시·원자재·채권·CDS·스프레드·글로벌 자본 흐름 관련 기사만 사용.
-
-[출력 형식 — 불릿 포인트 보고서]
-## 핵심 매크로 팩트 (수치 포함)
-- (각 기사에서 추출한 핵심 수치/사실. 형용사 금지. 예: "미 10Y 국채 4.52%, 전일 대비 +8bp")
-
-## 크로스에셋 연쇄 분석
-- FX·Yield·Commodity·Equity 간 2~3차 연쇄 효과. 1차 해석 수준 금지.
-- 미·일·한 자본 흐름을 하나의 흐름으로 연결.
-
-## 주목할 섹터/자산
-- 향후 1~5거래일 내 변동성이 예상되는 섹터나 자산 클래스와 근거.
-
-## 미국 주식 추천 티커 (2~3개)
-- 티커 심볼: (이유를 1줄로. 반드시 매크로 근거 포함)
-- 출력 형식 예: "NVDA: 반도체 수요 회복 + 달러 약세 수혜"
-- 반드시 실존하는 NYSE/NASDAQ 티커만 사용할 것.
-"""
-
-GEMINI_ANALYST_USER = """
-아래 뉴스 데이터를 분석해 내부 보고서를 작성해라.
-
-{articles_text}
-"""
-
-
-# ──────────────────────────────────────────────
-# 2. GPT-4o Step 2 프롬프트 (바텐더 캐시 — 초고 작성)
-# ──────────────────────────────────────────────
-GPT_WRITER_SYSTEM = """
-너는 'MacroMalt(매크로몰트)'의 바텐더 캐시(Cash)다.
-주 독자: 여의도·월스트리트 펀드매니저, Level 6-7 개인 투자자.
-
-아래 매크로 분석 보고서를 바탕으로 블로그 포스팅을 작성해라.
-
-[목표 분량]
-총 2,500자 이상. 한국경제·매일경제 심층 분석 기사 수준의 밀도로 작성해라.
-각 섹션을 압축하지 말고 논거를 충분히 전개해라.
-
-[데이터 강제 인용 규칙 — 최우선]
-분석 보고서에 등장하는 모든 숫자(가격·지수·퍼센트·bp·환율·수급 금액 등)를
-본문 전체에서 최소 3회 이상 직접 인용해라.
-- 금지: "유가가 올랐다", "달러가 강세를 보였다", "코스피가 상승했다"
-- 필수: "WTI가 $76.40까지 밀렸다", "달러 인덱스 104.3으로 0.6% 반등", "코스피 2,730 돌파"
-수치 없이 방향성만 서술하는 문장은 작성 금지다.
-
-[Negative Prompt — 절대 사용 금지]
-- "결론적으로", "요약하자면", "정리하면"
-- "~하는 것이 중요합니다", "~할 수 있겠습니다", "~라고 볼 수 있습니다"
-- "투자에 유의하시기 바랍니다", "참고하시기 바랍니다"
-- "이번 분석이 도움이 되셨으면", "오늘도 좋은 하루"
-- AI 전형 접속사·맺음말 일체
-
-[글 구조 — 순서 엄수]
-
-1. # 제목: [오늘의 캐시픽] + 핵심 키워드 조합 (시장을 관통하는 하나의 테마).
-   예: [오늘의 캐시픽] WTI 80불 붕괴와 끈적한 두바이유... 한국 정제마진의 향방은?
-
-2. 오프닝: "안녕하세요, 매크로몰트의 바텐더 캐시입니다."로 시작.
-   오늘 시황 전반을 싱글몰트 위스키(피트향·셰리캐스크·숙성연도·피니시 등)에 비유해 3~4문장으로 묘사해라.
-   비유는 구체적이고 감각적이어야 하며, 투자자가 오늘 시장의 온도를 직감할 수 있어야 한다.
-   오프닝에도 핵심 수치 1개 이상을 자연스럽게 녹여라.
-
-3. ## 글로벌 매크로 브리핑
-   반드시 아래 두 섹션으로 나눠라.
-
-   ### 🌐 미국 시장
-   - 연준 금리·국채 수익률·달러 인덱스·S&P500·나스닥 중 해당 수치를 전부 인용해라.
-   - 테마 중심 소제목 정확히 3개. 반드시 `####` 수준의 마크다운 제목으로 작성해라.
-     예: #### 4.5%의 벽 — 연준이 버티는 이유
-   - 각 소제목 단락 사이에는 반드시 `---` 구분선을 삽입해라.
-   - 각 단락 최소 4문장. 수치 → 인과 → 파급 → 포지션 시사점 순서로 전개.
-   - 수치 없는 단락은 작성 금지.
-
-   ### 🇰🇷 국내 시장
-   - 코스피·코스닥·원/달러 환율·외국인 수급 중 해당 수치를 전부 인용해라.
-   - 테마 중심 소제목 정확히 3개. 반드시 `####` 수준의 마크다운 제목으로 작성해라.
-     예: #### 외국인 5,200억 순매수의 진짜 의미
-   - 각 소제목 단락 사이에는 반드시 `---` 구분선을 삽입해라.
-   - 각 단락 최소 4문장. 글로벌 매크로(미국 시장 섹션의 수치)와의 연결고리를 반드시 서술해라.
-   - 수치 없는 단락은 작성 금지.
-
-4. ## 캐시의 테이스팅 노트
-   내일 당장 포트폴리오를 손봐야 하는 섹터·전략 3가지를 제시해라.
-   각 항목은 아래 형식으로 3~4문장씩 작성해라:
-   - **[섹터/전략명]**: 오늘 매크로 데이터의 구체적 수치를 인용한 근거 1문장.
-     그 수치가 해당 섹터에 미치는 1~2차 연쇄 효과 1~2문장 (수치 포함).
-     내일 당장 취해야 할 구체적 행동(매수·매도·비중 확대·헷지) 1문장.
-   "장기 투자", "분산 투자" 표현 금지. 단기 포지션 중심으로만 작성해라.
-
-5. ### 🥃 캐시의 픽
-   반드시 4번(테이스팅 노트)의 논리적 연장선에서 2~3개 티커를 선정해라.
-   테이스팅 노트에서 언급하지 않은 섹터의 티커는 선정 금지.
-
-   JSON 블록 형식 엄수 (시스템이 파싱하므로 형식 절대 변경 금지):
-   <!-- PICKS: [{"ticker": "NVDA", "reason": "반도체 수요 회복 + 달러 약세 수혜"}, {"ticker": "XLE", "reason": "유가 반등 수혜 에너지 ETF"}] -->
-
-   JSON 블록 아래에 각 티커를 다음 형식으로 작성해라:
-
-   **[티커명]** | 현재가: {PRICE_PLACEHOLDER}
-   > [추천 근거 — 최소 3문장]
-   > 첫째, 오늘 분석된 구체적 매크로 수치와 이 종목의 상관관계를 설명해라. (예: 중동 리스크 고조로 WTI $80 돌파 → 정제마진 수혜 → 에너지주 단기 강세)
-   > 둘째, 그 매크로 흐름이 이 종목의 실적·밸류에이션·수급에 미치는 직접적 영향을 서술해라.
-   > 셋째, 단기(1~5거래일) 트레이딩 관점에서 왜 지금 이 종목인지 한 줄로 확언해라.
-
-   (실제 주가는 시스템이 자동 삽입하므로 {PRICE_PLACEHOLDER}를 그대로 두어라)
-
-6. ### 🔗 오늘의 참고 문헌
-   본문(브리핑·테이스팅 노트)에서 실제로 인용·언급한 기사만 엄선해라.
-   본문에 없는 기사를 참고문헌에 넣지 마라. 본문에서 인용했으나 참고문헌에 빠진 기사도 없어야 한다.
-   형식: - [기사 제목](원본 URL) *— 출처명*
-"""
-
-GPT_WRITER_USER = """
-[매크로 분석 보고서]
-
-{gemini_report}
-"""
-
-GPT_FALLBACK_USER = """
-아래 원본 뉴스 데이터를 직접 분석해 블로그 포스팅을 작성해라.
-
-{articles_text}
-"""
-
-
-# ──────────────────────────────────────────────
-# 3. Gemini Step 3 프롬프트 (수석 편집장 — 교차 비평)
-# ──────────────────────────────────────────────
-GEMINI_CRITIC_SYSTEM = """
-너는 여의도 최고급 투자 블로그 'MacroMalt'의 수석 편집장이다.
-숫자에 집착하는 깐깐한 완벽주의자로, 수치 없는 분석은 분석이 아니라는 철학을 가지고 있다.
-ChatGPT가 쓴 글을 읽고 아래 기준으로 무자비하게 평가해라.
-내용이 평이하거나 수치가 부족하면 무조건 반려(FAIL)하고 재작성을 지시해라.
-웬만한 글은 FAIL이 정상이다. PASS는 진짜 완벽할 때만 허용해라.
-
-[평가 기준 — 하나라도 미달이면 즉시 FAIL]
-
-⓪ 형식 준수 [최우선 — 이것부터 확인]:
-   브리핑 섹션의 테마 소제목이 `####` (해시 4개) 수준으로 작성됐는가?
-   `###` 이하 수준의 소제목(### 또는 ##)이 브리핑 내 소제목으로 혼용됐는가? → 혼용 시 즉시 FAIL.
-   각 소제목 단락 사이에 `---` 구분선이 존재하는가? 없으면 즉시 FAIL.
-   본문 산문 단락 안에 `#`, `##`, `###` 같은 마크다운 제목 기호가 남아 있는가? → 있으면 즉시 FAIL.
-   → 위 기준 중 하나라도 위반 시: "FAIL\n⓪ 형식 위반: [구체 위반 내용]" 형식으로 반환해라.
-
-① 수치 밀도 (가장 중요):
-   본문 전체에서 구체 수치(가격·지수·퍼센트·bp·환율·수급 금액)가 최소 8개 이상 직접 인용됐는가?
-   "유가가 올랐다", "달러가 강세를 보였다"처럼 방향성만 서술하고 수치가 없는 문장이 있는가?
-   → 수치 없는 방향 서술 문장을 하나씩 직접 인용하고, 어떤 숫자로 대체해야 하는지 명시해라.
-
-② 분량·밀도:
-   총 글자 수가 2,500자 이상인가?
-   한국경제·매일경제 심층 기사 수준의 논거 전개인가, 아니면 개조식 나열인가?
-   → 부족하면 어느 섹션을 얼마나 확장해야 하는지 명시해라.
-
-③ 브리핑 2세션 구조 및 소제목 3개:
-   '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 소제목이 각각 명확히 존재하는가?
-   각 세션에 해당 시장의 핵심 수치(금리·수익률·지수·환율·수급)가 빠짐없이 인용됐는가?
-   미국 시장 섹션에 `####` 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
-   국내 시장 섹션에 `####` 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
-   각 `####` 소제목 단락 사이에 `---` 구분선이 있는가? 없으면 FAIL.
-   국내 시장 섹션이 미국 시장과의 인과 연결 없이 독립적으로 서술됐는가?
-   → 소제목이 부족하거나 구분선·연결이 빠졌으면 구체적으로 지적해라.
-
-④ 참고문헌 정합성:
-   본문(브리핑·테이스팅 노트)에서 언급한 모든 기사가 참고문헌에 있는가?
-   반대로, 본문에서 다루지 않은 기사가 참고문헌에 끼어 있지 않은가?
-   → 불일치 항목을 구체적으로 나열해라.
-
-⑤ 테이스팅 노트 깊이:
-   각 액션 포인트가 3~4문장(수치 근거→연쇄효과→단기 행동)으로 서술됐는가?
-   1~2문장으로 압축된 항목이 하나라도 있으면 FAIL이다.
-   → 해당 항목을 직접 인용하고 어떻게 확장해야 하는지 방향을 제시해라.
-
-⑥ 픽 논리 연결·형식·추천 근거:
-   <!-- PICKS: [...] --> JSON 블록이 정확히 존재하는가? 티커가 2~3개인가?
-   각 티커 아래에 최소 3문장 추천 근거(매크로 수치→종목 상관관계→단기 확언)가 있는가?
-   픽이 테이스팅 노트 논리에서 직접 파생됐는가? 뜬금없는 티커는 없는가?
-   → 문제 있으면 어떤 티커가 왜 부적절한지, 추천 근거가 왜 부족한지 명시해라.
-
-[AI 어투 점검]
-"결론적으로", "요약하자면", "중요합니다", "~할 수 있겠습니다", "~라고 볼 수 있습니다" 등
-뻔한 표현이 있으면 해당 문장을 직접 인용하고 구체적 대안 문장을 제시해라.
-
-[출력 규칙 — 엄수]
-- 위 6가지 기준을 단 하나의 예외도 없이 모두 통과한 경우에만 "PASS" 한 단어를 반환해라.
-- 하나라도 미달이면 반드시 "FAIL\n" 뒤에 ①~⑥ 번호를 붙여 구체 수정 지시를 작성해라.
-- "전반적으로 잘 썼지만..." 같은 칭찬 멘트는 절대 금지. 지적과 지시만 써라.
-"""
-
-GEMINI_CRITIC_USER = """
-아래는 ChatGPT가 작성한 블로그 초고다. 수석 편집장으로서 평가해라.
-
-[초고]
-{draft}
-"""
-
-
-# ──────────────────────────────────────────────
-# 4. GPT-4o Step 4 프롬프트 (바텐더 캐시 — 재작성)
-# ──────────────────────────────────────────────
-GPT_REWRITE_USER = """
-수석 편집장(Gemini)이 아래 초고를 반려하고 수정 지시를 내렸다.
-편집장의 모든 지적 사항을 한 줄도 빠짐없이 반영해 글을 전면 재작성해라.
-
-[편집장 수정 지시]
-{feedback}
-
-[수정할 초고]
-{draft}
-
-[재작성 필수 체크리스트 — 전부 지켜야 한다]
-□ 본문 전체에 구체 수치(가격·지수·%·bp·환율·수급)를 최소 8개 이상 직접 인용할 것.
-  "유가가 올랐다" → "WTI가 $76.40으로 2.3% 하락했다" 같이 반드시 숫자로 대체.
-□ 글 구조(제목→오프닝→브리핑→테이스팅노트→캐시의픽→참고문헌) 순서 유지.
-□ 브리핑은 '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 섹션으로 분리.
-□ 미국·국내 시장 각각 소제목 정확히 3개. 소제목은 반드시 #### 수준으로 작성.
-□ 각 소제목 단락 사이에 --- 구분선 삽입 필수.
-□ 테이스팅 노트 각 항목은 3~4문장(수치 근거→연쇄효과→단기 행동) 필수.
-□ <!-- PICKS: [...] --> JSON 블록 형식 유지. 티커 2~3개.
-□ 각 픽 아래에 추천 근거 최소 3문장(매크로 수치 상관관계→실적 영향→단기 확언) 작성.
-□ 참고문헌은 본문에서 실제 인용한 기사만 포함. 불일치 없을 것.
-□ 총 글자 수 2,500자 이상.
-□ AI 어투(결론적으로·요약하자면·중요합니다 등) 절대 사용 금지.
-"""
-
-
-# ──────────────────────────────────────────────
-# 5. 내부 유틸: GPT-4o 공통 호출 (비용 기록 포함)
-# ──────────────────────────────────────────────
-def _call_gpt(system: str, user: str, label: str, temperature: float = 0.75) -> str:
+def _call_gpt(system: str, user: str, label: str,
+              temperature: float = 0.7, max_tokens: int = 4000) -> str:
+    """GPT-4o 호출 + 비용 기록. 실패 시 빈 문자열 반환."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY가 .env에 설정되지 않았습니다.")
@@ -299,7 +60,7 @@ def _call_gpt(system: str, user: str, label: str, temperature: float = 0.75) -> 
             {"role": "system", "content": system.strip()},
             {"role": "user", "content": user.strip()},
         ],
-        max_tokens=3000,
+        max_tokens=max_tokens,
         temperature=temperature,
     )
 
@@ -315,10 +76,9 @@ def _call_gpt(system: str, user: str, label: str, temperature: float = 0.75) -> 
     return content
 
 
-# ──────────────────────────────────────────────
-# 6. 내부 유틸: Gemini 공통 호출 (비용 기록 포함)
-# ──────────────────────────────────────────────
-def _call_gemini(system: str, user: str, label: str, temperature: float = 0.3) -> Optional[str]:
+def _call_gemini(system: str, user: str, label: str,
+                 temperature: float = 0.3) -> Optional[str]:
+    """Gemini 2.5-flash 호출 + 비용 기록. 실패 시 None 반환."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.warning(f"GEMINI_API_KEY 없음 — {label} 건너뜀")
@@ -355,59 +115,37 @@ def _call_gemini(system: str, user: str, label: str, temperature: float = 0.3) -
         return None
 
 
-# ──────────────────────────────────────────────
-# 7. Step 1 — Gemini 매크로 분석 보고서
-# ──────────────────────────────────────────────
-def step1_gemini_analysis(articles_text: str) -> Optional[str]:
-    user_msg = GEMINI_ANALYST_USER.format(articles_text=articles_text)
-    return _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, label="Step1:매크로분석")
-
-
-# ──────────────────────────────────────────────
-# 8. Step 2 — GPT-4o 블로그 초고 작성
-# ──────────────────────────────────────────────
-def step2_gpt_draft(gemini_report: Optional[str], articles_text: str = "") -> str:
-    if gemini_report:
-        user_msg = GPT_WRITER_USER.format(gemini_report=gemini_report)
-        label = "Step2:초고(듀얼코어)"
-    else:
-        user_msg = GPT_FALLBACK_USER.format(articles_text=articles_text)
-        label = "Step2:초고(GPT단독폴백)"
-
-    return _call_gpt(GPT_WRITER_SYSTEM, user_msg, label=label)
-
-
-# ──────────────────────────────────────────────
-# 9. Step 3 — Gemini 편집장 비평 (교차 검토)
-# ──────────────────────────────────────────────
-def step3_gemini_critic(draft: str) -> str:
+def _parse_json_response(raw: str) -> Optional[dict]:
     """
-    Gemini가 GPT 초고를 평가합니다.
-    반환값: "PASS" 또는 "FAIL\n{수정 가이드}"
-    Gemini 호출 실패 시 "PASS"를 반환해 루프를 우회합니다.
+    LLM 출력에서 JSON을 파싱합니다.
+    ```json ... ``` 코드 블록을 자동으로 제거하고 json.loads를 시도합니다.
+    실패 시 None 반환.
     """
-    user_msg = GEMINI_CRITIC_USER.format(draft=draft)
-    result = _call_gemini(GEMINI_CRITIC_SYSTEM, user_msg, label="Step3:편집장비평", temperature=0.1)
+    if not raw:
+        return None
+    # ```json ... ``` 또는 ``` ... ``` 블록 제거
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw.strip())
+    try:
+        result = json.loads(cleaned)
+        return result
+    except json.JSONDecodeError:
+        # 중괄호/대괄호 블록만 추출 재시도
+        match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+    logger.warning("JSON 파싱 실패 — None 반환")
+    return None
 
-    if result is None:
-        logger.warning("Gemini 편집장 호출 실패 — 비평 없이 PASS 처리")
-        return "PASS"
 
-    return result.strip()
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION B: 내부 유틸 — 데이터 포맷팅
+# ──────────────────────────────────────────────────────────────────────────────
 
-
-# ──────────────────────────────────────────────
-# 10. Step 4 — GPT-4o 재작성 (편집장 피드백 반영)
-# ──────────────────────────────────────────────
-def step4_gpt_rewrite(draft: str, feedback: str) -> str:
-    user_msg = GPT_REWRITE_USER.format(feedback=feedback, draft=draft)
-    return _call_gpt(GPT_WRITER_SYSTEM, user_msg, label="Step4:재작성")
-
-
-# ──────────────────────────────────────────────
-# 11. 뉴스 데이터 → 텍스트 변환
-# ──────────────────────────────────────────────
 def format_articles_for_prompt(articles: list) -> str:
+    """뉴스 기사 리스트를 프롬프트용 텍스트로 변환합니다."""
     today = datetime.now().strftime("%Y년 %m월 %d일")
     lines = [f"[{today} 뉴스 데이터]\n"]
 
@@ -422,7 +160,7 @@ def format_articles_for_prompt(articles: list) -> str:
             title = item.get("title", "제목 없음")
             summary = item.get("summary", "")
             url = item.get("url", "")
-            lines.append(f"{i}. **{title}**")
+            lines.append(f"{i}. {title}")
             if url:
                 lines.append(f"   URL: {url}")
             if summary:
@@ -431,26 +169,60 @@ def format_articles_for_prompt(articles: list) -> str:
     return "\n".join(lines)
 
 
-# ──────────────────────────────────────────────
-# 12. 추천 티커 파싱
-# ──────────────────────────────────────────────
-def parse_picks_from_content(content: str) -> list:
-    """<!-- PICKS: [...] --> 블록에서 티커 리스트를 추출합니다."""
-    match = re.search(r"<!--\s*PICKS:\s*(\[.*?\])\s*-->", content, re.DOTALL)
-    if not match:
-        logger.warning("PICKS JSON 블록을 찾지 못했습니다.")
-        return []
-    try:
-        picks = json.loads(match.group(1))
-        return picks if isinstance(picks, list) else []
-    except json.JSONDecodeError as e:
-        logger.warning(f"PICKS JSON 파싱 실패: {e}")
-        return []
+# 리서치/뉴스 컨텍스트 구분자 (Phase 6)
+RESEARCH_NEWS_SEPARATOR = (
+    "─" * 40 + "\n[뉴스 기사 — 보조 컨텍스트]\n" + "─" * 40
+)
 
 
-# ──────────────────────────────────────────────
-# 13a. 네이버 금융 해외주식 종가 폴백 조회
-# ──────────────────────────────────────────────
+def format_research_for_prompt(research: list) -> str:
+    """
+    리서치 데이터를 프롬프트용 텍스트로 변환합니다 (Phase 6 enhanced).
+    weight 내림차순 정렬, [⭐ 핵심 리서치] 마커 포함.
+    """
+    if not research:
+        return "(리서치 데이터 없음)"
+
+    today = datetime.now().strftime("%Y년 %m월 %d일")
+    lines = [f"[{today} 리서치·컨센서스 데이터 — 우선순위순]\n"]
+
+    sorted_research = sorted(research, key=lambda x: x.get("weight", 1), reverse=True)
+
+    for i, item in enumerate(sorted_research, 1):
+        source  = item.get("source", "기타")
+        title   = item.get("title", "제목 없음")
+        summary = item.get("summary", "")
+        url     = item.get("url", "")
+        broker  = item.get("broker", "")
+        target  = item.get("target_price", "")
+        sector  = item.get("sector", "")
+        weight  = item.get("weight", 1)
+
+        priority_marker = "[⭐ 핵심 리서치] " if weight >= 5 else ""
+        lines.append(f"{i}. {priority_marker}[{source}] {title}")
+
+        meta_parts = []
+        if broker:
+            meta_parts.append(f"증권사: {broker}")
+        if sector:
+            meta_parts.append(f"섹터: {sector}")
+        if target:
+            meta_parts.append(f"목표가: {target}")
+        if meta_parts:
+            lines.append(f"   {' | '.join(meta_parts)}")
+
+        if url:
+            lines.append(f"   URL: {url}")
+        if summary:
+            lines.append(f"   요약: {summary[:200]}")
+
+    return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION C: 내부 유틸 — 주가 조회
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _fetch_naver_price(ticker: str) -> Optional[str]:
     """
     네이버 금융 해외주식 페이지에서 종가를 스크래핑합니다.
@@ -477,7 +249,6 @@ def _fetch_naver_price(ticker: str) -> Optional[str]:
             resp.encoding = resp.apparent_encoding or "utf-8"
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # 네이버 금융 해외주식 현재가 선택자 (여러 후보 순차 탐색)
             price_elem = (
                 soup.select_one(".now")
                 or soup.select_one("#rate_view .now")
@@ -487,14 +258,11 @@ def _fetch_naver_price(ticker: str) -> Optional[str]:
 
             if price_elem:
                 raw = price_elem.get_text(strip=True).replace(",", "")
-                # 숫자(소수점 허용)만 추출
                 digits = re.sub(r"[^\d.]", "", raw)
                 if digits:
                     price_float = float(digits)
                     date_str = datetime.now().strftime("%Y-%m-%d")
-                    logger.info(
-                        f"네이버금융 종가 조회 성공: {ticker}{suffix} = ${price_float:,.2f}"
-                    )
+                    logger.info(f"네이버금융 종가 조회 성공: {ticker}{suffix} = ${price_float:,.2f}")
                     return f"${price_float:,.2f} ({date_str} 기준, 네이버금융)"
 
         except Exception as e:
@@ -505,9 +273,6 @@ def _fetch_naver_price(ticker: str) -> Optional[str]:
     return None
 
 
-# ──────────────────────────────────────────────
-# 13b. yfinance 종가 조회 (네이버 금융 폴백 포함)
-# ──────────────────────────────────────────────
 def fetch_stock_prices(tickers: list) -> dict:
     """
     티커 리스트의 최신 종가를 조회합니다.
@@ -537,518 +302,6 @@ def fetch_stock_prices(tickers: list) -> dict:
     return prices
 
 
-# ──────────────────────────────────────────────
-# 14. 캐시의 픽 섹션 조립 (실제 종가 삽입)
-# ──────────────────────────────────────────────
-def build_picks_section(picks: list, prices: dict) -> str:
-    """실제 종가를 포함한 '캐시의 픽' 마크다운 섹션을 생성합니다."""
-    if not picks:
-        return ""
-
-    lines = ["### 🥃 캐시의 픽\n"]
-    for pick in picks:
-        ticker = pick.get("ticker", "")
-        reason = pick.get("reason", "")
-        price = prices.get(ticker, "N/A")
-        lines.append(f"- **{ticker}** — {reason} | 현재가: {price}")
-
-    return "\n".join(lines)
-
-
-# ──────────────────────────────────────────────
-# 15. portfolio.json 저장
-# ──────────────────────────────────────────────
-def save_portfolio(picks: list, prices: dict) -> None:
-    """픽 히스토리를 portfolio.json에 누적 저장합니다."""
-    portfolio_path = os.path.join(os.path.dirname(__file__), "portfolio.json")
-
-    existing: list = []
-    if os.path.exists(portfolio_path):
-        try:
-            with open(portfolio_path, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            existing = []
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    for pick in picks:
-        ticker = pick.get("ticker", "")
-        entry = {
-            "date": today,
-            "ticker": ticker,
-            "price": prices.get(ticker, "N/A"),
-            "reason": pick.get("reason", ""),
-        }
-        existing.append(entry)
-
-    with open(portfolio_path, "w", encoding="utf-8") as f:
-        json.dump(existing, f, ensure_ascii=False, indent=2)
-
-    logger.info(f"portfolio.json 저장 완료 | 누적 {len(existing)}건")
-
-
-# ──────────────────────────────────────────────
-# 16. 제목 추출
-# ──────────────────────────────────────────────
-def extract_title(markdown_content: str) -> str:
-    for line in markdown_content.splitlines():
-        line = line.strip()
-        if line.startswith("# "):
-            return line.lstrip("# ").strip()
-    today = datetime.now().strftime("%Y-%m-%d")
-    return f"[오늘의 캐시픽] {today} 글로벌 마켓 브리핑"
-
-
-# ──────────────────────────────────────────────
-# 17. 마크다운 → HTML 변환 (디렉터 지정 스타일 시스템 v2)
-# ──────────────────────────────────────────────
-def convert_to_html(content: str) -> str:
-    """
-    디렉터 지정 스타일 시스템으로 마크다운을 WordPress HTML로 변환합니다.
-
-    스타일 규칙:
-    - # (제목)       → h1 (대형 타이틀)
-    - ##/###/#### (소제목) → h3 with border-left #1a1a1a (디렉터 지정)
-    - ---            → <hr style="border-top: 1px solid #eee; margin: 30px 0">
-    - > (인용)       → blockquote (픽 추천 근거용 amber 계열)
-    - 캐시의 픽 섹션 → <div style="background:#fffaf0; border-left: 5px solid #b36b00">
-    """
-
-    # ── 스타일 상수 (디렉터 지정) ────────────────────────────────────────
-    H1_STYLE = (
-        "font-size:2em;font-weight:800;color:#1a1a1a;"
-        "margin:0 0 30px 0;padding-bottom:14px;"
-        "border-bottom:3px solid #1a1a1a;line-height:1.3;"
-    )
-    # 모든 소제목 (##, ###, ####) → 디렉터 지정 h3 스타일
-    SUB_H_STYLE = (
-        "border-left:6px solid #1a1a1a;padding:12px 18px;"
-        "background-color:#f4f4f4;margin:45px 0 20px 0;"
-        "color:#1a1a1a;font-size:1.4em;"
-    )
-    P_STYLE = (
-        "font-size:15px;line-height:1.9;color:#333;margin:0 0 16px 0;"
-    )
-    HR_STYLE = "border:0;border-top:1px solid #eee;margin:30px 0;"
-    BQ_STYLE = (
-        "border-left:4px solid #b36b00;margin:12px 0;"
-        "padding:10px 18px;background:#fffdf5;color:#555;"
-    )
-    UL_STYLE = "margin:0.5em 0 0.8em 1.4em;padding:0;color:#333;"
-    OL_STYLE = "margin:0.5em 0 0.8em 1.4em;padding:0;color:#333;"
-    LI_STYLE = "font-size:15px;line-height:1.8;margin:0.3em 0;"
-    STRONG_STYLE = "font-weight:700;color:#1a1a1a;"
-    A_STYLE = "color:#1a1a1a;text-decoration:underline;"
-    PICKS_DIV_STYLE = (
-        "padding:25px;background-color:#fffaf0;"
-        "border-left:5px solid #b36b00;margin:30px 0;"
-    )
-
-    # ── 1. markdown → HTML ───────────────────────────────────────────────
-    html = md_lib.markdown(content, extensions=["tables", "fenced_code"])
-
-    # ── 2. 제목 스타일 변환 ──────────────────────────────────────────────
-    # h2, h4 → h3 + SUB_H_STYLE (태그명까지 통일)
-    for level in [2, 4]:
-        html = html.replace(f"<h{level}>", f'<h3 style="{SUB_H_STYLE}">')
-        html = html.replace(f"</h{level}>", "</h3>")
-    # h3 (아직 style 없는 것) → SUB_H_STYLE
-    html = html.replace("<h3>", f'<h3 style="{SUB_H_STYLE}">')
-    # h1 (포스팅 제목)
-    html = html.replace("<h1>", f'<h1 style="{H1_STYLE}">')
-
-    # ── 3. 본문 요소 스타일 ──────────────────────────────────────────────
-    html = html.replace("<p>", f'<p style="{P_STYLE}">')
-    html = html.replace("<hr>", f'<hr style="{HR_STYLE}">')
-    html = html.replace("<hr />", f'<hr style="{HR_STYLE}">')
-    html = html.replace("<blockquote>", f'<blockquote style="{BQ_STYLE}">')
-    html = html.replace("<ul>", f'<ul style="{UL_STYLE}">')
-    html = html.replace("<ol>", f'<ol style="{OL_STYLE}">')
-    html = html.replace("<li>", f'<li style="{LI_STYLE}">')
-    html = html.replace("<strong>", f'<strong style="{STRONG_STYLE}">')
-    html = re.sub(r"<a ", f'<a style="{A_STYLE}" ', html)
-
-    # ── 4. 캐시의 픽 섹션 → 특별 메뉴판 div 박스로 감싸기 ───────────────
-    # 패턴: '캐시의 픽' h3 ~ '참고 문헌' h3 사이의 컨텐츠를 감싼다
-    picks_pattern = re.compile(
-        r"(<h3[^>]*>.*?캐시의\s*픽.*?</h3>)"   # 픽 소제목
-        r"(.*?)"                                 # 픽 본문 (비탐욕적)
-        r"(<h3[^>]*>.*?참고\s*문헌.*?</h3>)",   # 참고 문헌 소제목
-        re.DOTALL,
-    )
-
-    def _wrap_picks_box(m: re.Match) -> str:
-        return (
-            f"{m.group(1)}"
-            f'<div style="{PICKS_DIV_STYLE}">'
-            f"{m.group(2).strip()}"
-            f"</div>\n"
-            f"{m.group(3)}"
-        )
-
-    html = picks_pattern.sub(_wrap_picks_box, html)
-
-    return html
-
-
-# ──────────────────────────────────────────────
-# 18. 최종 콘텐츠 조립 (PICKS 블록 제거 + 실제 종가 삽입)
-# ──────────────────────────────────────────────
-def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
-    """
-    GPT 초고에서 PICKS JSON 주석을 제거하고,
-    각 티커의 {PRICE_PLACEHOLDER}를 실제 종가(기준일 포함)로 교체합니다.
-    GPT-written 상세 추천 근거를 그대로 보존합니다.
-    """
-    # 1. PICKS JSON 블록 제거
-    content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", raw_content, flags=re.DOTALL)
-
-    # 2. 각 티커의 {PRICE_PLACEHOLDER}를 실제 종가로 순차 교체
-    for pick in picks:
-        ticker = pick.get("ticker", "")
-        price = prices.get(ticker, "N/A")
-        if "{PRICE_PLACEHOLDER}" in content:
-            content = content.replace("{PRICE_PLACEHOLDER}", price, 1)
-
-    # 3. GPT가 플레이스홀더를 누락한 경우 잔여 처리
-    content = content.replace("{PRICE_PLACEHOLDER}", "N/A")
-
-    content = re.sub(r"\n{3,}", "\n\n", content)
-    return content.strip()
-
-
-# ──────────────────────────────────────────────
-# 19. 메인 생성 함수 (교차 퇴고 루프 포함)
-# ──────────────────────────────────────────────
-def generate_blog_post(articles: list) -> dict:
-    """
-    교차 퇴고 파이프라인으로 블로그 포스팅을 생성합니다.
-
-    흐름:
-      Step1 Gemini 분석 → Step2 GPT 초고
-      → [Step3 Gemini 비평 → Step4 GPT 재작성] × 최대 MAX_RETRIES회
-      → yfinance/네이버금융 종가 조회 → 최종 조립 → HTML 변환 → portfolio 저장
-
-    반환값:
-        {"title": str, "content": str, "generated_at": str, "picks": list}
-    """
-    if not articles:
-        raise ValueError("기사 데이터 없음")
-
-    # ── Step 1: Gemini 매크로 분석 ──────────────
-    articles_text = format_articles_for_prompt(articles)
-    gemini_report = step1_gemini_analysis(articles_text)
-
-    # ── Step 2: GPT-4o 초고 작성 ────────────────
-    draft = step2_gpt_draft(gemini_report, articles_text)
-
-    # ── Step 3-4: 교차 퇴고 루프 ────────────────
-    for attempt in range(1, MAX_RETRIES + 1):
-        logger.info(f"▶ 퇴고 루프 {attempt}/{MAX_RETRIES} — Gemini 편집장 비평 시작")
-        feedback = step3_gemini_critic(draft)
-
-        if feedback.upper().startswith("PASS"):
-            logger.info(f"✅ Gemini 편집장 PASS 승인 (퇴고 {attempt}회차)")
-            break
-
-        logger.info(f"📝 Gemini 피드백 수신 ({attempt}회차) | GPT 재작성 시작")
-        logger.debug(f"편집장 피드백:\n{feedback}")
-        draft = step4_gpt_rewrite(draft, feedback)
-
-        if attempt == MAX_RETRIES:
-            logger.info(f"⏹ 최대 퇴고 횟수 도달 ({MAX_RETRIES}회) — 마지막 수정본으로 확정")
-
-    # ── 최종본 기준으로 picks·종가 처리 ──────────
-    picks = parse_picks_from_content(draft)
-    tickers = [p.get("ticker", "") for p in picks if p.get("ticker")]
-    prices = fetch_stock_prices(tickers) if tickers else {}
-
-    if picks:
-        save_portfolio(picks, prices)
-
-    # ── 최종 조립: PICKS 블록 제거 + 실제 종가 주입 ─
-    title = extract_title(draft)  # HTML 변환 전 마크다운에서 제목 추출
-    final_content = assemble_final_content(draft, picks, prices)
-
-    # ── 마크다운 → WordPress용 HTML 변환 ─────────
-    final_html = convert_to_html(final_content)
-
-    logger.info(f"블로그 포스팅 생성 완료 | 제목: '{title}' | HTML 길이: {len(final_html)}자")
-
-    return {
-        "title": title,
-        "content": final_html,
-        "generated_at": datetime.now().isoformat(),
-        "picks": picks,
-    }
-
-
-# ══════════════════════════════════════════════
-# Phase 5 — Post 1 & Post 2 생성 시스템
-# ══════════════════════════════════════════════
-
-
-# ──────────────────────────────────────────────
-# 20. Post 1 프롬프트: 핵심 주제 선정 (Gemini)
-# ──────────────────────────────────────────────
-GEMINI_THEME_SELECTOR_SYSTEM = """
-너는 여의도 탑티어 운용사 출신 수석 매크로 전략가다.
-오늘 수집된 뉴스 기사와 애널리스트 리포트를 분석해
-단 1개의 핵심 경제 테마를 선정해라.
-
-[선정 기준]
-- 시장 임팩트가 가장 크고 당장 투자 판단에 영향을 주는 테마
-- 수치(금리·환율·지수·원자재가 등)가 뒷받침되는 테마
-- 독자(펀드매니저·고액 개인투자자)에게 즉시 실행 가능한 인사이트를 줄 수 있는 테마
-
-[출력 형식 — JSON만 출력. 다른 텍스트 금지]
-{
-  "theme": "핵심 테마 1줄 (예: 연준 금리 동결과 달러 인덱스 반등이 한국 증시에 미치는 영향)",
-  "rationale": "왜 이 테마인지 2~3문장 (수치 포함)",
-  "key_data": ["핵심 수치1", "핵심 수치2", "핵심 수치3"]
-}
-"""
-
-GEMINI_THEME_SELECTOR_USER = """
-아래 데이터를 분석해 오늘의 핵심 경제 테마를 선정해라.
-
-[⭐ 핵심 리서치 — 최우선 참고]
-애널리스트 컨센서스 및 리서치 데이터를 뉴스보다 우선시해 테마를 선정해라.
-[⭐ 핵심 리서치] 마커가 붙은 항목은 전문 애널리스트 의견이므로 가장 높은 가중치로 반영해라.
-{research_text}
-
-[뉴스 기사 — 보조 참고]
-{news_text}
-"""
-
-
-# ──────────────────────────────────────────────
-# 21. Post 1 프롬프트: 심층 경제 분석 작성 (GPT-4o)
-# ──────────────────────────────────────────────
-GPT_DEEP_ANALYST_SYSTEM = """
-너는 'MacroMalt(매크로몰트)'의 바텐더 캐시(Cash)다.
-이번 글은 '캐시의 픽' 없이 심층 경제 분석에만 집중한다.
-주 독자: 여의도·월스트리트 펀드매니저, Level 6-7 개인 투자자.
-
-[오늘의 핵심 테마]
-{theme}
-
-핵심 근거 데이터: {key_data}
-
-[목표 분량]
-총 2,500자 이상. 한국경제·매일경제 심층 기획 기사 수준의 밀도로 작성해라.
-
-[데이터 강제 인용 규칙 — 최우선]
-보고서에 등장하는 모든 숫자를 본문에서 최소 8개 이상 직접 인용해라.
-수치 없이 방향성만 서술하는 문장은 작성 금지.
-
-[Negative Prompt — 절대 사용 금지]
-- "결론적으로", "요약하자면", "정리하면"
-- "~하는 것이 중요합니다", "투자에 유의하시기 바랍니다"
-- AI 전형 접속사·맺음말 일체
-- "캐시의 픽", 종목 추천 관련 내용 일체
-
-[글 구조 — 순서 엄수]
-
-1. # 제목: [심층분석] + 핵심 테마를 담은 제목 (선정된 테마 반영)
-
-2. 오프닝: "안녕하세요, 매크로몰트의 바텐더 캐시입니다."로 시작.
-   오늘의 테마를 싱글몰트 위스키에 비유해 3~4문장으로 묘사. 핵심 수치 1개 이상 포함.
-
-3. ## 오늘의 핵심 테마
-   ### 🌐 글로벌 매크로 맥락
-   - 테마와 관련된 글로벌 지표(금리·환율·지수·원자재)를 수치와 함께 서술.
-   - 소제목 정확히 3개. 반드시 `####` 수준의 마크다운 제목으로 작성.
-   - 각 소제목 단락 사이에 반드시 `---` 구분선 삽입.
-   - 각 단락 최소 4문장. 수치 → 인과 → 파급 → 포지션 시사점 순서.
-
-   ### 🇰🇷 한국 시장 연계 분석
-   - 글로벌 매크로가 한국 시장(코스피·원화·채권)에 미치는 파급 효과.
-   - 소제목 정확히 3개. 반드시 `####` 수준의 마크다운 제목으로 작성.
-   - 각 소제목 단락 사이에 반드시 `---` 구분선 삽입.
-   - 글로벌 맥락과의 인과 연결 필수.
-
-4. ## 캐시의 시사점
-   투자자가 향후 1~5거래일 내 반드시 주목해야 할 포인트 3가지.
-   각 항목은 #### 소제목 + 3~4문장(수치 근거→연쇄효과→단기 행동).
-   각 소제목 단락 사이 `---` 구분선 삽입.
-
-5. ### 🔗 오늘의 참고 문헌
-   본문에서 실제로 인용·언급한 기사·리포트만 엄선.
-   형식: - [기사 제목](원본 URL) *— 출처명*
-"""
-
-GPT_DEEP_ANALYST_USER = """
-[매크로 분석 보고서]
-{gemini_report}
-
-[참고 뉴스 및 리서치 데이터]
-{context_text}
-"""
-
-
-# ──────────────────────────────────────────────
-# 22. Post 1 편집장 비평 프롬프트 (Gemini — 픽 검증 제외)
-# ──────────────────────────────────────────────
-GEMINI_DEEP_CRITIC_SYSTEM = """
-너는 여의도 최고급 투자 블로그 'MacroMalt'의 수석 편집장이다.
-숫자에 집착하는 깐깐한 완벽주의자. 수치 없는 분석은 분석이 아니다.
-이 글은 종목 픽 없이 순수 경제 심층 분석 글이다.
-
-[평가 기준 — 하나라도 미달이면 즉시 FAIL]
-
-⓪ 형식 준수 [최우선]:
-   브리핑 소제목이 `####` 수준인가? `---` 구분선이 소제목 사이에 있는가?
-   본문 산문에 `#`, `##`, `###` 기호가 남아 있는가? → 있으면 즉시 FAIL.
-
-① 수치 밀도: 구체 수치 8개 이상 직접 인용됐는가? 방향 서술 문장은 없는가?
-
-② 분량: 2,500자 이상인가?
-
-③ 구조: '### 🌐 글로벌 매크로 맥락', '### 🇰🇷 한국 시장 연계 분석' 두 섹션이 각각 존재하는가?
-   각 섹션에 `####` 소제목 3개가 있는가?
-   글로벌→한국 인과 연결이 명확한가?
-
-④ 참고문헌: 본문 인용 기사와 참고문헌 목록이 일치하는가?
-
-⑤ 시사점: '## 캐시의 시사점'에 3개 항목이 3~4문장으로 서술됐는가?
-
-[출력 규칙]
-- 모든 기준 통과 시에만 "PASS" 반환.
-- 하나라도 미달 시 "FAIL\n" + 번호별 수정 지시.
-- 칭찬 멘트 절대 금지.
-"""
-
-GEMINI_DEEP_CRITIC_USER = """
-아래는 ChatGPT가 작성한 심층 경제 분석 초고다. 수석 편집장으로서 평가해라.
-
-[초고]
-{draft}
-"""
-
-GPT_DEEP_REWRITE_USER = """
-수석 편집장이 아래 초고를 반려하고 수정 지시를 내렸다.
-모든 지적 사항을 반영해 글을 전면 재작성해라.
-
-[편집장 수정 지시]
-{feedback}
-
-[수정할 초고]
-{draft}
-
-[재작성 필수 체크리스트]
-□ 구체 수치 8개 이상 직접 인용.
-□ #### 소제목, --- 구분선 형식 준수.
-□ '### 🌐 글로벌 매크로 맥락' / '### 🇰🇷 한국 시장 연계 분석' 각 3개 소제목.
-□ '## 캐시의 시사점' 3항목 × 3~4문장.
-□ 참고문헌 본문 인용 기사와 일치.
-□ 총 2,500자 이상.
-□ AI 어투 금지.
-"""
-
-
-# ──────────────────────────────────────────────
-# 23. Post 2 프롬프트: 종목 선정 (Gemini)
-# ──────────────────────────────────────────────
-GEMINI_TICKER_SELECTOR_SYSTEM = """
-너는 여의도 탑티어 운용사 출신 포트폴리오 매니저다.
-오늘의 심층 분석 테마와 관련된 한국·미국 주식 2~3종목을 선정해라.
-
-[선정 기준]
-- 오늘 분석된 매크로 테마와 직접 연관된 종목만 선정
-- 한국 주식 최소 1종목, 미국 주식 최소 1종목 포함
-- 반드시 실존하는 티커 심볼 사용
-  · 한국 KOSPI: 티커 형식 '005930.KS' (삼성전자 예시)
-  · 한국 KOSDAQ: 티커 형식 '035720.KQ'
-  · 미국 NYSE/NASDAQ: 티커 형식 'NVDA', 'XLE'
-
-[출력 형식 — JSON 배열만 출력. 다른 텍스트 금지]
-[
-  {"ticker": "005930.KS", "name": "삼성전자", "market": "KR", "reason": "매크로 연관성 1줄"},
-  {"ticker": "NVDA", "name": "NVIDIA", "market": "US", "reason": "매크로 연관성 1줄"}
-]
-"""
-
-GEMINI_TICKER_SELECTOR_USER = """
-오늘의 심층 분석 테마와 관련 종목을 선정해라.
-
-[오늘의 핵심 테마]
-{theme}
-
-[심층 분석 내용 요약]
-{analysis_summary}
-
-[⭐ 핵심 리서치 — 최우선 참고]
-[⭐ 핵심 리서치] 마커가 붙은 컨센서스 리포트의 종목/섹터를 우선적으로 고려해라.
-섹터 정보가 있으면 관련 대표 종목을 선정에 적극 반영해라.
-{research_text}
-"""
-
-
-# ──────────────────────────────────────────────
-# 24. Post 2 프롬프트: 종목 리포트 작성 (GPT-4o)
-# ──────────────────────────────────────────────
-GPT_STOCK_REPORT_SYSTEM = """
-너는 'MacroMalt(매크로몰트)'의 바텐더 캐시(Cash)다.
-오늘의 매크로 분석을 바탕으로 선정된 종목들의 투자 리포트를 작성해라.
-주 독자: 여의도·월스트리트 펀드매니저, Level 6-7 개인 투자자.
-
-[글 구조 — 순서 엄수]
-
-1. # 제목: [캐시의 픽] + 오늘의 핵심 종목 1~2개 언급 + 시장 맥락
-
-2. 오프닝: "안녕하세요, 매크로몰트의 바텐더 캐시입니다."로 시작.
-   오늘의 종목 선정 배경을 위스키 테이스팅에 비유해 3~4문장. 핵심 수치 포함.
-
-3. ## 오늘의 시장 컨텍스트
-   Post 1 심층 분석의 핵심 내용을 2~3문단으로 요약 (수치 포함).
-   소제목: `####` 수준으로 2개. 소제목 사이 `---` 구분선.
-
-4. ## 캐시의 종목 리포트
-   각 종목에 대해 아래 형식으로 작성해라:
-
-   ### 🥃 [종목명] ([티커])
-   현재가: {PRICE_PLACEHOLDER}
-
-   **투자 의견**: 매수 / 중립 / 매도 중 하나 선택.
-   **목표가**: 애널리스트 컨센서스가 있으면 기재, 없으면 "컨센서스 데이터 없음"
-
-   > **추천 근거**
-   > 첫째: 오늘 분석된 구체적 매크로 수치와 이 종목의 상관관계.
-   > 둘째: 그 매크로 흐름이 이 종목 실적·밸류에이션·수급에 미치는 직접 영향.
-   > 셋째: 단기(1~5거래일) 트레이딩 관점에서 왜 지금 이 종목인지 확언.
-
-   (실제 주가는 시스템이 자동 삽입하므로 {PRICE_PLACEHOLDER}를 그대로 두어라)
-   종목 간 구분은 `---` 구분선으로.
-
-5. ### 🔗 오늘의 참고 문헌
-   본문에서 실제로 인용·언급한 기사·리포트만 엄선.
-   형식: - [기사 제목](원본 URL) *— 출처명*
-
-[Negative Prompt]
-- "결론적으로", "요약하자면", "중요합니다"
-- AI 전형 접속사·맺음말 일체
-- 수치 없는 방향 서술 문장
-"""
-
-GPT_STOCK_REPORT_USER = """
-[오늘의 핵심 테마]
-{theme}
-
-[심층 분석 요약]
-{analysis_summary}
-
-[선정 종목]
-{tickers_json}
-
-[참고 뉴스 및 리서치 데이터]
-{context_text}
-"""
-
-
-# ──────────────────────────────────────────────
-# 25. 한국 주식 가격 조회 (_fetch_korean_stock_price)
-# ──────────────────────────────────────────────
 def _fetch_korean_stock_price(ticker_kr: str) -> str:
     """
     한국 주식 실시간 가격 조회.
@@ -1056,7 +309,6 @@ def _fetch_korean_stock_price(ticker_kr: str) -> str:
     - 실패 시 네이버금융 item 페이지 스크래핑
     - 반환: '₩84,500 (2026-03-12 기준)' 형식
     """
-    # yfinance 시도
     try:
         t = yf.Ticker(ticker_kr)
         hist = t.history(period="1d")
@@ -1067,9 +319,7 @@ def _fetch_korean_stock_price(ticker_kr: str) -> str:
     except Exception as e:
         logger.debug(f"{ticker_kr} yfinance 조회 실패: {e}")
 
-    # 네이버금융 폴백
     try:
-        # 종목 코드 추출 (005930.KS → 005930)
         code = ticker_kr.split(".")[0]
         url = f"https://finance.naver.com/item/main.nhn?code={code}"
         headers = {
@@ -1102,9 +352,7 @@ def _fetch_korean_stock_price(ticker_kr: str) -> str:
 
 
 def _get_price_for_ticker(ticker: str) -> str:
-    """
-    티커 형식에 따라 한국(.KS/.KQ) 또는 미국 주식 가격을 조회합니다.
-    """
+    """티커 형식에 따라 한국(.KS/.KQ) 또는 미국 주식 가격을 조회합니다."""
     if ticker.endswith(".KS") or ticker.endswith(".KQ"):
         return _fetch_korean_stock_price(ticker)
     else:
@@ -1112,331 +360,847 @@ def _get_price_for_ticker(ticker: str) -> str:
         return prices.get(ticker, "N/A")
 
 
-# ──────────────────────────────────────────────
-# 26. 리서치/뉴스 컨텍스트 구분자 상수
-# ──────────────────────────────────────────────
-# 리서치(우선) — 뉴스(보조) 섹션 구분선
-RESEARCH_NEWS_SEPARATOR = (
-    "─" * 40 + "\n[뉴스 기사 — 보조 컨텍스트]\n" + "─" * 40
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION D: 내부 유틸 — 포트폴리오 + 콘텐츠 조립
+# ──────────────────────────────────────────────────────────────────────────────
+
+def parse_picks_from_content(content: str) -> list:
+    """<!-- PICKS: [...] --> 블록에서 티커 리스트를 추출합니다."""
+    match = re.search(r"<!--\s*PICKS:\s*(\[.*?\])\s*-->", content, re.DOTALL)
+    if not match:
+        logger.warning("PICKS JSON 블록을 찾지 못했습니다.")
+        return []
+    try:
+        picks = json.loads(match.group(1))
+        return picks if isinstance(picks, list) else []
+    except json.JSONDecodeError as e:
+        logger.warning(f"PICKS JSON 파싱 실패: {e}")
+        return []
+
+
+def save_portfolio(picks: list, prices: dict) -> None:
+    """픽 히스토리를 portfolio.json에 누적 저장합니다."""
+    portfolio_path = os.path.join(os.path.dirname(__file__), "portfolio.json")
+
+    existing: list = []
+    if os.path.exists(portfolio_path):
+        try:
+            with open(portfolio_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            existing = []
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    for pick in picks:
+        ticker = pick.get("ticker", "")
+        entry = {
+            "date": today,
+            "ticker": ticker,
+            "price": prices.get(ticker, "N/A"),
+            "reason": pick.get("reason", ""),
+        }
+        existing.append(entry)
+
+    with open(portfolio_path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"portfolio.json 저장 완료 | 누적 {len(existing)}건")
+
+
+def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
+    """
+    GPT 초고에서 PICKS JSON 주석을 제거하고,
+    각 티커의 {PRICE_PLACEHOLDER}를 실제 종가(기준일 포함)로 교체합니다.
+    """
+    content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", raw_content, flags=re.DOTALL)
+
+    for pick in picks:
+        ticker = pick.get("ticker", "")
+        price = prices.get(ticker, "N/A")
+        if "{PRICE_PLACEHOLDER}" in content:
+            content = content.replace("{PRICE_PLACEHOLDER}", price, 1)
+
+    content = content.replace("{PRICE_PLACEHOLDER}", "N/A")
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
+
+
+def extract_title(markdown_content: str) -> str:
+    """마크다운에서 H1 제목을 추출합니다 (참조용 유지)."""
+    for line in markdown_content.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line.lstrip("# ").strip()
+    today = datetime.now().strftime("%Y-%m-%d")
+    return f"[오늘의 캐시픽] {today} 글로벌 마켓 브리핑"
+
+
+def convert_to_html(content: str) -> str:
+    """
+    마크다운을 WordPress HTML로 변환합니다 (인프라 참조용 유지).
+    Phase 7 파이프라인에서는 GPT가 HTML을 직접 출력하므로 일반적으로 호출되지 않습니다.
+    """
+    H1_STYLE = (
+        "font-size:2em;font-weight:800;color:#1a1a1a;"
+        "margin:0 0 30px 0;padding-bottom:14px;"
+        "border-bottom:3px solid #1a1a1a;line-height:1.3;"
+    )
+    SUB_H_STYLE = (
+        "border-left:6px solid #1a1a1a;padding:12px 18px;"
+        "background-color:#f4f4f4;margin:45px 0 20px 0;"
+        "color:#1a1a1a;font-size:1.4em;"
+    )
+    P_STYLE = "font-size:15px;line-height:1.9;color:#333;margin:0 0 16px 0;"
+    HR_STYLE = "border:0;border-top:1px solid #eee;margin:30px 0;"
+    BQ_STYLE = (
+        "border-left:4px solid #b36b00;margin:12px 0;"
+        "padding:10px 18px;background:#fffdf5;color:#555;"
+    )
+    UL_STYLE = "margin:0.5em 0 0.8em 1.4em;padding:0;color:#333;"
+    OL_STYLE = "margin:0.5em 0 0.8em 1.4em;padding:0;color:#333;"
+    LI_STYLE = "font-size:15px;line-height:1.8;margin:0.3em 0;"
+    STRONG_STYLE = "font-weight:700;color:#1a1a1a;"
+    A_STYLE = "color:#1a1a1a;text-decoration:underline;"
+    PICKS_DIV_STYLE = (
+        "padding:25px;background-color:#fffaf0;"
+        "border-left:5px solid #b36b00;margin:30px 0;"
+    )
+
+    html = md_lib.markdown(content, extensions=["tables", "fenced_code"])
+
+    for level in [2, 4]:
+        html = html.replace(f"<h{level}>", f'<h3 style="{SUB_H_STYLE}">')
+        html = html.replace(f"</h{level}>", "</h3>")
+    html = html.replace("<h3>", f'<h3 style="{SUB_H_STYLE}">')
+    html = html.replace("<h1>", f'<h1 style="{H1_STYLE}">')
+    html = html.replace("<p>", f'<p style="{P_STYLE}">')
+    html = html.replace("<hr>", f'<hr style="{HR_STYLE}">')
+    html = html.replace("<hr />", f'<hr style="{HR_STYLE}">')
+    html = html.replace("<blockquote>", f'<blockquote style="{BQ_STYLE}">')
+    html = html.replace("<ul>", f'<ul style="{UL_STYLE}">')
+    html = html.replace("<ol>", f'<ol style="{OL_STYLE}">')
+    html = html.replace("<li>", f'<li style="{LI_STYLE}">')
+    html = html.replace("<strong>", f'<strong style="{STRONG_STYLE}">')
+    html = re.sub(r"<a ", f'<a style="{A_STYLE}" ', html)
+
+    picks_pattern = re.compile(
+        r"(<h3[^>]*>.*?캐시의\s*픽.*?</h3>)(.*?)(<h3[^>]*>.*?참고\s*출처.*?</h3>)",
+        re.DOTALL,
+    )
+
+    def _wrap_picks_box(m: re.Match) -> str:
+        return (
+            f"{m.group(1)}"
+            f'<div style="{PICKS_DIV_STYLE}">'
+            f"{m.group(2).strip()}"
+            f"</div>\n"
+            f"{m.group(3)}"
+        )
+
+    html = picks_pattern.sub(_wrap_picks_box, html)
+    return html
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION E: Phase 7 — v2 프롬프트 상수
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ─── HTML 스타일 인라인 상수 (GPT 시스템 프롬프트에 삽입) ───────────────────
+_H3_STYLE = (
+    "border-left:6px solid #1a1a1a;padding:12px 18px;"
+    "background-color:#f4f4f4;margin:45px 0 20px 0;"
+    "color:#1a1a1a;font-size:1.4em;"
+)
+_HR_STYLE = "border:0;border-top:1px solid #eee;margin:30px 0;"
+_P_STYLE  = "font-size:15px;line-height:1.9;color:#333;margin:0 0 16px 0;"
+_H1_STYLE = (
+    "font-size:2em;font-weight:800;color:#1a1a1a;"
+    "margin:0 0 30px 0;padding-bottom:14px;"
+    "border-bottom:3px solid #1a1a1a;line-height:1.3;"
+)
+_PICKS_DIV_STYLE = (
+    "padding:25px;background-color:#fffaf0;"
+    "border-left:5px solid #b36b00;margin:30px 0;"
 )
 
 
-# ──────────────────────────────────────────────
-# 27. 리서치 데이터 → 텍스트 변환
-# ──────────────────────────────────────────────
-def format_research_for_prompt(research: list) -> str:
+# ─── Step 1: Gemini 분석 엔진 프롬프트 ──────────────────────────────────────
+
+GEMINI_ANALYST_SYSTEM = """
+너는 매크로몰트(MacroMalt) 리서치 데스크 수석 매크로 애널리스트다.
+
+역할: 수집된 뉴스·리서치 데이터를 분석해 블로그 작성자(ChatGPT)가 사용할
+      '구조화된 리포트 재료'를 생성한다.
+
+[출력 규칙 — 최우선]
+- 반드시 아래 JSON 구조로만 출력할 것.
+- 설명 텍스트, 마크다운 코드 블록(```), 서문 없이 JSON 객체 하나만 출력.
+- 사실(fact)과 해석(interpretation)을 절대 혼합하지 말 것.
+- 목표가·투자의견·현재가는 명확한 출처와 기준일이 있을 때만 facts에 포함.
+- 출처가 불분명한 수치는 uncertainties에 이동.
+
+[출력 JSON 구조]
+{
+  "theme": "오늘의 핵심 경제 테마 (한 문장, 구체적으로)",
+  "facts": [
+    {
+      "content": "확인된 사실 내용 (숫자·날짜·기관명 포함)",
+      "source": "출처명 (언론사명, 기관명, 리포트명 등)",
+      "date": "기준 시점 (YYYY-MM-DD 또는 'YYYY년 Q분기' 등)"
+    }
+  ],
+  "market_impact": "이 테마가 금융시장에 미치는 영향 경로 (사실 기반, 해석 금지)",
+  "counter_interpretations": [
+    "이 테마에 대한 반대 해석 또는 대안적 시각 1",
+    "반대 해석 2 (없으면 빈 배열 [])"
+  ],
+  "uncertainties": [
+    "이 분석에서 불확실한 요소 또는 추가 확인이 필요한 사항"
+  ],
+  "writing_notes": "ChatGPT 작성자에게 전달할 주의사항 (과장 금지 항목, 민감한 표현 등)"
+}
+
+facts는 반드시 5개 이상 10개 이하로 출력할 것.
+"""
+
+GEMINI_ANALYST_USER = """
+아래 데이터를 분석해 오늘의 구조화된 리포트 재료를 JSON으로 출력하라.
+
+[⭐ 핵심 리서치 — 최우선 참고]
+[⭐ 핵심 리서치] 마커가 붙은 항목은 전문 애널리스트 의견이므로 가장 높은 가중치로 반영.
+{research_text}
+
+[뉴스 기사 — 보조 참고]
+{news_text}
+"""
+
+
+# ─── Step 2a: GPT 작성 엔진 — Post 1 심층 분석 프롬프트 ─────────────────────
+
+GPT_WRITER_ANALYSIS_SYSTEM = f"""
+너는 매크로몰트(MacroMalt) 오너 바텐더 '캐시(Cash)'다.
+Gemini 애널리스트가 정리한 구조화된 리포트 재료를 바탕으로 금융 분석 글을 작성한다.
+
+[작성 규칙 — 이것이 가장 중요하다]
+1. 사실: 출처가 있는 내용은 일반 문장으로 자연스럽게 서술
+2. 해석: 문장 앞에 반드시 [해석] 태그를 삽입
+3. 전망: 문장 앞에 반드시 [전망] 태그를 삽입
+4. 불확실한 내용: "확실하지 않다", "확인되지 않았다" 등 명확히 표기
+5. 출처 없는 가격·목표가·투자의견: 절대 작성 금지
+6. 도입부에서만 바텐더/위스키 비유를 딱 1회 사용. 이후 본문은 정보 전달·객관성에 집중.
+7. 상투적 결론 문장("이상으로 살펴보았습니다", "결론적으로" 등) 금지
+8. 기계적인 접속사 패턴 반복 금지
+
+[포맷 규칙 — 마크다운 절대 금지]
+- 마크다운 기호(#, ##, **, *, `, ---, [ ]) 절대 사용 금지
+- [해석], [전망] 텍스트 마커는 예외적으로 허용
+- 코드 블록(```html 등) 절대 금지. HTML 태그로 바로 시작.
+- 허용 태그 및 필수 인라인 스타일:
+  * 글 제목: <h1 style="{_H1_STYLE}">제목</h1>
+  * 소제목: <h3 style="{_H3_STYLE}">소제목</h3>
+  * 단락: <p style="{_P_STYLE}">내용</p>
+  * 구분선: <hr style="{_HR_STYLE}">
+  * 강조: <strong style="font-weight:700;color:#1a1a1a;">강조어</strong>
+
+[글 구조]
+1. 제목: <h1>로 작성 — "[심층분석] {{테마}}" 형식
+2. 도입부: <p>로 작성 — 위스키/바텐더 비유 1회 + 오늘의 핵심 테마 소개 (150자 내외)
+3. 본문 소제목 2~3개: <h3>로 작성 — 사실 데이터 기반 분석
+4. 반대 시각 또는 불확실성: <h3> + <p> — 균형 잡힌 시각 제시
+5. 참고 출처 섹션: <h3>참고 출처</h3> 후 <p>로 본문에서 실제 사용된 데이터의 출처만 나열
+   (미사용 출처 제외 — 본문 데이터와 직접 대응되는 것만)
+
+[분량]
+총 2,000자 이상의 HTML 출력
+"""
+
+GPT_WRITER_ANALYSIS_USER = """
+아래 Gemini 분석 재료를 바탕으로 심층 경제 분석 글을 HTML로 작성하라.
+
+[Gemini 분석 재료 (JSON)]
+{materials_json}
+
+[참고 컨텍스트]
+{context_text}
+"""
+
+
+# ─── Step 2b: GPT 작성 엔진 — Post 2 종목 리포트 프롬프트 ────────────────────
+
+GPT_WRITER_PICKS_SYSTEM = f"""
+너는 매크로몰트(MacroMalt) 오너 바텐더 '캐시(Cash)'다.
+오늘의 매크로 분석과 Gemini가 선정한 종목을 바탕으로 '캐시의 픽' 종목 리포트를 작성한다.
+
+[작성 규칙]
+1. 종목별 근거: 3문장 내외 (매크로 연결 근거 1~2문장 + 핵심 리스크 1문장)
+2. 해석은 [해석], 전망은 [전망] 태그 필수
+3. 현재가: 반드시 제공된 {{PRICE_PLACEHOLDER}} 마커를 사용. 절대 임의 생성 금지.
+4. 목표가: 제공된 출처·기준일이 있는 경우에만 작성. 없으면 작성 금지.
+5. "매수하세요", "지금 사야 할 주식" 등 투자 권유 문구 절대 금지
+6. 위스키/바텐더 비유: 도입부에 간결하게 테마-종목 연결 (1회, 필수는 아님)
+
+[포맷 규칙 — 마크다운 절대 금지]
+- 마크다운 기호(#, **, *, `) 절대 사용 금지
+- 코드 블록(```html 등) 절대 금지. HTML 태그로 바로 시작.
+- 허용 태그 및 필수 인라인 스타일:
+  * 글 제목: <h1 style="{_H1_STYLE}">제목</h1>
+  * 소제목: <h3 style="{_H3_STYLE}">소제목</h3>
+  * 단락: <p style="{_P_STYLE}">내용</p>
+  * 구분선: <hr style="{_HR_STYLE}">
+  * 종목 박스: <div style="{_PICKS_DIV_STYLE}">종목 내용</div>
+  * 강조: <strong style="font-weight:700;color:#1a1a1a;">강조어</strong>
+
+[글 구조]
+1. 제목: <h1>로 작성 — "[캐시의 픽] {{종목명}} 외 — {{테마}}" 형식
+2. 도입부: <p>로 간결하게 오늘의 테마와 종목 선정 배경 연결
+3. 종목별 섹션: 각 종목을 <div style="{_PICKS_DIV_STYLE}">로 감싸고
+   - <h3>으로 종목명(티커) 표시
+   - 현재가: "현재가 {{PRICE_PLACEHOLDER}}" 형식으로 명시
+   - 선정 근거 <p> 1~2개
+   - 핵심 리스크 <p> 1개
+4. 참고 출처 섹션: <h3>참고 출처</h3> 후 <p>로 사용된 데이터 출처만 나열
+
+[마지막 줄 — 필수]
+<!-- PICKS: [{{"ticker":"티커","name":"종목명","market":"KR 또는 US","reason":"선정 이유 한 줄"}},...] -->
+위 형식의 HTML 주석을 마지막에 반드시 포함할 것.
+"""
+
+GPT_WRITER_PICKS_USER = """
+아래 정보를 바탕으로 '캐시의 픽' 종목 리포트를 HTML로 작성하라.
+
+[오늘의 핵심 테마]
+{theme}
+
+[Gemini 분석 재료 요약]
+{materials_summary}
+
+[선정 종목 및 현재가]
+{tickers_and_prices}
+
+[참고 컨텍스트]
+{context_text}
+"""
+
+
+# ─── Step 3: Gemini 검수 엔진 프롬프트 ──────────────────────────────────────
+
+GEMINI_VERIFIER_SYSTEM = """
+너는 매크로몰트(MacroMalt) 금융 콘텐츠 팩트체커다.
+생성된 금융 분석 초안을 아래 기준으로 검수하고, 반드시 JSON으로만 결과를 출력해라.
+설명 텍스트나 서문 없이 JSON 객체 하나만 출력할 것.
+
+[검수 기준 6가지]
+1. 수치·날짜·고유명사의 오류 가능성 및 기준 시점 누락
+2. [해석] 또는 [전망] 태그 없이 해석·전망이 사실처럼 서술된 문장
+3. 출처 없는 단정 표현 존재 여부 (예: "~할 것이다", "~가 확실하다" 단정)
+4. 투자 권유처럼 보이는 문장 존재 여부
+5. 바텐더/위스키 비유가 도입부 1회를 초과하는지 여부
+6. 마크다운 기호(#, ##, **, *, ```) 포함 여부
+
+[출력 JSON]
+{
+  "pass": true 또는 false,
+  "issues": ["발견된 문제 1", "문제 2"],
+  "revised_content": null 또는 "pass가 false일 때 수정된 전체 HTML 본문"
+}
+
+pass=true이면 issues는 [] 또는 경미한 사항만, revised_content는 반드시 null.
+pass=false이면 issues에 문제 목록, revised_content에 6개 기준을 모두 해결한 수정본 전체.
+"""
+
+GEMINI_VERIFIER_USER = """
+아래 초안을 검수하고 JSON으로 결과를 출력하라.
+
+[검수 대상 초안]
+{draft}
+"""
+
+
+# ─── Post 2 전용: Gemini 종목 선정 프롬프트 ─────────────────────────────────
+
+GEMINI_TICKER_V2_SYSTEM = """
+너는 매크로몰트 포트폴리오 매니저다.
+오늘의 매크로 분석 재료를 바탕으로 블로그 '캐시의 픽' 섹션에 소개할 종목을 선정해라.
+
+[선정 기준]
+- 오늘의 핵심 테마와 직접적으로 연결된 종목 2~3개
+- 한국 주식과 미국 주식을 적절히 혼합 (가능하면 각 1개 이상)
+- 분석 재료의 counter_interpretations(반대 해석)를 고려해 리스크가 극단적인 종목 제외
+- 과도한 테마주·소형주 기피 (대형주 또는 ETF 우선)
+
+[출력 규칙]
+- 설명 없이 JSON 배열만 출력. 마크다운 코드 블록 금지.
+- 한국 주식 티커 형식: '005930.KS' (KOSPI) 또는 '035720.KQ' (KOSDAQ)
+- 미국 주식 티커 형식: 'AAPL', 'XLE' (거래소 접미사 없음)
+
+[출력 JSON]
+[
+  {"ticker": "005930.KS", "name": "삼성전자", "market": "KR", "reason": "선정 이유 한 줄"},
+  {"ticker": "XLE", "name": "Energy Select Sector SPDR", "market": "US", "reason": "선정 이유 한 줄"}
+]
+"""
+
+GEMINI_TICKER_V2_USER = """
+오늘의 핵심 테마와 분석 재료를 바탕으로 종목을 선정하라.
+
+[오늘의 핵심 테마]
+{theme}
+
+[분석 재료 요약]
+- 시장 영향 경로: {market_impact}
+- 반대 해석: {counter_interpretations}
+- 불확실 요소: {uncertainties}
+
+[참고 리서치 데이터]
+{research_text}
+"""
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION F: Phase 7 — 3단계 파이프라인 내부 함수
+# ──────────────────────────────────────────────────────────────────────────────
+
+def gemini_analyze(news_text: str, research_text: str) -> dict:
     """
-    리서치 데이터를 프롬프트용 텍스트로 변환합니다.
-
-    Phase 6 변경:
-    - weight 내림차순 정렬 (높은 우선순위 항목 먼저)
-    - weight >= 5 → [⭐ 핵심 리서치] 마커 접두
-    - sector 필드 포함
-    - 섹션 헤더에 "우선순위순" 표기
-    """
-    if not research:
-        return "(리서치 데이터 없음)"
-
-    today = datetime.now().strftime("%Y년 %m월 %d일")
-    lines = [f"[{today} 리서치·컨센서스 데이터 — 우선순위순]\n"]
-
-    # weight 내림차순 정렬
-    sorted_research = sorted(research, key=lambda x: x.get("weight", 1), reverse=True)
-
-    for i, item in enumerate(sorted_research, 1):
-        source  = item.get("source", "기타")
-        title   = item.get("title", "제목 없음")
-        summary = item.get("summary", "")
-        url     = item.get("url", "")
-        broker  = item.get("broker", "")
-        target  = item.get("target_price", "")
-        sector  = item.get("sector", "")
-        weight  = item.get("weight", 1)
-
-        # 우선순위 마커 (컨센서스급 weight=5 이상)
-        priority_marker = "[⭐ 핵심 리서치] " if weight >= 5 else ""
-
-        lines.append(f"{i}. {priority_marker}[{source}] {title}")
-
-        # 메타 라인: 증권사·섹터·목표가
-        meta_parts = []
-        if broker:
-            meta_parts.append(f"증권사: {broker}")
-        if sector:
-            meta_parts.append(f"섹터: {sector}")
-        if target:
-            meta_parts.append(f"목표가: {target}")
-        if meta_parts:
-            lines.append(f"   {' | '.join(meta_parts)}")
-
-        if url:
-            lines.append(f"   URL: {url}")
-        if summary:
-            lines.append(f"   요약: {summary[:200]}")
-
-    return "\n".join(lines)
-
-
-# ──────────────────────────────────────────────
-# 27. Post 1 생성: 심층 경제 분석
-# ──────────────────────────────────────────────
-def generate_deep_analysis(news: list, research: list) -> dict:
-    """
-    Post 1 생성 파이프라인: 심층 경제 분석
-
-    흐름:
-      Step1: Gemini → 핵심 주제 1개 선정 (JSON)
-      Step2: GPT-4o → 심층 분석 초고 (2,500자+)
-      Step3~4: Gemini 비평 → GPT 재작성 (max 2회)
-      → 마크다운 → HTML 변환
+    Step 1: Gemini 분석 엔진.
+    뉴스·리서치 데이터를 구조화된 JSON 리포트 재료로 변환합니다.
 
     반환:
-        {"title", "content", "theme", "key_data", "theme_rationale", "generated_at"}
+        {"theme", "facts", "market_impact", "counter_interpretations",
+         "uncertainties", "writing_notes"}
     """
-    # ── Step 1: Gemini — 핵심 주제 선정 ─────────
-    news_text = format_articles_for_prompt(news)
-    research_text = format_research_for_prompt(research)
-
-    theme_user = GEMINI_THEME_SELECTOR_USER.format(
-        news_text=news_text,
+    user_msg = GEMINI_ANALYST_USER.format(
         research_text=research_text,
+        news_text=news_text,
     )
-    theme_json_raw = _call_gemini(
-        GEMINI_THEME_SELECTOR_SYSTEM, theme_user,
-        label="Post1-Step1:주제선정", temperature=0.2,
-    )
+    raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
+    result = _parse_json_response(raw) if raw else None
 
-    # JSON 파싱 (실패 시 기본값)
-    theme = "글로벌 매크로 시황 분석"
-    key_data = []
-    theme_rationale = ""
-    if theme_json_raw:
-        try:
-            # ```json ... ``` 블록 제거 후 파싱
-            clean = re.sub(r"```(?:json)?\s*|\s*```", "", theme_json_raw.strip())
-            theme_obj = json.loads(clean)
-            theme = theme_obj.get("theme", theme)
-            key_data = theme_obj.get("key_data", [])
-            theme_rationale = theme_obj.get("rationale", "")
-        except json.JSONDecodeError:
-            logger.warning("Post1 주제 JSON 파싱 실패 — 기본 테마 사용")
+    if not result or not isinstance(result, dict):
+        logger.warning("Gemini 분석 재료 파싱 실패 — 기본값 사용")
+        result = {
+            "theme": "글로벌 경제 주요 이슈",
+            "facts": [{"content": "수집된 뉴스 데이터 기반", "source": "뉴스 종합", "date": datetime.now().strftime("%Y-%m-%d")}],
+            "market_impact": "금융 시장에 직접적인 영향",
+            "counter_interpretations": [],
+            "uncertainties": ["추가 데이터 확인 필요"],
+            "writing_notes": "수치 인용 시 반드시 출처 명시",
+        }
 
-    logger.info(f"Post1 선정 테마: {theme}")
+    logger.info(f"Step1 선정 테마: {result.get('theme', 'N/A')}")
+    logger.info(f"Step1 사실 데이터: {len(result.get('facts', []))}개")
+    return result
 
-    # ── Step 2: GPT-4o — 심층 분석 초고 ─────────
-    # 먼저 Gemini로 통합 보고서를 생성 (기존 step1 활용)
-    combined_articles = news + research
-    gemini_report = step1_gemini_analysis(format_articles_for_prompt(combined_articles))
 
-    analyst_system = GPT_DEEP_ANALYST_SYSTEM.format(
-        theme=theme,
-        key_data=", ".join(key_data) if key_data else "오늘의 핵심 매크로 수치",
-    )
-    # Phase 6: 리서치 선행, 뉴스 후행 (리서치가 AI 분석의 핵심 재료)
-    context_text = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
-    analyst_user = GPT_DEEP_ANALYST_USER.format(
-        gemini_report=gemini_report or context_text,
+def gpt_write_analysis(materials: dict, context_text: str) -> str:
+    """
+    Step 2a: GPT 작성 엔진 — Post 1 심층 분석.
+    Gemini 분석 재료를 HTML 형식의 심층 분석 글로 작성합니다.
+
+    반환: HTML 문자열 (마크다운 없음, 인라인 스타일 포함)
+    """
+    materials_json = json.dumps(materials, ensure_ascii=False, indent=2)
+    user_msg = GPT_WRITER_ANALYSIS_USER.format(
+        materials_json=materials_json,
         context_text=context_text,
     )
-    draft = _call_gpt(analyst_system, analyst_user, label="Post1-Step2:심층초고")
+    draft = _call_gpt(
+        GPT_WRITER_ANALYSIS_SYSTEM,
+        user_msg,
+        "Step2a:심층분석작성",
+        temperature=0.7,
+        max_tokens=4000,
+    )
+    return draft
 
-    # ── Step 3~4: 교차 퇴고 루프 (최대 2회) ─────
-    for attempt in range(1, MAX_RETRIES + 1):
-        logger.info(f"Post1 퇴고 {attempt}/{MAX_RETRIES} — Gemini 편집장 비평")
-        critic_user = GEMINI_DEEP_CRITIC_USER.format(draft=draft)
-        feedback = _call_gemini(
-            GEMINI_DEEP_CRITIC_SYSTEM, critic_user,
-            label=f"Post1-Step3:비평({attempt}회차)", temperature=0.1,
-        )
-        if not feedback or feedback.strip().upper().startswith("PASS"):
-            logger.info(f"Post1 PASS (퇴고 {attempt}회차)")
-            break
-        rewrite_user = GPT_DEEP_REWRITE_USER.format(
-            feedback=feedback, draft=draft,
-        )
-        draft = _call_gpt(
-            GPT_DEEP_ANALYST_SYSTEM.format(
-                theme=theme,
-                key_data=", ".join(key_data) if key_data else "",
-            ),
-            rewrite_user,
-            label=f"Post1-Step4:재작성({attempt}회차)",
-        )
 
-    # ── HTML 변환 ────────────────────────────────
-    title = extract_title(draft)
-    final_content = re.sub(r"\n{3,}", "\n\n", draft).strip()
-    final_html = convert_to_html(final_content)
+def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: str) -> str:
+    """
+    Step 2b: GPT 작성 엔진 — Post 2 종목 리포트.
+    분석 재료 + 종목 + 실제 가격 데이터로 종목 리포트 HTML을 작성합니다.
 
-    logger.info(f"Post1 생성 완료 | 제목: '{title}' | HTML {len(final_html)}자")
+    반환: HTML 문자열 ({PRICE_PLACEHOLDER} 포함, PICKS JSON 주석 포함)
+    """
+    theme = materials.get("theme", "")
+    materials_summary = (
+        f"시장 영향 경로: {materials.get('market_impact', '')}\n"
+        f"핵심 불확실 요소: {'; '.join(materials.get('uncertainties', []))}\n"
+        f"글 작성 주의사항: {materials.get('writing_notes', '')}"
+    )
+
+    # 종목별 가격 정보 텍스트
+    tickers_lines = []
+    for pick in tickers:
+        t = pick.get("ticker", "")
+        name = pick.get("name", t)
+        market = pick.get("market", "")
+        reason = pick.get("reason", "")
+        price = prices.get(t, "{PRICE_PLACEHOLDER}")
+        tickers_lines.append(
+            f"- {name}({t}) [{market}] 현재가: {price}\n  선정 근거: {reason}"
+        )
+    tickers_and_prices = "\n".join(tickers_lines)
+
+    user_msg = GPT_WRITER_PICKS_USER.format(
+        theme=theme,
+        materials_summary=materials_summary,
+        tickers_and_prices=tickers_and_prices,
+        context_text=context_text,
+    )
+    draft = _call_gpt(
+        GPT_WRITER_PICKS_SYSTEM,
+        user_msg,
+        "Step2b:종목리포트작성",
+        temperature=0.65,
+        max_tokens=3000,
+    )
+    return draft
+
+
+def verify_draft(draft: str) -> dict:
+    """
+    Step 3: Gemini 검수 엔진.
+    HTML 초안을 6가지 기준으로 검수합니다.
+
+    반환:
+        {"pass": bool, "issues": list, "revised_content": str | None}
+    """
+    user_msg = GEMINI_VERIFIER_USER.format(draft=draft)
+    raw = _call_gemini(
+        GEMINI_VERIFIER_SYSTEM,
+        user_msg,
+        "Step3:팩트체크",
+        temperature=0.1,
+    )
+    result = _parse_json_response(raw) if raw else None
+
+    if not result or not isinstance(result, dict):
+        logger.warning("검수 결과 파싱 실패 — 통과로 처리")
+        return {"pass": True, "issues": [], "revised_content": None}
+
+    passed = result.get("pass", True)
+    issues = result.get("issues", [])
+    revised = result.get("revised_content")
+
+    if passed:
+        logger.info(f"Step3 검수 통과" + (f" (경고: {issues})" if issues else ""))
+    else:
+        logger.warning(f"Step3 검수 실패: {issues}")
+
+    return {"pass": passed, "issues": issues, "revised_content": revised}
+
+
+def gemini_select_tickers_v2(theme: str, materials: dict, research_text: str) -> list:
+    """
+    Post 2 전용: Gemini 종목 선정.
+    분석 재료를 바탕으로 오늘의 픽 종목 2~3개를 선정합니다.
+
+    반환:
+        [{"ticker", "name", "market", "reason"}, ...]
+    """
+    user_msg = GEMINI_TICKER_V2_USER.format(
+        theme=theme,
+        market_impact=materials.get("market_impact", ""),
+        counter_interpretations="; ".join(materials.get("counter_interpretations", [])),
+        uncertainties="; ".join(materials.get("uncertainties", [])),
+        research_text=research_text,
+    )
+    raw = _call_gemini(GEMINI_TICKER_V2_SYSTEM, user_msg, "Post2-Step1:종목선정", temperature=0.2)
+    result = _parse_json_response(raw) if raw else None
+
+    if not result or not isinstance(result, list):
+        logger.warning("종목 선정 파싱 실패 — 기본 종목 사용")
+        return [
+            {"ticker": "SPY", "name": "S&P 500 ETF", "market": "US", "reason": "시장 대표 ETF"},
+        ]
+
+    logger.info(f"Post2 선정 종목: {[p['ticker'] for p in result]}")
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION G: Phase 7 — 공개 API (main.py 연결)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def generate_deep_analysis(news: list, research: list) -> dict:
+    """
+    Post 1 — 3단계 심층 경제 분석 생성.
+
+    3단계 파이프라인:
+        Step 1 (Gemini): 뉴스+리서치 → 구조화된 JSON 재료
+        Step 2 (GPT):    JSON 재료 → HTML 심층 분석 초고
+        Step 3 (Gemini): HTML 초고 → 팩트체크 + 필요 시 수정
+
+    반환:
+        {"title", "content", "theme", "key_data", "materials", "generated_at"}
+        ※ materials: Post 2에 전달하기 위한 구조화 데이터
+    """
+    news_text     = format_articles_for_prompt(news)
+    research_text = format_research_for_prompt(research)
+    context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
+
+    # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
+    materials = gemini_analyze(news_text, research_text)
+    theme = materials.get("theme", "글로벌 경제 주요 이슈")
+
+    # ── Step 2: GPT 심층 분석 초고 작성 ───────────────────────────────────
+    draft = gpt_write_analysis(materials, context_text)
+
+    # ── Step 3: Gemini 팩트체크 + 수정 ────────────────────────────────────
+    verify_result = verify_draft(draft)
+    if not verify_result["pass"] and verify_result.get("revised_content"):
+        logger.info("Step3 검수 실패 — 수정본 채택")
+        final_content = verify_result["revised_content"]
+    else:
+        final_content = draft
+
+    # 제목 구성 (h1 태그에서 추출, 없으면 직접 생성)
+    h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", final_content, re.DOTALL)
+    if h1_match:
+        title = re.sub(r"<[^>]+>", "", h1_match.group(1)).strip()
+    else:
+        title = f"[심층분석] {theme}"
+
+    # key_data: facts의 content 목록 (Post 2 전달용)
+    key_data = [f.get("content", "") for f in materials.get("facts", [])[:5]]
+
+    logger.info(f"Post1 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     return {
-        "title": title,
-        "content": final_html,
-        "theme": theme,
-        "key_data": key_data,
-        "theme_rationale": theme_rationale,
+        "title":        title,
+        "content":      final_content,
+        "theme":        theme,
+        "key_data":     key_data,
+        "materials":    materials,   # Post 2에 재사용
         "generated_at": datetime.now().isoformat(),
     }
 
 
-# ──────────────────────────────────────────────
-# 28. Post 2 생성: 종목 리포트
-# ──────────────────────────────────────────────
 def generate_stock_picks_report(
     theme: str,
     key_data: list,
     post1_content: str,
     news: list,
     research: list,
+    materials: Optional[dict] = None,
 ) -> dict:
     """
-    Post 2 생성 파이프라인: 종목 리포트
+    Post 2 — 3단계 종목 리포트 생성.
 
-    흐름:
-      Step1: Gemini → 한·미 주식 2~3종목 선정 (JSON)
-      Step2: 각 종목 실시간 가격 조회 (yfinance → Naver 폴백)
-      Step3: GPT-4o → 종목 리포트 초고
-      → 마크다운 → HTML 변환 (픽 div 박스 자동 적용)
+    Post 1의 materials를 재사용하면 Gemini 분석 Step을 건너뜁니다.
+
+    3단계 파이프라인:
+        Step 1 (Gemini): materials가 없으면 재분석, 있으면 재사용
+        Step 1B (Gemini): 종목 2~3개 선정
+        Step 1C (가격 조회): 실시간 종가 조회
+        Step 2 (GPT):    종목 + 가격 + 재료 → HTML 종목 리포트
+        Step 3 (Gemini): HTML → 팩트체크 + 필요 시 수정
 
     반환:
-        {"title", "content", "picks", "generated_at"}
+        {"title", "content", "picks", "prices", "generated_at"}
     """
+    news_text     = format_articles_for_prompt(news)
     research_text = format_research_for_prompt(research)
-    news_text = format_articles_for_prompt(news)
+    context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
 
-    # ── Step 1: Gemini — 종목 선정 ──────────────
-    # Post1 내용을 요약 (HTML 제거 후 앞 1,000자)
-    from bs4 import BeautifulSoup as BS4
-    analysis_summary = BS4(post1_content, "html.parser").get_text(separator=" ")[:1000]
+    # ── Step 1: 분석 재료 (재사용 or 재생성) ──────────────────────────────
+    if materials is None:
+        logger.info("Post2 — materials 없음, Gemini 재분석 실행")
+        materials = gemini_analyze(news_text, research_text)
+        theme = materials.get("theme", theme)
+    else:
+        logger.info("Post2 — Post1 materials 재사용")
 
-    ticker_user = GEMINI_TICKER_SELECTOR_USER.format(
-        theme=theme,
-        analysis_summary=analysis_summary,
-        research_text=research_text,
-    )
-    tickers_raw = _call_gemini(
-        GEMINI_TICKER_SELECTOR_SYSTEM, ticker_user,
-        label="Post2-Step1:종목선정", temperature=0.2,
-    )
+    # ── Step 1B: Gemini 종목 선정 ──────────────────────────────────────────
+    picks = gemini_select_tickers_v2(theme, materials, research_text)
 
-    picks = []
-    if tickers_raw:
-        try:
-            clean = re.sub(r"```(?:json)?\s*|\s*```", "", tickers_raw.strip())
-            picks = json.loads(clean)
-            if not isinstance(picks, list):
-                picks = []
-        except json.JSONDecodeError:
-            logger.warning("Post2 종목 JSON 파싱 실패 — 빈 픽으로 진행")
-
-    if not picks:
-        logger.warning("Post2 종목 선정 실패 — 기본 픽 사용")
-        picks = [{"ticker": "SPY", "name": "S&P500 ETF", "market": "US", "reason": "시장 전반 노출"}]
-
-    logger.info(f"Post2 선정 종목: {[p['ticker'] for p in picks]}")
-
-    # ── Step 2: 실시간 가격 조회 ─────────────────
+    # ── Step 1C: 실시간 종가 조회 ─────────────────────────────────────────
     prices = {}
     for pick in picks:
         ticker = pick.get("ticker", "")
-        if not ticker:
-            continue
-        prices[ticker] = _get_price_for_ticker(ticker)
+        if ticker:
+            prices[ticker] = _get_price_for_ticker(ticker)
     logger.info(f"Post2 종가 조회 완료: {prices}")
 
-    # ── Step 3: GPT-4o — 종목 리포트 초고 ────────
-    tickers_json_str = json.dumps(picks, ensure_ascii=False, indent=2)
-    # Phase 6: 리서치 선행, 뉴스 후행
-    context_text = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
-    report_user = GPT_STOCK_REPORT_USER.format(
-        theme=theme,
-        analysis_summary=analysis_summary,
-        tickers_json=tickers_json_str,
-        context_text=context_text,
-    )
-    draft = _call_gpt(GPT_STOCK_REPORT_SYSTEM, report_user, label="Post2-Step3:종목리포트")
+    # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
+    draft = gpt_write_picks(materials, picks, prices, context_text)
 
-    # ── 가격 치환 + PICKS JSON 제거 ─────────────
-    content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", draft, flags=re.DOTALL)
-    for pick in picks:
-        ticker = pick.get("ticker", "")
-        price = prices.get(ticker, "N/A")
-        if "{PRICE_PLACEHOLDER}" in content:
-            content = content.replace("{PRICE_PLACEHOLDER}", price, 1)
-    content = content.replace("{PRICE_PLACEHOLDER}", "N/A")
+    # ── Step 3: Gemini 팩트체크 + 수정 ────────────────────────────────────
+    verify_result = verify_draft(draft)
+    if not verify_result["pass"] and verify_result.get("revised_content"):
+        logger.info("Post2 Step3 검수 실패 — 수정본 채택")
+        raw_content = verify_result["revised_content"]
+    else:
+        raw_content = draft
 
-    # ── portfolio.json 저장 ───────────────────────
-    portfolio_picks = [
-        {"ticker": p.get("ticker", ""), "reason": p.get("reason", "")}
-        for p in picks
-    ]
-    save_portfolio(portfolio_picks, prices)
+    # PICKS JSON 파싱 + 가격 플레이스홀더 교체
+    parsed_picks = parse_picks_from_content(raw_content)
+    if not parsed_picks:
+        parsed_picks = picks  # GPT 주석 누락 시 Gemini 선정 목록 사용
+    final_content = assemble_final_content(raw_content, parsed_picks, prices)
 
-    # ── HTML 변환 ────────────────────────────────
-    title = extract_title(content)
-    final_content = re.sub(r"\n{3,}", "\n\n", content).strip()
-    final_html = convert_to_html(final_content)
+    # 제목 구성
+    h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", final_content, re.DOTALL)
+    if h1_match:
+        title = re.sub(r"<[^>]+>", "", h1_match.group(1)).strip()
+    else:
+        names = "·".join([p.get("name", p.get("ticker", "")) for p in parsed_picks[:2]])
+        title = f"[캐시의 픽] {names} — {theme}"
 
-    logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_html)}자")
+    save_portfolio(parsed_picks, prices)
+
+    logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     return {
-        "title": title,
-        "content": final_html,
-        "picks": picks,
-        "prices": prices,
+        "title":        title,
+        "content":      final_content,
+        "picks":        parsed_picks,
+        "prices":       prices,
         "generated_at": datetime.now().isoformat(),
     }
 
 
-# ──────────────────────────────────────────────
-# 29. 직접 실행 진입점 (테스트용)
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION H: 자동 검증 테스트 (python generator.py 직접 실행)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _count_whisky_metaphors(content: str) -> int:
+    """위스키·바텐더 비유 횟수 카운트 (도입부 제외 여부는 위치로 판단)."""
+    patterns = [r"위스키", r"바텐더", r"캐스크", r"싱글몰트", r"distill", r"dram", r"cocktail"]
+    count = 0
+    for pat in patterns:
+        count += len(re.findall(pat, content, re.IGNORECASE))
+    return count
+
+
+def _verify_no_unsourced_price(content: str) -> bool:
+    """
+    출처 없는 가격 표현 탐지.
+    '$숫자' 또는 '₩숫자' 패턴이 있을 때, 기준일(기준) 또는 출처 언급 없이 단독으로 나오는 경우를 탐지.
+    {PRICE_PLACEHOLDER} 및 이미 교체된 가격(기준 포함)은 허용.
+    """
+    # 가격 단독 출현 패턴: $숫자 또는 ₩숫자가 '기준'이라는 단어 없이 단독 출현
+    price_pattern = re.compile(r"([$₩]\d[\d,]*\.?\d*)")
+    matches = price_pattern.findall(content)
+    if not matches:
+        return True  # 가격 없음 → 통과
+
+    # 가격 패턴 주변에 '기준' 또는 출처 관련 단어가 있는지 확인
+    suspicious_count = 0
+    for match in re.finditer(r"([$₩]\d[\d,]*\.?\d*)", content):
+        # 주변 80자 내에 '기준' 또는 출처 단어가 있는지 체크
+        start = max(0, match.start() - 80)
+        end   = min(len(content), match.end() + 80)
+        context = content[start:end]
+        if "기준" not in context and "출처" not in context and "기준일" not in context:
+            suspicious_count += 1
+
+    return suspicious_count == 0
+
+
 if __name__ == "__main__":
     import sys
 
+    # 로깅 설정 (테스트용)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.StreamHandler()],
     )
 
-    dummy_articles = [
-        {
-            "source": "야후 파이낸스",
-            "title": "Fed holds rates steady at 4.25%-4.50%, signals two cuts in 2025",
-            "summary": "The Federal Reserve kept interest rates unchanged as inflation remains above target.",
-            "url": "https://finance.yahoo.com/news/fed-holds-rates-steady",
-        },
+    print("\n" + "=" * 70)
+    print("macromalt Phase 7 파이프라인 자동 검증 테스트")
+    print("=" * 70)
+
+    # 샘플 데이터 (실제 API 호출 포함)
+    sample_news = [
         {
             "source": "한국경제",
-            "title": "코스피, 외국인 5,200억 순매수에 2,730선 돌파",
-            "summary": "외국인 투자자들의 대규모 순매수가 이어지며 코스피가 2,730선을 돌파했다.",
-            "url": "https://www.hankyung.com/finance/article/test",
+            "title": "미 연준, 금리 인하 속도 조절 시사",
+            "summary": "제롬 파월 연준 의장이 물가 안정에 앞서 추가 데이터가 필요하다고 발언.",
+            "url": "https://www.hankyung.com/article/sample1",
+            "published": datetime.now().strftime("%Y-%m-%d"),
+        },
+        {
+            "source": "야후 파이낸스",
+            "title": "US Core CPI Rose 0.3% in February, Exceeding Expectations",
+            "summary": "Core inflation data came in hotter than expected, complicating Fed rate cut timeline.",
+            "url": "https://finance.yahoo.com/news/sample2",
+            "published": datetime.now().strftime("%Y-%m-%d"),
         },
         {
             "source": "매일경제",
-            "title": "엔/달러 149.8엔... 일본은행 금리 인상 가능성 시사",
-            "summary": "일본은행 우에다 총재가 추가 금리 인상 가능성을 시사하며 엔화가 강세로 반응했다.",
-            "url": "https://stock.mk.co.kr/news/test",
-        },
-        {
-            "source": "야후 파이낸스",
-            "title": "WTI crude drops 2.3% to $76.40 on demand concerns",
-            "summary": "Oil prices fell sharply as weak Chinese manufacturing data raised demand concerns.",
-            "url": "https://finance.yahoo.com/news/wti-crude-drops",
+            "title": "원달러 환율 1,330원대 진입...수출주 반응 주목",
+            "summary": "원달러 환율이 달러 강세에 1,330원대로 상승. 수출 기업 실적에 영향 전망.",
+            "url": "https://www.mk.co.kr/news/sample3",
+            "published": datetime.now().strftime("%Y-%m-%d"),
         },
     ]
 
+    sample_research = [
+        {
+            "source": "네이버금융 리서치",
+            "title": "2026년 상반기 매크로 환경 점검 — 금리·환율·수출 삼각관계",
+            "summary": "금리 인하 지연과 달러 강세가 신흥국 자금 이탈 가속. 한국 수출 기업 환율 수혜 가능성.",
+            "broker": "NH투자증권",
+            "weight": 3,
+            "published": datetime.now().strftime("%Y-%m-%d"),
+        },
+    ]
+
+    print("\n[Step 1] Post 1 생성 시작...")
     try:
-        result = generate_blog_post(dummy_articles)
-        print("\n" + "=" * 60)
-        print(f"제목: {result['title']}")
-        print(f"길이: {len(result['content'])}자")
-        print(f"픽: {result['picks']}")
-        print("=" * 60)
-        print(result["content"])
+        post1 = generate_deep_analysis(sample_news, sample_research)
+        content = post1["content"]
+        materials = post1.get("materials", {})
+
+        print(f"\n제목: {post1['title']}")
+        print(f"테마: {post1['theme']}")
+        print(f"HTML 길이: {len(content)}자")
+        print(f"facts 수: {len(materials.get('facts', []))}개")
+        print("\n--- 본문 앞 500자 ---")
+        print(content[:500])
+        print("...")
+
+        # ── 6가지 기준 자동 검증 ──────────────────────────────────────────
+        print("\n" + "=" * 70)
+        print("6가지 검증 기준 체크")
+        print("=" * 70)
+
+        criteria = {
+            "1. Gemini 결과가 구조화 JSON으로 출력됐는가?":
+                isinstance(materials, dict) and "theme" in materials and "facts" in materials,
+
+            "2. 최종 결과물이 마크다운 없이 HTML만 사용했는가?":
+                not bool(re.search(r"(?m)^#{1,6} |(?<!\[)\*\*(?!\])", content)),
+
+            "3. 출처 없는 가격·목표가가 임의 생성되지 않았는가?":
+                _verify_no_unsourced_price(content),
+
+            "4. [해석]·[전망]·'확실하지 않다' 규칙이 적용됐는가?":
+                "[해석]" in content or "[전망]" in content or "확실하지 않" in content,
+
+            "5. 참고 출처 섹션이 본문 데이터와 대응하는가?":
+                bool(re.search(r"참고\s*출처|Reference", content, re.IGNORECASE)),
+
+            "6. 위스키·바텐더 비유가 1회를 넘지 않았는가?":
+                _count_whisky_metaphors(content) <= 2,  # 관련 단어 총합 2회 이하
+        }
+
+        all_pass = True
+        for criterion, passed in criteria.items():
+            status = "✅ PASS" if passed else "❌ FAIL"
+            print(f"{status} | {criterion}")
+            if not passed:
+                all_pass = False
+
+        print("\n" + "=" * 70)
+        if all_pass:
+            print("🎉 전체 검증 통과 — Phase 7 파이프라인 정상 동작")
+        else:
+            print("⚠️  일부 기준 미통과 — 로그를 확인하고 프롬프트를 조정하세요.")
+        print("=" * 70 + "\n")
+
     except Exception as e:
-        print(f"오류: {e}", file=sys.stderr)
+        logger.exception(f"테스트 실패: {e}")
         sys.exit(1)

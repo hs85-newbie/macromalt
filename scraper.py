@@ -310,13 +310,13 @@ _HANKYUNG_HEADERS = {
 def _hankyung_login():
     """
     한경 컨센서스 로그인 세션을 반환합니다.
-    HANKYUNG_ID / HANKYUNG_PW 환경 변수가 없거나 로그인 실패 시 None 반환.
+    HANKYUNG_USERNAME / HANKYUNG_PASSWORD 환경 변수가 없거나 로그인 실패 시 None 반환.
     """
-    user_id = os.getenv("HANKYUNG_ID", "").strip()
-    user_pw = os.getenv("HANKYUNG_PW", "").strip()
+    user_id = os.getenv("HANKYUNG_USERNAME", "").strip()
+    user_pw = os.getenv("HANKYUNG_PASSWORD", "").strip()
 
     if not user_id or not user_pw:
-        logger.warning("[한경컨센서스] HANKYUNG_ID/PW 미설정 — 수집 건너뜀")
+        logger.warning("[한경컨센서스] HANKYUNG_USERNAME/PASSWORD 미설정 — 수집 건너뜀")
         return None
 
     session = requests.Session()

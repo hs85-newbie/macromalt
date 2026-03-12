@@ -113,6 +113,7 @@ def step_generate_picks(post1: dict, news: list[dict], research: list[dict]) -> 
         post1_content=post1.get("content", ""),
         news=news,
         research=research,
+        materials=post1.get("materials"),   # Phase 7: Post 1 분석 재사용
     )
     logger.info(f"✅ [Step 2B] Post 2 생성 완료: '{post2['title']}'")
     picks_count = len(post2.get("picks", []))
