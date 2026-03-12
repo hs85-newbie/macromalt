@@ -91,8 +91,17 @@ def fetch_rss(source: dict) -> list:
         if feed.bozo and feed.bozo_exception:
             raise ValueError(f"RSS 파싱 경고: {feed.bozo_exception}")
 
-        entries = feed.entries[:limit]
-        for entry in entries:
+        skipped_old = 0
+        for entry in feed.entries:
+            if len(results) >= limit:
+                break
+
+            published = entry.get("published", "")
+            date_tier = _classify_date_tier(published)
+            if date_tier == "old":
+                skipped_old += 1
+                continue  # v3 정책: 30일 초과 기사 제외
+
             title = entry.get("title", "제목 없음").strip()
             summary = entry.get("summary", "")
             # HTML 태그 제거
@@ -106,11 +115,14 @@ def fetch_rss(source: dict) -> list:
                     "title": title,
                     "summary": summary,
                     "url": entry.get("link", ""),
-                    "published": entry.get("published", ""),
+                    "published": published,
+                    "date_tier": date_tier,
                     "collected_at": datetime.now().isoformat(),
                 }
             )
 
+        if skipped_old:
+            logger.info(f"[{name}] 30일 초과 항목 {skipped_old}건 제외 (v3 정책)")
         logger.info(f"[{name}] RSS 수집 성공: {len(results)}건")
 
     except Exception as e:
@@ -279,6 +291,30 @@ def _filter_by_date(items: list, days: int = 7) -> list:
     return [item for item in items if validate_date(item.get("published", ""), days)]
 
 
+def _classify_date_tier(date_str: str) -> str:
+    """
+    날짜 문자열을 기준으로 자료 시점 등급을 반환합니다 (v3 정책).
+
+    - "recent"   : 최근 7일 이내 (최우선 근거)
+    - "extended" : 8~30일 이내 (보조 근거 — background_facts로 분리)
+    - "old"      : 30일 초과 (수집 제외 대상 — 즉시 Drop)
+    - "unknown"  : 날짜 파싱 불가 (우선순위 낮춤, 포함은 허용)
+    """
+    if not date_str or not date_str.strip():
+        return "unknown"
+    try:
+        parsed = dateutil_parser.parse(date_str, ignoretz=True)
+        days_ago = (datetime.now() - parsed).days
+        if days_ago <= 7:
+            return "recent"
+        elif days_ago <= 30:
+            return "extended"
+        else:
+            return "old"
+    except Exception:
+        return "unknown"
+
+
 # ──────────────────────────────────────────────
 # 7. 공통 HTTP 헤더 상수
 # ──────────────────────────────────────────────
@@ -292,7 +328,8 @@ _NAVER_RESEARCH_HEADERS = {
     "Referer": "https://finance.naver.com/",
 }
 
-_HANKYUNG_BASE = "https://consensus.hankyung.com"
+_HANKYUNG_BASE       = "https://consensus.hankyung.com"   # 컨센서스 데이터 도메인
+_HANKYUNG_LOGIN_BASE = "https://id.hankyung.com"           # SSO 로그인 도메인 (v3 — 2026-03)
 _HANKYUNG_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -309,8 +346,17 @@ _HANKYUNG_HEADERS = {
 # ──────────────────────────────────────────────
 def _hankyung_login():
     """
-    한경 컨센서스 로그인 세션을 반환합니다.
+    한경 컨센서스 폼 기반 로그인 세션을 반환합니다.
     HANKYUNG_USERNAME / HANKYUNG_PASSWORD 환경 변수가 없거나 로그인 실패 시 None 반환.
+
+    ⚠ Google/Naver/Kakao 소셜 로그인 전용 계정은 이 방식으로 인증이 불가합니다.
+      소셜 로그인 계정은 브라우저 쿠키 세션 방식이 필요하며, 현재 지원되지 않습니다.
+      자동화 실행 시 한경 컨센서스 소스는 조용히 건너뜁니다.
+
+    로그인 엔드포인트 (v3 — 2026-03):
+      GET  https://id.hankyung.com/login/login.do          (로그인 페이지, 세션 초기화)
+      POST https://id.hankyung.com/login/ajaxActionLogin.do (AJAX 인증)
+      필드: userId, userPass
     """
     user_id = os.getenv("HANKYUNG_USERNAME", "").strip()
     user_pw = os.getenv("HANKYUNG_PASSWORD", "").strip()
@@ -323,12 +369,13 @@ def _hankyung_login():
     session.headers.update(_HANKYUNG_HEADERS)
 
     try:
-        # 1. 로그인 페이지 접근 (CSRF 토큰 수집)
-        login_page_url = _HANKYUNG_BASE + "/apps.login/login.form"
-        resp = session.get(login_page_url, timeout=10)
+        # 1. 로그인 페이지 접근 (세션 쿠키 초기화)
+        login_page_url = _HANKYUNG_LOGIN_BASE + "/login/login.do"
+        resp = session.get(login_page_url, timeout=10,
+                           headers={"Referer": _HANKYUNG_BASE + "/"})
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # hidden input 필드 수집 (CSRF 등)
+        # hidden input 필드 수집 (CSRF 토큰 등)
         hidden_inputs = {}
         for inp in soup.select("input[type=hidden]"):
             name = inp.get("name")
@@ -336,22 +383,58 @@ def _hankyung_login():
             if name:
                 hidden_inputs[name] = value
 
-        # 2. 로그인 POST
-        login_url = _HANKYUNG_BASE + "/apps.login/login.process"
+        # 2. AJAX 로그인 POST
+        ajax_url = _HANKYUNG_LOGIN_BASE + "/login/ajaxActionLogin.do"
         payload = {
             **hidden_inputs,
-            "user_id": user_id,
-            "user_password": user_pw,
+            "userId":   user_id,
+            "userPass": user_pw,
         }
-        resp = session.post(login_url, data=payload, timeout=10)
+        resp = session.post(
+            ajax_url,
+            data=payload,
+            timeout=10,
+            headers={
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": login_page_url,
+            },
+        )
 
-        # 로그인 성공 여부 확인 (리다이렉트 또는 쿠키로 판단)
-        if resp.status_code in (200, 302) and session.cookies:
-            logger.info("[한경컨센서스] 로그인 성공")
-            return session
-        else:
+        # 로그인 성공 여부 확인 (JSON 응답)
+        if resp.status_code != 200:
             logger.warning(f"[한경컨센서스] 로그인 실패 (HTTP {resp.status_code})")
             return None
+
+        try:
+            result = resp.json()
+        except Exception:
+            logger.warning("[한경컨센서스] 로그인 응답 JSON 파싱 실패")
+            return None
+
+        # resultCode '0000' = 성공 (한경 SSO 표준 코드)
+        if result.get("resultCode") != "0000":
+            logger.warning(f"[한경컨센서스] 로그인 실패 (resultCode={result.get('resultCode')})")
+            return None
+
+        # 3. SSO 콜백 처리 — callbackUrl + key + token 으로 실제 세션 쿠키 발급
+        callback_url = result.get("callbackUrl", "")
+        sso_key      = result.get("key", "")
+        sso_token    = result.get("token", "")
+
+        if callback_url and sso_token:
+            try:
+                cb_resp = session.get(
+                    callback_url,
+                    params={"key": sso_key, "token": sso_token},
+                    timeout=10,
+                    headers={"Referer": login_page_url},
+                )
+                logger.debug(f"[한경컨센서스] SSO 콜백 HTTP {cb_resp.status_code}")
+            except Exception as cb_err:
+                logger.warning(f"[한경컨센서스] SSO 콜백 오류 (무시): {cb_err}")
+
+        logger.info("[한경컨센서스] 로그인 성공")
+        return session
 
     except Exception as e:
         logger.warning(f"[한경컨센서스] 로그인 오류: {e}")
@@ -506,8 +589,9 @@ def _fetch_research_web(source: dict) -> list:
                                 target_price = text
                                 break
 
-                # 날짜 필터 — 항목 수준에서 즉시 적용
-                if not validate_date(date_text, days_filter):
+                # 날짜 시점 분류 — 30일 초과 항목 즉시 제외 (v3 정책)
+                date_tier = _classify_date_tier(date_text)
+                if date_tier == "old":
                     continue
 
                 # 구조화된 요약 생성
@@ -530,6 +614,7 @@ def _fetch_research_web(source: dict) -> list:
                     "sector":       sector,
                     "target_price": target_price,
                     "published":    date_text,
+                    "date_tier":    date_tier,
                     "weight":       weight,
                     "collected_at": datetime.now().isoformat(),
                 })
@@ -664,8 +749,9 @@ def _fetch_research_auth(source: dict) -> list:
                       and text):
                     target_price = text
 
-            # 날짜 필터 — 항목 수준
-            if not validate_date(date_text, days_filter):
+            # 날짜 시점 분류 — 30일 초과 항목 즉시 제외 (v3 정책)
+            date_tier = _classify_date_tier(date_text)
+            if date_tier == "old":
                 continue
 
             # 구조화된 요약 생성
@@ -689,6 +775,7 @@ def _fetch_research_auth(source: dict) -> list:
                 "sector":       sector,
                 "target_price": target_price,
                 "published":    date_text,
+                "date_tier":    date_tier,
                 "weight":       weight,
                 "collected_at": datetime.now().isoformat(),
             })

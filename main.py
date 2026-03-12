@@ -1,5 +1,5 @@
 """
-macromalt 자동화 시스템 - 메인 파이프라인 (Phase 5)
+macromalt 자동화 시스템 - 메인 파이프라인 (Phase 7 / v3 정책 반영)
 =====================================================
 실행 순서:
   Step 1   — 뉴스 수집 (기존 RSS/Web 소스)
@@ -142,7 +142,7 @@ def main() -> None:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     logger.info("=" * 60)
-    logger.info(f"macromalt Phase 5 파이프라인 시작 [run_id: {run_id}]")
+    logger.info(f"macromalt Phase 7 (v3) 파이프라인 시작 [run_id: {run_id}]")
     logger.info("=" * 60)
 
     # 카테고리 ID 로드
@@ -204,7 +204,7 @@ def main() -> None:
 
     # ── 최종 결과 요약 ────────────────────────────────
     logger.info("=" * 60)
-    logger.info(f"🎉 macromalt Phase 5 파이프라인 완료 [run_id: {run_id}]")
+    logger.info(f"🎉 macromalt Phase 7 (v3) 파이프라인 완료 [run_id: {run_id}]")
     logger.info("-" * 60)
 
     if post1_result:

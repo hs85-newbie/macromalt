@@ -1,6 +1,6 @@
 {
   "_comment": "macromalt 자동화 시스템 - 뉴스 데이터 소스 정의 파일",
-  "_updated": "2026-03-12",
+  "_updated": "2026-03-12 (글로벌마켓 소스 추가)",
   "_schema_version": "2.0",
   "_weight_guide": "1=일반뉴스, 3=공개리서치, 5=인증컨센서스",
   "sources": [
@@ -16,6 +16,19 @@
       "fetch_limit": 10,
       "weight": 1,
       "notes": "한국경제신문 금융 전용 RSS (증권·금리·외환 중심)"
+    },
+    {
+      "id": "hankyung_global",
+      "name": "한경 글로벌마켓",
+      "name_en": "Hankyung Global Market",
+      "type": "RSS",
+      "url": "https://www.hankyung.com/feed/international",
+      "category": "글로벌 금융/국제",
+      "language": "ko",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 1,
+      "notes": "한국경제 국제 섹션 RSS (globalmarket 대응: 글로벌 시황·관세·FX·유가 중심). /feed/globalmarket 미존재로 /feed/international 사용"
     },
     {
       "id": "mk",
@@ -47,20 +60,14 @@
       "id": "investing",
       "name": "인베스팅 닷컴",
       "name_en": "Investing.com",
-      "type": "Web",
-      "url": "https://kr.investing.com/news/latest-news",
-      "category": "글로벌 금융/투자",
-      "language": "ko",
+      "type": "RSS",
+      "url": "https://www.investing.com/rss/market_overview.rss",
+      "category": "글로벌 금융/시장",
+      "language": "en",
       "enabled": true,
       "fetch_limit": 10,
       "weight": 1,
-      "selectors": {
-        "article_list": "article.js-article-item",
-        "title": "a.title",
-        "summary": "p.articleSummary",
-        "link": "a.title"
-      },
-      "notes": "인베스팅 닷컴 한국어판 - RSS 미제공으로 웹 크롤링 방식 사용"
+      "notes": "인베스팅 닷컴 미국(영문) Market Overview RSS. 한국어판 웹크롤링은 403 차단으로 폐기. /rss/news.rss(일반뉴스)·/rss/market_overview.rss(시장개요) 둘 다 정상"
     },
     {
       "id": "naver_research",
@@ -110,23 +117,23 @@
       "days_filter": 30,
       "weight": 5,
       "auth_provider": "hankyung",
-      "api_path": "/apps.analysis/analysis.list",
-      "api_params": {"pageSize": 30, "pageIndex": 1},
+      "api_path": "/analysis/list",
+      "api_params": {},
       "selectors": {
-        "row":          "table tbody tr, .report_list li",
-        "title":        "a.report_title, td a",
-        "broker":       "td:nth-child(2)",
-        "sector":       "td:nth-child(3)",
+        "row":          "table tr",
+        "title":        "td:nth-child(3) a",
+        "broker":       "td:nth-child(5)",
+        "sector":       "td:nth-child(2)",
         "target_price": "",
-        "date":         "",
-        "link":         "a.report_title, td a"
+        "date":         "td:nth-child(1)",
+        "link":         "td:nth-child(3) a"
       },
       "extract": {
         "broker":       true,
         "sector":       true,
-        "target_price": true
+        "target_price": false
       },
-      "notes": "한경 컨센서스 애널리스트 리포트. .env의 HANKYUNG_ID/HANKYUNG_PW 필요. target_price·date는 정규식 자동 탐지. run_research_sources()에서 처리."
+      "notes": "한경 컨센서스 애널리스트 리포트. .env의 HANKYUNG_USERNAME/HANKYUNG_PASSWORD 필요. 컬럼: col[0]=날짜, col[1]=분류, col[2]=제목(PDF링크), col[3]=작성자, col[4]=제공출처(브로커). date는 정규식 자동 탐지. run_research_sources()에서 처리."
     }
   ]
 }
