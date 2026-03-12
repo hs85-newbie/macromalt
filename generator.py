@@ -31,6 +31,12 @@ from google import genai
 from google.genai import types as genai_types
 
 import cost_tracker
+from scraper import (
+    run_dart_disclosure_scan,
+    run_dart_financials,
+    run_dart_company_info,
+    format_dart_for_prompt,
+)
 
 load_dotenv()
 
@@ -679,6 +685,8 @@ GEMINI_ANALYST_USER = """
 
 [뉴스 기사 — 보조 참고]
 {news_text}
+
+{dart_text}
 """
 
 
@@ -1104,10 +1112,13 @@ def _filter_irrelevant_facts(materials: dict) -> dict:
     return materials
 
 
-def gemini_analyze(news_text: str, research_text: str) -> dict:
+def gemini_analyze(news_text: str, research_text: str, dart_text: str = "") -> dict:
     """
     Step 1: Gemini 분석 엔진.
     뉴스·리서치 데이터를 구조화된 JSON 리포트 재료로 변환합니다.
+
+    Args:
+        dart_text: format_dart_for_prompt() 결과물. 빈 문자열이면 프롬프트에 공백만 추가.
 
     반환:
         {"theme", "facts", "market_impact", "counter_interpretations",
@@ -1116,6 +1127,7 @@ def gemini_analyze(news_text: str, research_text: str) -> dict:
     user_msg = GEMINI_ANALYST_USER.format(
         research_text=research_text,
         news_text=news_text,
+        dart_text=dart_text,
     )
     raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
     result = _parse_json_response(raw) if raw else None
@@ -1333,8 +1345,14 @@ def generate_deep_analysis(news: list, research: list) -> dict:
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
 
+    # ── Step 1-DART: 전체 시장 주요사항보고서 스캔 (심층분석용, 14일) ──────
+    dart_disclosures = run_dart_disclosure_scan(days=14)
+    dart_text = format_dart_for_prompt(dart_disclosures) if dart_disclosures else ""
+    if dart_text:
+        logger.info(f"[DART] 심층분석 공시 데이터 {len(dart_disclosures)}건 → 프롬프트 주입")
+
     # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
-    materials = gemini_analyze(news_text, research_text)
+    materials = gemini_analyze(news_text, research_text, dart_text=dart_text)
     theme = materials.get("theme", "글로벌 경제 주요 이슈")
 
     # ── Step 2: GPT 심층 분석 초고 작성 ───────────────────────────────────
@@ -1427,6 +1445,24 @@ def generate_stock_picks_report(
         if ticker:
             prices[ticker] = _get_price_for_ticker(ticker)
     logger.info(f"Post2 종가 조회 완료: {prices}")
+
+    # ── Step 1D: DART 재무 수치 + 기업정보 조회 (픽 확정 KR 종목만, 좁게) ──
+    # 미국 티커(알파벳)는 제외하고 6자리 숫자 종목코드(KR)만 전달
+    kr_stock_codes = [
+        p["ticker"].split(".")[0]
+        for p in picks
+        if p.get("ticker", "").split(".")[0].isdigit()
+    ]
+    dart_financials   = run_dart_financials(kr_stock_codes)   if kr_stock_codes else {}
+    dart_company_info = run_dart_company_info(kr_stock_codes) if kr_stock_codes else {}
+    picks_dart_text   = format_dart_for_prompt(
+        disclosures=[],        # 픽용은 공시 이벤트 불필요 (심층분석에서 이미 처리)
+        financials=dart_financials,
+        company_info=dart_company_info,
+    )
+    if picks_dart_text:
+        logger.info(f"[DART] 픽 재무 데이터 주입: {list(dart_financials.keys())}")
+        context_text = context_text + "\n\n" + picks_dart_text
 
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
     draft = gpt_write_picks(materials, picks, prices, context_text)

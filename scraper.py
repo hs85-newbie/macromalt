@@ -19,6 +19,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import feedparser
 import requests
@@ -901,7 +902,403 @@ def fetch_hankyung_consensus(days: int = 30) -> list:
 
 
 # ──────────────────────────────────────────────
-# 13. 결과 출력 헬퍼 (디버깅용)
+# 13. OpenDART API — Phase 5-A
+# ──────────────────────────────────────────────
+
+# ── 상수: API 기본 URL ─────────────────────────────────────────────────────
+DART_API_BASE = "https://opendart.fss.or.kr/api"
+
+# ── 상수: 공시 이벤트 키워드 → 이벤트 타입 매핑 (확장 가능)
+# 보고서명에 키워드가 포함될 경우 해당 event_type으로 분류됩니다.
+# 새 이벤트 유형 추가 시 이 딕셔너리만 수정하세요.
+DART_DISCLOSURE_EVENT_MAP: dict = {
+    "단일판매":     "수주계약",
+    "공급계약":     "수주계약",
+    "자기주식 취득": "자사주취득",
+    "자기주식취득":  "자사주취득",
+    "유상증자":     "유상증자",
+    "전환사채":     "CB발행",
+    "신주인수권부사채": "BW발행",
+    "합병":         "합병",
+    "분할":         "분할",
+    "소송":         "소송",
+    "영업양수":     "자산양수도",
+    "영업양도":     "자산양수도",
+    "주식매수선택권": "스톡옵션",
+}
+
+# ── 상수: 재무 수치 수집 대상 계정명 (확장 가능)
+# fnlttSinglAcnt 응답의 account_nm과 일치해야 합니다.
+DART_TARGET_ACCOUNTS: list = [
+    "매출액",
+    "영업이익",
+    "당기순이익",
+    "자산총계",
+    "부채총계",
+    "자본총계",
+]
+
+
+def _get_dart_api_key() -> str:
+    """DART_API_KEY를 .env에서 로드합니다. 미설정 시 ValueError 발생."""
+    key = os.getenv("DART_API_KEY", "").strip()
+    if not key:
+        raise ValueError(
+            "DART_API_KEY가 .env에 설정되지 않았습니다. "
+            "https://opendart.fss.or.kr/ 에서 무료 발급 후 설정하세요."
+        )
+    return key
+
+
+def _dart_get(endpoint: str, params: dict, label: str = "") -> Optional[dict]:
+    """
+    OpenDART API 공통 GET 요청 헬퍼.
+    - API 키 미설정 → None 반환 (파이프라인 계속 진행)
+    - 네트워크 오류 또는 API 오류 → None 반환 (경고 로그)
+    - status != "000" → None 반환
+    """
+    try:
+        key = _get_dart_api_key()
+    except ValueError as e:
+        logger.warning(f"[DART{label}] {e}")
+        return None
+
+    try:
+        params = {**params, "crtfc_key": key}
+        url = f"{DART_API_BASE}/{endpoint}"
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        status = data.get("status", "")
+        if status != "000":
+            msg = data.get("message", "")
+            logger.warning(f"[DART{label}] API 오류 status={status} message={msg}")
+            return None
+        return data
+    except requests.RequestException as e:
+        logger.warning(f"[DART{label}] 요청 실패: {e}")
+        return None
+
+
+def run_dart_disclosure_scan(days: int = 14) -> list:
+    """
+    Step 1C — 심층분석용 전체 시장 주요사항보고서 스캔 (넓게).
+
+    최근 {days}일 이내 전체 시장 대상 주요사항보고서(B001)를 수집하고,
+    DART_DISCLOSURE_EVENT_MAP 키워드로 이벤트 타입을 자동 분류합니다.
+
+    DART_API_KEY 미설정 시 빈 리스트를 반환하고 파이프라인은 계속 진행합니다.
+
+    반환값:
+        [
+            {
+                "corp_name":  str,   # 회사명
+                "stock_code": str,   # 종목코드 6자리
+                "report_nm":  str,   # 보고서명
+                "rcept_dt":   str,   # 접수일 YYYYMMDD
+                "event_type": str,   # 분류된 이벤트 타입 (예: "수주계약")
+                "rcept_no":   str,   # 접수번호 (원문 조회 예비용)
+                "source":     str,   # "DART 주요사항보고서 (회사명)"
+                "date":       str,   # "YYYY-MM-DD" — facts.date 필드용
+            },
+            ...
+        ]
+    """
+    end_dt   = datetime.now()
+    start_dt = end_dt - timedelta(days=days)
+
+    params = {
+        "bgn_de":           start_dt.strftime("%Y%m%d"),
+        "end_de":           end_dt.strftime("%Y%m%d"),
+        "pblntf_ty":        "B",       # 주요사항보고서 대분류
+        "pblntf_detail_ty": "B001",    # 주요사항보고서 세부
+        "page_count":       "100",
+    }
+
+    data = _dart_get("list.json", params, label="/list B001")
+    if data is None:
+        return []
+
+    items   = data.get("list", [])
+    results = []
+
+    for item in items:
+        report_nm = item.get("report_nm", "")
+        corp_name = item.get("corp_name", "")
+        rcept_dt  = item.get("rcept_dt", "")
+
+        # 날짜 형식 변환 (YYYYMMDD → YYYY-MM-DD)
+        date_str = (
+            f"{rcept_dt[:4]}-{rcept_dt[4:6]}-{rcept_dt[6:]}"
+            if len(rcept_dt) == 8 else rcept_dt
+        )
+
+        # 이벤트 타입 분류 (첫 번째 매칭 키워드 사용)
+        event_type = "기타"
+        for keyword, etype in DART_DISCLOSURE_EVENT_MAP.items():
+            if keyword in report_nm:
+                event_type = etype
+                break
+
+        results.append({
+            "corp_name":  corp_name,
+            "stock_code": item.get("stock_code", ""),
+            "report_nm":  report_nm,
+            "rcept_dt":   rcept_dt,
+            "event_type": event_type,
+            "rcept_no":   item.get("rcept_no", ""),
+            "source":     f"DART 주요사항보고서 ({corp_name})",
+            "date":       date_str,
+        })
+
+    logger.info(f"[DART] 주요사항보고서 스캔 완료: {len(results)}건 (최근 {days}일)")
+
+    # 이벤트 타입별 요약 로그
+    by_type: dict = {}
+    for r in results:
+        by_type[r["event_type"]] = by_type.get(r["event_type"], 0) + 1
+    for etype, cnt in sorted(by_type.items(), key=lambda x: -x[1]):
+        logger.info(f"  [{etype}] {cnt}건")
+
+    return results
+
+
+def _stock_code_to_corp_code(stock_code: str) -> Optional[str]:
+    """
+    종목코드(6자리) → DART 고유번호(8자리) 변환.
+    fnlttSinglAcnt 호출 시 corp_code가 필요하므로 선행 조회합니다.
+    """
+    data = _dart_get("company.json", {"stock_code": stock_code},
+                     label=f"/company {stock_code}")
+    if data is None:
+        return None
+    return data.get("corp_code") or None
+
+
+def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> dict:
+    """
+    캐시의 픽 종목 재무 수치 조회 (좁게 — 픽 확정 종목만).
+
+    연결재무제표(CFS) 우선, 없으면 개별재무제표(OFS)로 fallback.
+    매출액·영업이익·당기순이익을 당기/전기 비교 형태로 반환.
+    부채비율은 (부채총계 / 자본총계 × 100) 계산값으로 포함.
+
+    Args:
+        stock_codes: 6자리 종목코드 리스트 (예: ["005930", "000660"])
+                     KR 종목만 전달하세요. 미국 주식은 조회하지 않습니다.
+        bsns_year:   사업연도 4자리 (None이면 전년도 자동 사용)
+
+    반환값:
+        {
+            "005930": {
+                "corp_name": "삼성전자",
+                "bsns_year": "2024",
+                "fs_div":    "CFS",          # 연결/개별 구분
+                "accounts": {
+                    "매출액":     {"thstrm": 300151643, "frmtrm": 258935494, "unit": "백만원"},
+                    "영업이익":   {"thstrm":  32726530, "frmtrm":   6566976, "unit": "백만원"},
+                    "당기순이익": {"thstrm":  34459883, "frmtrm":  15487100, "unit": "백만원"},
+                    "부채비율":   {"thstrm": 42.1,      "frmtrm": 38.7,      "unit": "%"},
+                }
+            },
+            ...
+        }
+    """
+    if bsns_year is None:
+        bsns_year = str(datetime.now().year - 1)
+
+    result: dict = {}
+
+    for stock_code in stock_codes:
+        corp_code = _stock_code_to_corp_code(stock_code)
+        if not corp_code:
+            logger.warning(f"[DART] {stock_code} → corp_code 조회 실패, 재무 수집 스킵")
+            continue
+
+        # CFS(연결) 우선, 없으면 OFS(개별)
+        fin_data  = None
+        used_div  = None
+        for fs_div in ("CFS", "OFS"):
+            params = {
+                "corp_code":  corp_code,
+                "bsns_year":  bsns_year,
+                "reprt_code": "11011",   # 사업보고서
+                "fs_div":     fs_div,
+            }
+            fin_data = _dart_get("fnlttSinglAcnt.json", params,
+                                 label=f"/fnltt {stock_code} {fs_div}")
+            if fin_data and fin_data.get("list"):
+                used_div = fs_div
+                logger.info(f"[DART] {stock_code} 재무 조회 성공 ({fs_div}, {bsns_year})")
+                break
+
+        if not fin_data or not fin_data.get("list"):
+            logger.warning(f"[DART] {stock_code} 재무 데이터 없음 (bsns_year={bsns_year})")
+            continue
+
+        # 수치 파싱 헬퍼
+        def _parse_amount(val: str) -> Optional[int]:
+            try:
+                return int(str(val).replace(",", "").replace(" ", ""))
+            except (ValueError, TypeError, AttributeError):
+                return None
+
+        raw: dict = {}   # 부채비율 계산용 원시 데이터
+        accounts: dict = {}
+
+        for item in fin_data["list"]:
+            acct_nm = item.get("account_nm", "")
+            if acct_nm not in DART_TARGET_ACCOUNTS:
+                continue
+            thstrm = _parse_amount(item.get("thstrm_amount", ""))
+            frmtrm = _parse_amount(item.get("frmtrm_amount", ""))
+            raw[acct_nm] = {"thstrm": thstrm, "frmtrm": frmtrm}
+
+            if acct_nm in ("매출액", "영업이익", "당기순이익"):
+                accounts[acct_nm] = {
+                    "thstrm": thstrm,
+                    "frmtrm": frmtrm,
+                    "unit":   "백만원",
+                }
+
+        # 부채비율 계산 (부채총계 / 자본총계 × 100)
+        debt   = raw.get("부채총계", {})
+        equity = raw.get("자본총계", {})
+        if debt.get("thstrm") and equity.get("thstrm") and equity["thstrm"] != 0:
+            frmtrm_ratio = None
+            if (debt.get("frmtrm") and equity.get("frmtrm") and equity["frmtrm"] != 0):
+                frmtrm_ratio = round(debt["frmtrm"] / equity["frmtrm"] * 100, 1)
+            accounts["부채비율"] = {
+                "thstrm": round(debt["thstrm"] / equity["thstrm"] * 100, 1),
+                "frmtrm": frmtrm_ratio,
+                "unit":   "%",
+            }
+
+        corp_name_val = (fin_data["list"][0].get("corp_name", stock_code)
+                         if fin_data["list"] else stock_code)
+        result[stock_code] = {
+            "corp_name": corp_name_val,
+            "bsns_year": bsns_year,
+            "fs_div":    used_div,
+            "accounts":  accounts,
+        }
+
+    logger.info(f"[DART] 재무 수치 조회 완료: {len(result)}개 종목")
+    return result
+
+
+def run_dart_company_info(stock_codes: list) -> dict:
+    """
+    캐시의 픽 종목 기본정보 조회 (좁게 — 픽 확정 종목만).
+
+    Args:
+        stock_codes: 6자리 종목코드 리스트
+
+    반환값:
+        {
+            "005930": {
+                "corp_name": "삼성전자",
+                "ind_tp":    "전자부품, 컴퓨터, 영상, 음향 및 통신장비 제조업",
+                "acc_mt":    "12",     # 결산월
+                "corp_code": "00126380",
+            },
+            ...
+        }
+    """
+    result: dict = {}
+    for stock_code in stock_codes:
+        data = _dart_get("company.json", {"stock_code": stock_code},
+                         label=f"/company_info {stock_code}")
+        if data is None:
+            continue
+        result[stock_code] = {
+            "corp_name": data.get("corp_name", ""),
+            "ind_tp":    data.get("ind_tp",    ""),
+            "acc_mt":    data.get("acc_mt",    ""),
+            "corp_code": data.get("corp_code", ""),
+        }
+
+    logger.info(f"[DART] 기본정보 조회 완료: {len(result)}개 종목")
+    return result
+
+
+def format_dart_for_prompt(
+    disclosures: list,
+    financials: Optional[dict] = None,
+    company_info: Optional[dict] = None,
+) -> str:
+    """
+    DART 데이터를 Gemini/GPT 프롬프트 삽입용 텍스트로 변환합니다.
+
+    Args:
+        disclosures:  run_dart_disclosure_scan() 반환값
+        financials:   run_dart_financials() 반환값 (None 가능)
+        company_info: run_dart_company_info() 반환값 (None 가능)
+
+    반환값:
+        프롬프트에 직접 삽입 가능한 텍스트 문자열.
+        데이터가 없으면 빈 문자열 반환.
+    """
+    lines: list = []
+
+    # ── 공시 이벤트 (심층분석용) ────────────────────────────────────────────
+    if disclosures:
+        lines.append("[DART 주요사항보고서 — 최근 14일 공시 이벤트]")
+        lines.append("출처: 금융감독원 전자공시시스템(DART), 공식 공시 데이터")
+        # 이벤트 타입 "기타" 후순위, 접수일 최신순 정렬
+        sorted_disc = sorted(
+            disclosures,
+            key=lambda x: (x["event_type"] == "기타", "-" + x["rcept_dt"])
+        )
+        for d in sorted_disc[:20]:   # 최대 20건
+            lines.append(
+                f"- [{d['event_type']}] {d['corp_name']} | {d['report_nm']} | {d['date']}"
+            )
+
+    # ── 재무 수치 (픽 종목 전용) ─────────────────────────────────────────────
+    if financials:
+        lines.append("\n[DART 재무 수치 — 픽 종목 최근 사업연도 / 출처: DART 사업보고서]")
+        for stock_code, info in financials.items():
+            corp_name = info.get("corp_name", stock_code)
+            bsns_year = info.get("bsns_year", "")
+            fs_div    = info.get("fs_div", "")
+            lines.append(f"\n▶ {corp_name} ({stock_code}) — {bsns_year}년 {fs_div}")
+            for acct_nm, values in info.get("accounts", {}).items():
+                thstrm = values.get("thstrm")
+                frmtrm = values.get("frmtrm")
+                unit   = values.get("unit", "")
+                if thstrm is None:
+                    continue
+                # 포맷팅: 정수면 천 단위 구분, 실수(부채비율)면 소수점 1자리
+                def _fmt(v):
+                    if v is None:
+                        return "N/A"
+                    return f"{v:.1f}" if isinstance(v, float) else f"{v:,}"
+
+                yoy_str = ""
+                if frmtrm and frmtrm != 0:
+                    change = (thstrm - frmtrm) / abs(frmtrm) * 100
+                    yoy_str = f" (YoY {change:+.1f}%)"
+                lines.append(
+                    f"  · {acct_nm}: {_fmt(thstrm)} {unit}{yoy_str}"
+                    f" | 전기: {_fmt(frmtrm)} {unit}"
+                )
+
+    # ── 기업 기본정보 (픽 종목 전용) ─────────────────────────────────────────
+    if company_info:
+        lines.append("\n[DART 기업 기본정보]")
+        for stock_code, info in company_info.items():
+            lines.append(
+                f"- {info.get('corp_name','')} ({stock_code}): "
+                f"업종 = {info.get('ind_tp','미상')} | "
+                f"결산월 = {info.get('acc_mt','미상')}월"
+            )
+
+    return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────
+# 14. 결과 출력 헬퍼 (디버깅용)
 # ──────────────────────────────────────────────
 def print_articles(articles: list) -> None:
     """수집된 기사를 콘솔에 보기 좋게 출력합니다."""
