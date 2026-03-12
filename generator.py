@@ -119,13 +119,17 @@ GPT_WRITER_SYSTEM = """
 
    ### 🌐 미국 시장
    - 연준 금리·국채 수익률·달러 인덱스·S&P500·나스닥 중 해당 수치를 전부 인용해라.
-   - 테마 중심 소제목 정확히 3개. 예: '4.5%의 벽 — 연준이 버티는 이유' / '달러 인덱스 104.3의 함의' / 'S&P500 지지선 공방'
+   - 테마 중심 소제목 정확히 3개. 반드시 `####` 수준의 마크다운 제목으로 작성해라.
+     예: #### 4.5%의 벽 — 연준이 버티는 이유
+   - 각 소제목 단락 사이에는 반드시 `---` 구분선을 삽입해라.
    - 각 단락 최소 4문장. 수치 → 인과 → 파급 → 포지션 시사점 순서로 전개.
    - 수치 없는 단락은 작성 금지.
 
    ### 🇰🇷 국내 시장
    - 코스피·코스닥·원/달러 환율·외국인 수급 중 해당 수치를 전부 인용해라.
-   - 테마 중심 소제목 정확히 3개. 예: '외국인 5,200억 순매수의 진짜 의미' / '원/달러 1,320원 공방' / '코스닥 기술주 수급 변화'
+   - 테마 중심 소제목 정확히 3개. 반드시 `####` 수준의 마크다운 제목으로 작성해라.
+     예: #### 외국인 5,200억 순매수의 진짜 의미
+   - 각 소제목 단락 사이에는 반드시 `---` 구분선을 삽입해라.
    - 각 단락 최소 4문장. 글로벌 매크로(미국 시장 섹션의 수치)와의 연결고리를 반드시 서술해라.
    - 수치 없는 단락은 작성 금지.
 
@@ -185,6 +189,13 @@ ChatGPT가 쓴 글을 읽고 아래 기준으로 무자비하게 평가해라.
 
 [평가 기준 — 하나라도 미달이면 즉시 FAIL]
 
+⓪ 형식 준수 [최우선 — 이것부터 확인]:
+   브리핑 섹션의 테마 소제목이 `####` (해시 4개) 수준으로 작성됐는가?
+   `###` 이하 수준의 소제목(### 또는 ##)이 브리핑 내 소제목으로 혼용됐는가? → 혼용 시 즉시 FAIL.
+   각 소제목 단락 사이에 `---` 구분선이 존재하는가? 없으면 즉시 FAIL.
+   본문 산문 단락 안에 `#`, `##`, `###` 같은 마크다운 제목 기호가 남아 있는가? → 있으면 즉시 FAIL.
+   → 위 기준 중 하나라도 위반 시: "FAIL\n⓪ 형식 위반: [구체 위반 내용]" 형식으로 반환해라.
+
 ① 수치 밀도 (가장 중요):
    본문 전체에서 구체 수치(가격·지수·퍼센트·bp·환율·수급 금액)가 최소 8개 이상 직접 인용됐는가?
    "유가가 올랐다", "달러가 강세를 보였다"처럼 방향성만 서술하고 수치가 없는 문장이 있는가?
@@ -198,10 +209,11 @@ ChatGPT가 쓴 글을 읽고 아래 기준으로 무자비하게 평가해라.
 ③ 브리핑 2세션 구조 및 소제목 3개:
    '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 소제목이 각각 명확히 존재하는가?
    각 세션에 해당 시장의 핵심 수치(금리·수익률·지수·환율·수급)가 빠짐없이 인용됐는가?
-   미국 시장 섹션에 테마 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
-   국내 시장 섹션에 테마 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
+   미국 시장 섹션에 `####` 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
+   국내 시장 섹션에 `####` 소제목이 정확히 3개 존재하는가? (2개 이하면 즉시 FAIL)
+   각 `####` 소제목 단락 사이에 `---` 구분선이 있는가? 없으면 FAIL.
    국내 시장 섹션이 미국 시장과의 인과 연결 없이 독립적으로 서술됐는가?
-   → 소제목이 부족하거나 연결이 빠졌으면 구체적으로 지적해라.
+   → 소제목이 부족하거나 구분선·연결이 빠졌으면 구체적으로 지적해라.
 
 ④ 참고문헌 정합성:
    본문(브리핑·테이스팅 노트)에서 언급한 모든 기사가 참고문헌에 있는가?
@@ -255,7 +267,8 @@ GPT_REWRITE_USER = """
   "유가가 올랐다" → "WTI가 $76.40으로 2.3% 하락했다" 같이 반드시 숫자로 대체.
 □ 글 구조(제목→오프닝→브리핑→테이스팅노트→캐시의픽→참고문헌) 순서 유지.
 □ 브리핑은 '### 🌐 미국 시장'과 '### 🇰🇷 국내 시장' 두 섹션으로 분리.
-□ 미국 시장 섹션에 테마 소제목 정확히 3개, 국내 시장 섹션에 테마 소제목 정확히 3개.
+□ 미국·국내 시장 각각 소제목 정확히 3개. 소제목은 반드시 #### 수준으로 작성.
+□ 각 소제목 단락 사이에 --- 구분선 삽입 필수.
 □ 테이스팅 노트 각 항목은 3~4문장(수치 근거→연쇄효과→단기 행동) 필수.
 □ <!-- PICKS: [...] --> JSON 블록 형식 유지. 티커 2~3개.
 □ 각 픽 아래에 추천 근거 최소 3문장(매크로 수치 상관관계→실적 영향→단기 확언) 작성.
@@ -583,67 +596,93 @@ def extract_title(markdown_content: str) -> str:
 
 
 # ──────────────────────────────────────────────
-# 17. 마크다운 → HTML 변환 (인라인 스타일 적용)
+# 17. 마크다운 → HTML 변환 (디렉터 지정 스타일 시스템 v2)
 # ──────────────────────────────────────────────
 def convert_to_html(content: str) -> str:
     """
-    마크다운을 WordPress용 HTML로 변환하고 인라인 스타일을 적용합니다.
-    # → h1, ## → h2, ### → h3, ** → strong, > → blockquote
+    디렉터 지정 스타일 시스템으로 마크다운을 WordPress HTML로 변환합니다.
+
+    스타일 규칙:
+    - # (제목)       → h1 (대형 타이틀)
+    - ##/###/#### (소제목) → h3 with border-left #1a1a1a (디렉터 지정)
+    - ---            → <hr style="border-top: 1px solid #eee; margin: 30px 0">
+    - > (인용)       → blockquote (픽 추천 근거용 amber 계열)
+    - 캐시의 픽 섹션 → <div style="background:#fffaf0; border-left: 5px solid #b36b00">
     """
-    # 1. markdown 라이브러리로 HTML 변환
+
+    # ── 스타일 상수 (디렉터 지정) ────────────────────────────────────────
+    H1_STYLE = (
+        "font-size:2em;font-weight:800;color:#1a1a1a;"
+        "margin:0 0 30px 0;padding-bottom:14px;"
+        "border-bottom:3px solid #1a1a1a;line-height:1.3;"
+    )
+    # 모든 소제목 (##, ###, ####) → 디렉터 지정 h3 스타일
+    SUB_H_STYLE = (
+        "border-left:6px solid #1a1a1a;padding:12px 18px;"
+        "background-color:#f4f4f4;margin:45px 0 20px 0;"
+        "color:#1a1a1a;font-size:1.4em;"
+    )
+    P_STYLE = (
+        "font-size:15px;line-height:1.9;color:#333;margin:0 0 16px 0;"
+    )
+    HR_STYLE = "border:0;border-top:1px solid #eee;margin:30px 0;"
+    BQ_STYLE = (
+        "border-left:4px solid #b36b00;margin:12px 0;"
+        "padding:10px 18px;background:#fffdf5;color:#555;"
+    )
+    UL_STYLE = "margin:0.5em 0 0.8em 1.4em;padding:0;color:#333;"
+    OL_STYLE = "margin:0.5em 0 0.8em 1.4em;padding:0;color:#333;"
+    LI_STYLE = "font-size:15px;line-height:1.8;margin:0.3em 0;"
+    STRONG_STYLE = "font-weight:700;color:#1a1a1a;"
+    A_STYLE = "color:#1a1a1a;text-decoration:underline;"
+    PICKS_DIV_STYLE = (
+        "padding:25px;background-color:#fffaf0;"
+        "border-left:5px solid #b36b00;margin:30px 0;"
+    )
+
+    # ── 1. markdown → HTML ───────────────────────────────────────────────
     html = md_lib.markdown(content, extensions=["tables", "fenced_code"])
 
-    # 2. 태그별 인라인 스타일 적용
-    style_map = [
-        (
-            "<h1>",
-            '<h1 style="font-size:2em;font-weight:800;color:#1a1a2e;'
-            "margin:1.2em 0 0.5em;padding-bottom:10px;"
-            'border-bottom:3px solid #3b5998;">',
-        ),
-        (
-            "<h2>",
-            '<h2 style="font-size:1.5em;font-weight:700;color:#2c3e7a;'
-            "margin:1.8em 0 0.5em;padding-bottom:4px;"
-            'border-bottom:1px solid #c8d0e8;">',
-        ),
-        (
-            "<h3>",
-            '<h3 style="font-size:1.2em;font-weight:700;color:#3b5998;'
-            'margin:1.4em 0 0.3em;">',
-        ),
-        (
-            "<p>",
-            '<p style="font-size:15px;line-height:1.9;color:#2d2d2d;margin:0.8em 0;">',
-        ),
-        (
-            "<blockquote>",
-            '<blockquote style="border-left:4px solid #3b5998;margin:12px 0;'
-            'padding:10px 18px;background:#f5f7ff;color:#444;font-style:normal;">',
-        ),
-        (
-            "<ul>",
-            '<ul style="margin:0.5em 0 0.8em 1.4em;padding:0;">',
-        ),
-        (
-            "<ol>",
-            '<ol style="margin:0.5em 0 0.8em 1.4em;padding:0;">',
-        ),
-        (
-            "<li>",
-            '<li style="font-size:15px;line-height:1.8;color:#2d2d2d;margin:0.3em 0;">',
-        ),
-    ]
+    # ── 2. 제목 스타일 변환 ──────────────────────────────────────────────
+    # h2, h4 → h3 + SUB_H_STYLE (태그명까지 통일)
+    for level in [2, 4]:
+        html = html.replace(f"<h{level}>", f'<h3 style="{SUB_H_STYLE}">')
+        html = html.replace(f"</h{level}>", "</h3>")
+    # h3 (아직 style 없는 것) → SUB_H_STYLE
+    html = html.replace("<h3>", f'<h3 style="{SUB_H_STYLE}">')
+    # h1 (포스팅 제목)
+    html = html.replace("<h1>", f'<h1 style="{H1_STYLE}">')
 
-    for old_tag, new_tag in style_map:
-        html = html.replace(old_tag, new_tag)
+    # ── 3. 본문 요소 스타일 ──────────────────────────────────────────────
+    html = html.replace("<p>", f'<p style="{P_STYLE}">')
+    html = html.replace("<hr>", f'<hr style="{HR_STYLE}">')
+    html = html.replace("<hr />", f'<hr style="{HR_STYLE}">')
+    html = html.replace("<blockquote>", f'<blockquote style="{BQ_STYLE}">')
+    html = html.replace("<ul>", f'<ul style="{UL_STYLE}">')
+    html = html.replace("<ol>", f'<ol style="{OL_STYLE}">')
+    html = html.replace("<li>", f'<li style="{LI_STYLE}">')
+    html = html.replace("<strong>", f'<strong style="{STRONG_STYLE}">')
+    html = re.sub(r"<a ", f'<a style="{A_STYLE}" ', html)
 
-    # 링크 스타일 (속성 있는 태그이므로 regex 사용)
-    html = re.sub(
-        r"<a ",
-        '<a style="color:#3b5998;text-decoration:underline;" ',
-        html,
+    # ── 4. 캐시의 픽 섹션 → 특별 메뉴판 div 박스로 감싸기 ───────────────
+    # 패턴: '캐시의 픽' h3 ~ '참고 문헌' h3 사이의 컨텐츠를 감싼다
+    picks_pattern = re.compile(
+        r"(<h3[^>]*>.*?캐시의\s*픽.*?</h3>)"   # 픽 소제목
+        r"(.*?)"                                 # 픽 본문 (비탐욕적)
+        r"(<h3[^>]*>.*?참고\s*문헌.*?</h3>)",   # 참고 문헌 소제목
+        re.DOTALL,
     )
+
+    def _wrap_picks_box(m: re.Match) -> str:
+        return (
+            f"{m.group(1)}"
+            f'<div style="{PICKS_DIV_STYLE}">'
+            f"{m.group(2).strip()}"
+            f"</div>\n"
+            f"{m.group(3)}"
+        )
+
+    html = picks_pattern.sub(_wrap_picks_box, html)
 
     return html
 
