@@ -418,12 +418,27 @@ def save_portfolio(picks: list, prices: dict) -> None:
     logger.info(f"portfolio.json 저장 완료 | 누적 {len(existing)}건")
 
 
+def _strip_code_fences(text: str) -> str:
+    """
+    GPT/Gemini 출력에서 코드펜스(```html, ```)와 잔여 백틱 래퍼를 제거합니다.
+    실제 HTML 콘텐츠는 보존됩니다.
+    모든 게시 경로(Post1 draft, Post2 assemble, verify 수정본)에 공통 적용.
+    """
+    if not text:
+        return text
+    # 앞뒤 코드펜스 제거 (```html ... ``` 또는 ``` ... ```)
+    text = re.sub(r"^```(?:html)?\s*\n?", "", text.strip(), flags=re.IGNORECASE)
+    text = re.sub(r"\n?```\s*$", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
 def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
     """
     GPT 초고에서 PICKS JSON 주석을 제거하고,
     각 티커의 {PRICE_PLACEHOLDER}를 실제 종가(기준일 포함)로 교체합니다.
     """
-    content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", raw_content, flags=re.DOTALL)
+    content = _strip_code_fences(raw_content)  # Phase 4.3: 코드펜스/백틱 제거
+    content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", content, flags=re.DOTALL)
 
     for pick in picks:
         ticker = pick.get("ticker", "")
@@ -741,23 +756,31 @@ GPT_WRITER_PICKS_SYSTEM = f"""
 5. 같은 사실을 표현만 바꿔 반복하지 않는다
 
 [종목 리포트 규칙 — Phase 4.3 강화판]
-각 종목 섹션은 반드시 아래 4단계 순서를 지켜 최소 4문장 이상으로 작성한다:
+각 종목 섹션은 반드시 아래 4단계 순서를 지켜 최소 6문장 이상으로 작성한다:
 
   문장 1 — 왜 지금 이 종목인가
     : 오늘의 핵심 테마와 이 종목이 연결되는 직접적 이유를 제시
-  문장 2 — 업황·실적·수요 근거
-    : 이번 테마와 연결되는 구체적 숫자 또는 기준 시점 포함
+  문장 2 — 업황·실적·수요 근거 (숫자 필수)
+    : 이번 테마와 연결되는 구체적 숫자 또는 기준 시점 반드시 포함
     : 그 숫자가 왜 중요한지 의미를 1문장 이상 설명
-  문장 3 — 시장이 이미 반영했을 변수 또는 수급·밸류에이션 포인트
+    : ★ 숫자·기준시점이 없으면 문장 2로 인정하지 않는다. 반드시 포함할 것.
+  문장 3 — 리서치 데이터 연결 (필수)
+    : 제공된 리서치 또는 애널리스트 리포트에서 이 종목과 관련된 논점을 반드시 1개 이상 인용
+    : 복수 리포트가 있으면 공통 논점 + 차이 서술
+    : 리서치 데이터가 없으면 "리서치 부재" 명시 후 업황 데이터로 대체
+  문장 4 — 시장이 이미 반영했을 변수 또는 수급·밸류에이션 포인트
     : 현재 주가 혹은 수급에서 이미 선반영된 요인이 무엇인지 서술
-  문장 4 — 가장 중요한 반대 포인트
+  문장 5 — 가장 중요한 반대 포인트
     : 이번 테마에 특화된 리스크 (범용 "불확실성"·"거시 변수" 금지)
+  문장 6 이상 — 논리 보강 또는 체크포인트 연결
+    : 종목 섹션이 6문장 미만이 되지 않도록 분량을 확보한다
 
 추가 규칙:
 - 종목 단락을 카드형 한 줄 요약으로 끝내지 않는다.
 - "직접 수혜", "긍정적 흐름", "장기 성장 기대" 같은 표현은 구체 근거 없이 사용 금지.
 - 리서치 출처가 있으면 공통 논점을 요약하고, 차이가 있으면 그 차이도 서술한다.
 - 가격 정보 없이도 논리만으로 설득 가능해야 한다.
+- 메인 픽은 보조 픽보다 반드시 더 길고 근거가 풍부해야 한다 (최소 8문장 목표).
 
 [포맷 규칙 — 마크다운 절대 금지]
 - 마크다운 기호(#, **, *, `) 절대 사용 금지
@@ -785,8 +808,9 @@ GPT_WRITER_PICKS_SYSTEM = f"""
 8. 참고 출처 섹션: <h3>참고 출처</h3> 후 <p>로 사용된 데이터 출처만 나열
 
 [자기검수 — 출력 전 반드시 확인]
-□ 각 종목이 최소 4문장(4단계 순서)으로 작성됐는가
-□ 업황/실적 근거에 숫자 또는 기준 시점이 포함됐는가
+□ 각 종목이 최소 6문장(5단계 순서)으로 작성됐는가 (메인 픽은 8문장 이상 목표)
+□ 업황/실적 근거 문장에 반드시 숫자 또는 기준 시점이 포함됐는가
+□ 리서치 데이터가 각 종목에 1개 이상 연결됐는가
 □ 가격 정보 없이도 논리 밀도가 유지되는가
 □ 반대 포인트가 이번 테마에 특화됐는가 (범용이면 수정)
 □ 메인 픽과 보조 픽의 역할이 명확하게 구분됐는가
@@ -872,11 +896,21 @@ GEMINI_REVISER_SYSTEM = """
 
 [수정 규칙]
 - JSON 래핑 절대 금지 — HTML만 출력
+- 코드 블록(```html 등) 절대 금지 — HTML 태그로만 출력
 - 마크다운 기호(#, **, ```) 절대 금지
 - [해석] / [전망] 태그 누락된 해석·전망 문장에 태그 추가
 - 출처 없는 단정 표현 → "~로 파악된다" / "~로 보인다" 표현으로 완화
 - 투자 권유성 문장 → 중립 서술로 교체
-- 수정 범위는 문제 항목에 한정하고, 나머지 본문은 그대로 유지
+
+[핵심 테마 집중 수정 — Phase 4.3]
+- 글 제목에서 핵심 테마를 확인한다.
+- 핵심 테마와 직접 연결되지 않는 h3 섹션이 있으면:
+  → 해당 섹션 전체를 핵심 테마와 연결되는 1~2문장 배경 설명으로 축소한다.
+  → h3 소제목을 삭제하고 앞 섹션 본문에 자연스럽게 흡수한다.
+- 완충 문장("긍정적이다", "수혜가 예상된다", "영향을 줄 수 있다")이
+  구체 근거 없이 단독 등장하면 → 해당 문장을 삭제하거나 근거 문장으로 교체한다.
+- 같은 사실이 다른 표현으로 반복된 경우 → 한 곳만 남기고 나머지 삭제.
+- 수정 범위는 문제 항목에 한정하고, 나머지 본문은 그대로 유지.
 """
 
 GEMINI_REVISER_USER = """
@@ -983,7 +1017,7 @@ def gpt_write_analysis(materials: dict, context_text: str) -> str:
         user_msg,
         "Step2a:심층분석작성",
         temperature=0.7,
-        max_tokens=4000,
+        max_tokens=5000,  # Phase 4.3: 4000 → 5000 (심층분석 밀도 복원)
     )
     return draft
 
@@ -1079,8 +1113,7 @@ def verify_draft(draft: str) -> dict:
             temperature=0.3,
         )
         if revised_raw and revised_raw.strip():
-            # 혹시 ```html ... ``` 블록으로 감싼 경우 제거
-            revised = re.sub(r"^```(?:html)?\s*|\s*```$", "", revised_raw.strip(), flags=re.DOTALL)
+            revised = _strip_code_fences(revised_raw)  # Phase 4.3: 공통 헬퍼로 통일
             logger.info(f"Step3 수정본 채택 | {len(revised)}자")
         else:
             logger.warning("Step3 수정 호출 실패 — 원본 유지")
@@ -1143,6 +1176,7 @@ def generate_deep_analysis(news: list, research: list) -> dict:
 
     # ── Step 2: GPT 심층 분석 초고 작성 ───────────────────────────────────
     draft = gpt_write_analysis(materials, context_text)
+    draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
     _postprocess_density_check(draft, label="Post1")
@@ -1225,6 +1259,7 @@ def generate_stock_picks_report(
 
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
     draft = gpt_write_picks(materials, picks, prices, context_text)
+    draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
     _postprocess_density_check(draft, label="Post2")
@@ -1385,7 +1420,7 @@ if __name__ == "__main__":
     )
 
     print("\n" + "=" * 70)
-    print("macromalt Phase 4.2 (v3) 파이프라인 자동 검증 테스트")
+    print("macromalt Phase 4.3 (v3) 파이프라인 자동 검증 테스트")
     print("=" * 70)
 
     # 샘플 데이터 (실제 API 호출 포함)
