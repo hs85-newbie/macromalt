@@ -1445,16 +1445,18 @@ def _fetch_dart_document_zip(rcept_no: str) -> Optional[bytes]:
         return None
 
     try:
+        # document.json은 이 API 키 등급에서 status=101로 막힘.
+        # document.xml이 동일 ZIP을 반환하는 실제 작동 엔드포인트.
         resp = requests.get(
-            f"{DART_API_BASE}/document.json",
+            f"{DART_API_BASE}/document.xml",
             params={"crtfc_key": key, "rcept_no": rcept_no},
             timeout=20,
         )
         resp.raise_for_status()
-        # 오류 응답은 JSON으로 반환됨
+        # 오류 응답은 JSON 또는 XML로 반환됨 (파일 없음: application/xml status=014)
         ct = resp.headers.get("Content-Type", "")
-        if "json" in ct:
-            msg = resp.json().get("message", "알 수 없는 오류")
+        if "json" in ct or "xml" in ct:
+            msg = resp.json().get("message", "알 수 없는 오류") if "json" in ct else resp.text[:100]
             logger.warning(f"[DART/doc] rcept_no={rcept_no} API 오류: {msg}")
             return None
         zip_bytes = resp.content
