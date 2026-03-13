@@ -1719,8 +1719,9 @@ def _extract_sections_from_zip(
 ) -> dict:
     """
     사업보고서 ZIP 내 XML 파일들을 순회.
-    각 파일 앞 _ANNUAL_HEADER_PROBE 자에 target_headers 키워드가 있으면
-    해당 파일 텍스트의 처음 max_chars 자를 추출해 {헤더: 텍스트} 반환.
+    각 파일 전체 텍스트에서 target_headers 키워드를 검색하고,
+    키워드 발견 위치부터 max_chars 자를 추출해 {헤더: 텍스트} 반환.
+    단일 대형 XML 파일(사업보고서 전형) 및 분할 파일 모두 지원.
     """
     result: dict = {}
     try:
@@ -1750,15 +1751,18 @@ def _extract_sections_from_zip(
                 if not raw:
                     continue
 
-                # 헤더 탐지: 파일 앞부분에서만 확인
-                probe = raw[:_ANNUAL_HEADER_PROBE]
+                # 헤더 탐지: 전체 텍스트에서 키워드 위치 검색
                 for header in target_headers:
                     if header in result:
                         continue
-                    if header in probe:
-                        result[header] = raw[:max_chars]
-                        logger.debug(f"[DART/annual] {xml_name} → 섹션 '{header}' {len(raw[:max_chars])}자")
-                        break
+                    idx = raw.find(header)
+                    if idx >= 0:
+                        snippet = raw[idx: idx + max_chars]
+                        result[header] = snippet
+                        logger.debug(
+                            f"[DART/annual] {xml_name} → 섹션 '{header}' "
+                            f"위치={idx} {len(snippet)}자"
+                        )
 
     except Exception as e:
         logger.warning(f"[DART/annual] ZIP 섹션 파싱 실패: {e}")
