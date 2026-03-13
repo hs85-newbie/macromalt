@@ -1706,21 +1706,28 @@ def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
     OpenDART list.json으로 해당 회사 최신 사업보고서 접수번호를 반환.
     없거나 API 실패 시 None 반환.
     """
+    from datetime import date
+    today = date.today()
+    bgn_de = f"{today.year - 2}0101"  # 2년 전부터 조회 (사업보고서는 3~4월 제출)
+    end_de = today.strftime("%Y%m%d")
     params = {
-        "corp_code":        corp_code,
-        "pblntf_ty":        "A",
-        "pblntf_detail_ty": "A001",   # 사업보고서
-        "page_count":       "5",
-        "sort":             "date",
-        "sort_mth":         "desc",
+        "corp_code":  corp_code,
+        "pblntf_ty":  "A",            # 정기공시 (사업/반기/분기보고서 포함)
+        "bgn_de":     bgn_de,
+        "end_de":     end_de,
+        "page_count": "10",
+        "sort":       "date",
+        "sort_mth":   "desc",
     }
-    data = _dart_get("list.json", params, label=f"/list A001 {corp_code}")
+    data = _dart_get("list.json", params, label=f"/list A {corp_code}")
     if not data:
         return None
     items = data.get("list", [])
-    if not items:
+    # "사업보고서"만 필터링 (분기/반기 제외)
+    annual = [it for it in items if "사업보고서" in it.get("report_nm", "")]
+    if not annual:
         return None
-    return items[0].get("rcept_no")
+    return annual[0].get("rcept_no")
 
 
 def _extract_sections_from_zip(
