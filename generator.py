@@ -38,6 +38,8 @@ from scraper import (
     format_dart_for_prompt,
     enrich_dart_disclosures_with_fulltext,
     enrich_research_with_pdf,
+    _hankyung_login,
+    run_dart_annual_report_sections,
 )
 
 load_dotenv()
@@ -524,7 +526,8 @@ def _format_source_section(content: str) -> str:
         # 1차 확장
         "카카오페이", "하이투자", "상상인", "유안타", "교보", "대신", "이베스트", "유진",
         # 2차 확장 — 단독 표기 대비 (일반어 위험 없는 것만)
-        "신한", "NH", "LS증권", "DB금융", "IBK", "BNK", "부국", "신영", "토스증권",
+        # 신한/NH/IBK: 은행·보험 계열 오탐 방지 위해 투자증권 표기로 한정
+        "신한투자", "NH투자", "LS증권", "DB금융", "IBK투자", "BNK", "부국", "신영", "토스증권",
     ]
     NEWS_KW   = ["경제", "신문", "뉴스", "통신", "비즈", "Bloomberg", "Reuters",
                  "로이터", "블룸버그", "CNBC", "전자신문", "조선", "매일", "한경"]
@@ -1452,7 +1455,8 @@ def generate_deep_analysis(news: list, research: list) -> dict:
         {"title", "content", "theme", "key_data", "materials", "generated_at"}
         ※ materials: Post 2에 전달하기 위한 구조화 데이터
     """
-    enrich_research_with_pdf(research)
+    _hk_session = _hankyung_login()
+    enrich_research_with_pdf(research, session=_hk_session)
     news_text     = format_articles_for_prompt(news)
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
@@ -1541,7 +1545,8 @@ def generate_stock_picks_report(
     반환:
         {"title", "content", "picks", "prices", "generated_at"}
     """
-    enrich_research_with_pdf(research)
+    _hk_session = _hankyung_login()
+    enrich_research_with_pdf(research, session=_hk_session)
     news_text     = format_articles_for_prompt(news)
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
@@ -1582,6 +1587,17 @@ def generate_stock_picks_report(
     if picks_dart_text:
         logger.info(f"[DART] 픽 재무 데이터 주입: {list(dart_financials.keys())}")
         context_text = context_text + "\n\n" + picks_dart_text
+
+    # ── Step 1D-2: 사업보고서 핵심 섹션 주입 (Phase 6-B) ──────────────────
+    if kr_stock_codes:
+        annual_sections = run_dart_annual_report_sections(kr_stock_codes)
+        if annual_sections:
+            lines = ["\n[DART 사업보고서 핵심 섹션]"]
+            for sc, secs in annual_sections.items():
+                for header, text in secs.items():
+                    lines.append(f"[{sc} — {header}]\n{text}")
+            context_text = context_text + "\n\n" + "\n\n".join(lines)
+            logger.info(f"[DART/annual] 사업보고서 섹션 주입: {list(annual_sections.keys())}")
 
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
     draft = gpt_write_picks(materials, picks, prices, context_text)

@@ -1557,12 +1557,15 @@ _PDF_KEY_TERMS = (
 )
 
 
-def _fetch_pdf_bytes(url: str) -> Optional[bytes]:
-    """PDF URL → bytes. 실패 시 None 반환 (예외 비전파)."""
+def _fetch_pdf_bytes(url: str, session=None) -> Optional[bytes]:
+    """PDF URL → bytes. 실패 시 None 반환 (예외 비전파).
+    session: 인증된 requests.Session (한경 등). None이면 requests.get 사용.
+    """
     if not url:
         return None
     try:
-        resp = requests.get(
+        getter = session.get if session and _HANKYUNG_BASE in url else requests.get
+        resp = getter(
             url,
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -1638,11 +1641,12 @@ def _extract_pdf_key_sections(pdf_bytes: bytes) -> str:
         return ""
 
 
-def enrich_research_with_pdf(articles: list, max_pdf: int = 3) -> list:
+def enrich_research_with_pdf(articles: list, max_pdf: int = 3, session=None) -> list:
     """
     research article 리스트에 pdf_snippet 필드를 in-place 추가.
     weight 내림차순 기준 상위 max_pdf 건만 시도.
     실패한 항목은 건너뜀 (전체 중단 없음).
+    session: 인증된 requests.Session (한경 등). None이면 비인증 요청.
     """
     if not articles:
         return articles
@@ -1662,7 +1666,7 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3) -> list:
         if not url:
             continue
 
-        pdf_bytes = _fetch_pdf_bytes(url)
+        pdf_bytes = _fetch_pdf_bytes(url, session=session)
         if not pdf_bytes:
             continue
 
@@ -1675,6 +1679,159 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3) -> list:
             logger.debug(f"[PDF] 추출 내용 없음: {url}")
 
     return articles
+
+
+# ──────────────────────────────────────────────
+# 17. 사업보고서 섹션 파싱 (Phase 6-B)
+# ──────────────────────────────────────────────
+
+# 섹션 추출 우선순위 정책:
+#   1 사업의 내용  — 필수
+#   2 재무상태    — 필수. "재무상태 또는 이에 준하는 재무/위험 문맥" fallback 포함
+#   3 MD&A/경영진의 논의 — optional. 1+2 추출 시 성공으로 간주.
+#                          3은 대형주/해외주식 확장 시 재검토.
+# dict 구조: {canonical_name: [검색 키워드 우선순위 순]}
+# → 첫 번째 매칭 키워드로 추출, 결과 키는 canonical_name 사용
+_ANNUAL_SECTION_KEYWORDS: dict = {
+    "사업의 내용":  ["사업의 내용"],
+    "재무상태":    ["재무상태", "재무제표", "재무위험", "재무위험관리", "유동성"],
+    "MD&A":       ["MD&A"],
+    "경영진의 논의": ["경영진의 논의"],
+}
+_ANNUAL_SECTION_MAX = 400   # 섹션당 프롬프트 주입 상한 (자)
+
+
+def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
+    """
+    OpenDART list.json으로 해당 회사 최신 사업보고서 접수번호를 반환.
+    없거나 API 실패 시 None 반환.
+    """
+    params = {
+        "corp_code":        corp_code,
+        "pblntf_ty":        "A",
+        "pblntf_detail_ty": "A001",   # 사업보고서
+        "page_count":       "5",
+        "sort":             "date",
+        "sort_mth":         "desc",
+    }
+    data = _dart_get("list.json", params, label=f"/list A001 {corp_code}")
+    if not data:
+        return None
+    items = data.get("list", [])
+    if not items:
+        return None
+    return items[0].get("rcept_no")
+
+
+def _extract_sections_from_zip(
+    zip_bytes: bytes,
+    section_keywords: dict,
+    max_chars: int = _ANNUAL_SECTION_MAX,
+) -> dict:
+    """
+    사업보고서 ZIP 내 XML 파일들을 순회.
+    section_keywords: {canonical_name: [검색키워드, ...]} — 키워드 우선순위 순 fallback.
+    각 파일 전체 텍스트에서 첫 매칭 키워드 위치부터 max_chars 자 추출.
+    결과 키는 canonical_name. 단일 대형 XML 및 분할 파일 모두 지원.
+    """
+    result: dict = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            xml_names = sorted(n for n in zf.namelist() if n.upper().endswith(".XML"))
+            for xml_name in xml_names:
+                if len(result) >= len(section_keywords):
+                    break
+                try:
+                    xml_bytes = zf.read(xml_name)
+                except Exception:
+                    continue
+
+                try:
+                    soup = BeautifulSoup(xml_bytes, "lxml-xml")
+                except Exception:
+                    try:
+                        soup = BeautifulSoup(xml_bytes, "html.parser")
+                    except Exception:
+                        continue
+
+                for tag in soup.find_all(["style", "script", "img"]):
+                    tag.decompose()
+
+                raw = re.sub(r"\n{3,}", "\n\n",
+                             soup.get_text(separator="\n", strip=True)).strip()
+                if not raw:
+                    continue
+
+                # 섹션별 키워드 우선순위 fallback 검색
+                for canonical, keywords in section_keywords.items():
+                    if canonical in result:
+                        continue
+                    primary = keywords[0]
+                    for kw in keywords:
+                        idx = raw.find(kw)
+                        if idx >= 0:
+                            snippet = raw[idx: idx + max_chars]
+                            result[canonical] = snippet
+                            if kw != primary:
+                                logger.info(
+                                    f"[DART/annual] '{canonical}' fallback 매칭: "
+                                    f"'{primary}' 없음 → '{kw}' 사용"
+                                )
+                            logger.debug(
+                                f"[DART/annual] {xml_name} → '{canonical}' "
+                                f"(키워드: '{kw}') 위치={idx} {len(snippet)}자"
+                            )
+                            break
+
+    except Exception as e:
+        logger.warning(f"[DART/annual] ZIP 섹션 파싱 실패: {e}")
+
+    return result
+
+
+def run_dart_annual_report_sections(
+    stock_codes: list,
+    max_chars: int = _ANNUAL_SECTION_MAX,
+) -> dict:
+    """
+    픽 종목 리스트의 최신 사업보고서에서 핵심 섹션을 추출합니다.
+
+    반환값:
+        {
+          "005930": {
+              "사업의 내용": "...",   # 발견된 섹션만 포함
+          },
+          ...
+        }
+    DART_API_KEY 미설정 또는 조회 실패 시 해당 종목 스킵 (전체 중단 없음).
+    """
+    result: dict = {}
+    for stock_code in stock_codes:
+        corp_code = _stock_code_to_corp_code(stock_code)
+        if not corp_code:
+            logger.warning(f"[DART/annual] {stock_code} → corp_code 조회 실패, 스킵")
+            continue
+
+        rcept_no = _find_annual_report_rcept_no(corp_code)
+        if not rcept_no:
+            logger.warning(f"[DART/annual] {stock_code} 사업보고서 없음")
+            continue
+
+        zip_bytes = _fetch_dart_document_zip(rcept_no)
+        if not zip_bytes:
+            logger.warning(f"[DART/annual] {stock_code} ZIP 다운로드 실패")
+            continue
+
+        sections = _extract_sections_from_zip(zip_bytes, _ANNUAL_SECTION_KEYWORDS, max_chars)
+        if sections:
+            result[stock_code] = sections
+            logger.info(
+                f"[DART/annual] {stock_code} 섹션 추출 완료: {list(sections.keys())}"
+            )
+        else:
+            logger.debug(f"[DART/annual] {stock_code} 매칭 섹션 없음")
+
+    return result
 
 
 # ──────────────────────────────────────────────
