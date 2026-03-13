@@ -105,7 +105,7 @@ def publish_draft(title: str, content: str, category_ids: list = None) -> dict:
     payload = {
         "title": title,
         "content": content,
-        "status": "draft",       # 임시저장 (자동 발행하려면 "publish"로 변경)
+        "status": "publish",
         "format": "standard",
         "comment_status": "open",
         "categories": category_ids,
