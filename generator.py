@@ -36,6 +36,7 @@ from scraper import (
     run_dart_financials,
     run_dart_company_info,
     format_dart_for_prompt,
+    enrich_dart_disclosures_with_fulltext,
     enrich_research_with_pdf,
 )
 
@@ -45,6 +46,9 @@ logger = logging.getLogger("macromalt")
 
 # 검수 실패 시 재작성 최대 횟수 (Phase 7: 검수 1회, 재작성 1회)
 MAX_RETRIES = 1
+
+# PDF 본문 발췌 프롬프트 삽입 최대 길이 (scraper._PDF_SNIPPET_MAX=800 추출 후 삽입 시 제한)
+_PDF_PROMPT_SNIPPET_LEN = 400
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -235,7 +239,7 @@ def format_research_for_prompt(research: list) -> str:
             lines.append(f"   요약: {summary[:200]}")
         pdf_snippet = item.get("pdf_snippet", "")
         if pdf_snippet:
-            lines.append(f"   [PDF 본문 발췌] {pdf_snippet[:300]}")
+            lines.append(f"   [PDF 본문 발췌] {pdf_snippet[:_PDF_PROMPT_SNIPPET_LEN]}")
 
     return "\n".join(lines)
 
@@ -717,6 +721,13 @@ GEMINI_ANALYST_SYSTEM = """
 - 30일 초과 자료는 현재 시황 근거로 절대 사용하지 않는다.
 - 종목·지수·금리·환율·유가·목표가·투자의견 등 시점 민감 정보는
   [최근 7일] 자료에서만 facts에 포함한다.
+
+[DART 공시 데이터 처리 지침 — Phase 5-C]
+- 입력 데이터에 "[DART 주요사항보고서 — 최근 14일 공시 이벤트]" 섹션이 있으면 공식 공시 사실로 취급한다.
+- "원문발췌:" 항목은 해당 공시의 실제 본문 내용이다. 수치·계약 조건·사건 발생일이 포함된 경우
+  facts에 포함하되 source="DART 공시 (회사명)", date=접수일로 명시한다.
+- 공시 이벤트 자체(수주계약·자기주식취득·무상증자 등)는 핵심 테마와 관련 있을 때만 facts에 포함.
+- 관련 없는 공시는 auxiliary_context 1문장으로만 처리한다.
 
 [출력 규칙 — 최우선]
 - 반드시 아래 JSON 구조로만 출력할 것.
@@ -1236,7 +1247,7 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "") -> d
         logger.warning("Gemini 분석 재료 파싱 실패 — 기본값 사용")
         result = {
             "theme": "글로벌 경제 주요 이슈",
-            "facts": [{"content": "수집된 뉴스 데이터 기반", "source": "뉴스 종합", "date": datetime.now().strftime("%Y-%m-%d")}],
+            "facts": [{"content": "수집된 뉴스 데이터 기반", "source": "뉴스 종합", "date": datetime.now().strftime("%Y-%m-%d"), "relevance_to_theme": "직접 관련"}],
             "market_impact": "금융 시장에 직접적인 영향",
             "counter_interpretations": [],
             "uncertainties": ["추가 데이터 확인 필요"],
@@ -1448,6 +1459,8 @@ def generate_deep_analysis(news: list, research: list) -> dict:
 
     # ── Step 1-DART: 전체 시장 주요사항보고서 스캔 (심층분석용, 14일) ──────
     dart_disclosures = run_dart_disclosure_scan(days=14)
+    if dart_disclosures:
+        dart_disclosures = enrich_dart_disclosures_with_fulltext(dart_disclosures, max_fetch=3)
     dart_text = format_dart_for_prompt(dart_disclosures) if dart_disclosures else ""
     if dart_text:
         logger.info(f"[DART] 심층분석 공시 데이터 {len(dart_disclosures)}건 → 프롬프트 주입")

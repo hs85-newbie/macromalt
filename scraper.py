@@ -1368,6 +1368,8 @@ def format_dart_for_prompt(
             lines.append(
                 f"- [{d['event_type']}] {d['corp_name']} | {d['report_nm']} | {d['date']}"
             )
+            if d.get("full_text"):
+                lines.append(f"  원문발췌: {d['full_text'][:400]}")
 
     # ── 재무 수치 (픽 종목 전용) ─────────────────────────────────────────────
     if financials:
@@ -1414,7 +1416,134 @@ def format_dart_for_prompt(
 
 
 # ──────────────────────────────────────────────
-# 15. PDF 리포트 enrich (Phase 5-B)
+# 15. OpenDART 원문 enrich (Phase 5-C)
+# ──────────────────────────────────────────────
+
+_DART_DOC_CACHE      = Path(__file__).parent / ".dart_doc_cache"
+_DART_DOC_CACHE_TTL  = 86400 * 7   # 7일
+_DART_DOC_MAX_CHARS  = 800         # 프롬프트 삽입용 최대 문자 수
+
+
+def _fetch_dart_document_zip(rcept_no: str) -> Optional[bytes]:
+    """
+    OpenDART document.json API로 공시 원문 ZIP을 다운로드합니다.
+    로컬 캐시(.dart_doc_cache/{rcept_no}.zip) 7일 유효.
+    실패 시 None 반환.
+    """
+    _DART_DOC_CACHE.mkdir(exist_ok=True)
+    cache_path = _DART_DOC_CACHE / f"{rcept_no}.zip"
+
+    if cache_path.exists():
+        age = datetime.now().timestamp() - cache_path.stat().st_mtime
+        if age < _DART_DOC_CACHE_TTL:
+            return cache_path.read_bytes()
+
+    try:
+        key = _get_dart_api_key()
+    except ValueError as e:
+        logger.warning(f"[DART/doc] {e}")
+        return None
+
+    try:
+        resp = requests.get(
+            f"{DART_API_BASE}/document.json",
+            params={"crtfc_key": key, "rcept_no": rcept_no},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        # 오류 응답은 JSON으로 반환됨
+        ct = resp.headers.get("Content-Type", "")
+        if "json" in ct:
+            msg = resp.json().get("message", "알 수 없는 오류")
+            logger.warning(f"[DART/doc] rcept_no={rcept_no} API 오류: {msg}")
+            return None
+        zip_bytes = resp.content
+        cache_path.write_bytes(zip_bytes)
+        logger.debug(f"[DART/doc] 다운로드 완료: rcept_no={rcept_no} ({len(zip_bytes):,}B)")
+        return zip_bytes
+    except Exception as e:
+        logger.warning(f"[DART/doc] 다운로드 실패 rcept_no={rcept_no}: {e}")
+        return None
+
+
+def _extract_dart_xml_text(zip_bytes: bytes, max_chars: int = _DART_DOC_MAX_CHARS) -> str:
+    """
+    공시 원문 ZIP에서 첫 번째 XML을 추출하고 텍스트를 반환합니다.
+    불필요한 태그(style/script/img) 제거 후 get_text() 호출.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            xml_names = [n for n in zf.namelist() if n.upper().endswith(".XML")]
+            if not xml_names:
+                return ""
+            xml_bytes = zf.read(xml_names[0])
+    except Exception as e:
+        logger.warning(f"[DART/doc] ZIP 파싱 실패: {e}")
+        return ""
+
+    try:
+        soup = BeautifulSoup(xml_bytes, "lxml-xml")
+    except Exception:
+        try:
+            soup = BeautifulSoup(xml_bytes, "html.parser")
+        except Exception as e:
+            logger.warning(f"[DART/doc] XML 파싱 실패: {e}")
+            return ""
+
+    for tag in soup.find_all(["style", "script", "img"]):
+        tag.decompose()
+
+    raw = soup.get_text(separator="\n", strip=True)
+    # 연속 빈 줄 정리
+    text = re.sub(r"\n{3,}", "\n\n", raw).strip()
+    return text[:max_chars]
+
+
+def enrich_dart_disclosures_with_fulltext(
+    disclosures: list,
+    max_fetch: int = 3,
+) -> list:
+    """
+    disclosures 리스트 상위 max_fetch건에 full_text(원문 발췌) 필드를 추가합니다.
+
+    이벤트 타입 "기타" 후순위 정렬 기준으로 상위 max_fetch건만 document.json 호출.
+    DART_API_KEY 미설정 또는 API 실패 시 full_text 없이 원본 리스트 반환.
+    """
+    sorted_disc = sorted(
+        disclosures,
+        key=lambda x: (x.get("event_type") == "기타", "-" + x.get("rcept_dt", "")),
+    )
+
+    fetched = 0
+    seen: set = set()
+
+    for d in sorted_disc:
+        if fetched >= max_fetch:
+            break
+        rcept_no = d.get("rcept_no", "")
+        if not rcept_no or rcept_no in seen:
+            continue
+        seen.add(rcept_no)
+
+        zip_bytes = _fetch_dart_document_zip(rcept_no)
+        if not zip_bytes:
+            continue
+
+        text = _extract_dart_xml_text(zip_bytes)
+        if text:
+            d["full_text"] = text
+            fetched += 1
+            logger.info(
+                f"[DART/doc] 원문 추출: {d.get('corp_name','?')} "
+                f"[{d.get('event_type','?')}] {len(text)}자"
+            )
+
+    logger.info(f"[DART/doc] enrich 완료: {fetched}/{min(max_fetch, len(disclosures))}건")
+    return disclosures
+
+
+# ──────────────────────────────────────────────
+# 16. PDF 리포트 enrich (Phase 5-B)
 # ──────────────────────────────────────────────
 
 _PDF_MAX_BYTES = 5 * 1024 * 1024  # 5 MB 상한

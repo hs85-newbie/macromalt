@@ -44,4 +44,5 @@ output/
 # [비용 추적] 실행마다 변경되는 로컬 전용 파일 (민감 정보 없음이나 노이즈 방지)
 cost_log.json
 dart_corp_codes.json
+.dart_doc_cache/
 docs/macromalt_prd_final.md
