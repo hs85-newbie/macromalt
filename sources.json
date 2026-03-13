@@ -84,7 +84,8 @@
       "weight": 3,
       "pages": [
         {"path": "/research/market_info_list.naver", "label": "시황"},
-        {"path": "/research/debenture_list.naver",   "label": "채권"}
+        {"path": "/research/debenture_list.naver",   "label": "채권"},
+        {"path": "/research/company_list.naver",     "label": "종목"}
       ],
       "selectors": {
         "row":          "table.type_1 tr",
@@ -101,7 +102,7 @@
         "sector":       false,
         "target_price": false
       },
-      "notes": "공개 접근, 인증 불필요. pages 배열로 멀티페이지 처리. date·broker는 정규식 자동 탐지. run_research_sources()에서 처리."
+      "notes": "공개 접근, 인증 불필요. pages 배열로 멀티페이지 처리. date·broker는 정규식 자동 탐지. run_research_sources()에서 처리. 종목 리포트 PDF URL 패턴: ssl.pstatic.net/imgstock/upload/research/company/YYYYMMDD_*.pdf (직링크, _fetch_pdf_bytes Content-Type 체크 통과)"
     },
     {
       "id": "hankyung_consensus",

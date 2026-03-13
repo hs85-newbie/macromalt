@@ -1555,12 +1555,15 @@ _PDF_KEY_TERMS = (
 )
 
 
-def _fetch_pdf_bytes(url: str) -> Optional[bytes]:
-    """PDF URL → bytes. 실패 시 None 반환 (예외 비전파)."""
+def _fetch_pdf_bytes(url: str, session=None) -> Optional[bytes]:
+    """PDF URL → bytes. 실패 시 None 반환 (예외 비전파).
+    session: 인증된 requests.Session (한경 등). None이면 requests.get 사용.
+    """
     if not url:
         return None
     try:
-        resp = requests.get(
+        getter = session.get if session and _HANKYUNG_BASE in url else requests.get
+        resp = getter(
             url,
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -1636,11 +1639,12 @@ def _extract_pdf_key_sections(pdf_bytes: bytes) -> str:
         return ""
 
 
-def enrich_research_with_pdf(articles: list, max_pdf: int = 3) -> list:
+def enrich_research_with_pdf(articles: list, max_pdf: int = 3, session=None) -> list:
     """
     research article 리스트에 pdf_snippet 필드를 in-place 추가.
     weight 내림차순 기준 상위 max_pdf 건만 시도.
     실패한 항목은 건너뜀 (전체 중단 없음).
+    session: 인증된 requests.Session (한경 등). None이면 비인증 요청.
     """
     if not articles:
         return articles
@@ -1660,7 +1664,7 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3) -> list:
         if not url:
             continue
 
-        pdf_bytes = _fetch_pdf_bytes(url)
+        pdf_bytes = _fetch_pdf_bytes(url, session=session)
         if not pdf_bytes:
             continue
 
