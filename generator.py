@@ -1835,11 +1835,11 @@ if __name__ == "__main__":
     import sys
 
     # 로깅 설정 (테스트용)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler()],
-    )
+    # scraper.py 모듈 레벨 basicConfig(INFO)가 먼저 실행되어 root handler가 등록된 상태.
+    # basicConfig는 무효 → named logger 레벨을 직접 조정.
+    if os.getenv("DEBUG_LLM"):
+        logging.getLogger("macromalt").setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)  # root handler 레벨도 낮춤
 
     print("\n" + "=" * 70)
     print("macromalt Phase 4.3 (v3) 파이프라인 자동 검증 테스트")
