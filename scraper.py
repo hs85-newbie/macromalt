@@ -1680,6 +1680,136 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3, session=None) -> 
 
 
 # ──────────────────────────────────────────────
+# 17. 사업보고서 섹션 파싱 (Phase 6-B)
+# ──────────────────────────────────────────────
+
+_ANNUAL_SECTION_HEADERS = ["사업의 내용", "MD&A", "경영진의 논의", "재무상태"]
+_ANNUAL_SECTION_MAX     = 400   # 섹션당 프롬프트 주입 상한 (자)
+_ANNUAL_HEADER_PROBE    = 200   # 헤더 존재 여부 탐지용 파일 앞부분 (자)
+
+
+def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
+    """
+    OpenDART list.json으로 해당 회사 최신 사업보고서 접수번호를 반환.
+    없거나 API 실패 시 None 반환.
+    """
+    params = {
+        "corp_code":        corp_code,
+        "pblntf_ty":        "A",
+        "pblntf_detail_ty": "A001",   # 사업보고서
+        "page_count":       "5",
+        "sort":             "date",
+        "sort_mth":         "desc",
+    }
+    data = _dart_get("list.json", params, label=f"/list A001 {corp_code}")
+    if not data:
+        return None
+    items = data.get("list", [])
+    if not items:
+        return None
+    return items[0].get("rcept_no")
+
+
+def _extract_sections_from_zip(
+    zip_bytes: bytes,
+    target_headers: list,
+    max_chars: int = _ANNUAL_SECTION_MAX,
+) -> dict:
+    """
+    사업보고서 ZIP 내 XML 파일들을 순회.
+    각 파일 앞 _ANNUAL_HEADER_PROBE 자에 target_headers 키워드가 있으면
+    해당 파일 텍스트의 처음 max_chars 자를 추출해 {헤더: 텍스트} 반환.
+    """
+    result: dict = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            xml_names = sorted(n for n in zf.namelist() if n.upper().endswith(".XML"))
+            for xml_name in xml_names:
+                if len(result) >= len(target_headers):
+                    break
+                try:
+                    xml_bytes = zf.read(xml_name)
+                except Exception:
+                    continue
+
+                try:
+                    soup = BeautifulSoup(xml_bytes, "lxml-xml")
+                except Exception:
+                    try:
+                        soup = BeautifulSoup(xml_bytes, "html.parser")
+                    except Exception:
+                        continue
+
+                for tag in soup.find_all(["style", "script", "img"]):
+                    tag.decompose()
+
+                raw = re.sub(r"\n{3,}", "\n\n",
+                             soup.get_text(separator="\n", strip=True)).strip()
+                if not raw:
+                    continue
+
+                # 헤더 탐지: 파일 앞부분에서만 확인
+                probe = raw[:_ANNUAL_HEADER_PROBE]
+                for header in target_headers:
+                    if header in result:
+                        continue
+                    if header in probe:
+                        result[header] = raw[:max_chars]
+                        logger.debug(f"[DART/annual] {xml_name} → 섹션 '{header}' {len(raw[:max_chars])}자")
+                        break
+
+    except Exception as e:
+        logger.warning(f"[DART/annual] ZIP 섹션 파싱 실패: {e}")
+
+    return result
+
+
+def run_dart_annual_report_sections(
+    stock_codes: list,
+    max_chars: int = _ANNUAL_SECTION_MAX,
+) -> dict:
+    """
+    픽 종목 리스트의 최신 사업보고서에서 핵심 섹션을 추출합니다.
+
+    반환값:
+        {
+          "005930": {
+              "사업의 내용": "...",   # 발견된 섹션만 포함
+          },
+          ...
+        }
+    DART_API_KEY 미설정 또는 조회 실패 시 해당 종목 스킵 (전체 중단 없음).
+    """
+    result: dict = {}
+    for stock_code in stock_codes:
+        corp_code = _stock_code_to_corp_code(stock_code)
+        if not corp_code:
+            logger.warning(f"[DART/annual] {stock_code} → corp_code 조회 실패, 스킵")
+            continue
+
+        rcept_no = _find_annual_report_rcept_no(corp_code)
+        if not rcept_no:
+            logger.warning(f"[DART/annual] {stock_code} 사업보고서 없음")
+            continue
+
+        zip_bytes = _fetch_dart_document_zip(rcept_no)
+        if not zip_bytes:
+            logger.warning(f"[DART/annual] {stock_code} ZIP 다운로드 실패")
+            continue
+
+        sections = _extract_sections_from_zip(zip_bytes, _ANNUAL_SECTION_HEADERS, max_chars)
+        if sections:
+            result[stock_code] = sections
+            logger.info(
+                f"[DART/annual] {stock_code} 섹션 추출 완료: {list(sections.keys())}"
+            )
+        else:
+            logger.debug(f"[DART/annual] {stock_code} 매칭 섹션 없음")
+
+    return result
+
+
+# ──────────────────────────────────────────────
 # 14. 결과 출력 헬퍼 (디버깅용)
 # ──────────────────────────────────────────────
 def print_articles(articles: list) -> None:

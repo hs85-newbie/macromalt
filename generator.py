@@ -39,6 +39,7 @@ from scraper import (
     enrich_dart_disclosures_with_fulltext,
     enrich_research_with_pdf,
     _hankyung_login,
+    run_dart_annual_report_sections,
 )
 
 load_dotenv()
@@ -1586,6 +1587,17 @@ def generate_stock_picks_report(
     if picks_dart_text:
         logger.info(f"[DART] 픽 재무 데이터 주입: {list(dart_financials.keys())}")
         context_text = context_text + "\n\n" + picks_dart_text
+
+    # ── Step 1D-2: 사업보고서 핵심 섹션 주입 (Phase 6-B) ──────────────────
+    if kr_stock_codes:
+        annual_sections = run_dart_annual_report_sections(kr_stock_codes)
+        if annual_sections:
+            lines = ["\n[DART 사업보고서 핵심 섹션]"]
+            for sc, secs in annual_sections.items():
+                for header, text in secs.items():
+                    lines.append(f"[{sc} — {header}]\n{text}")
+            context_text = context_text + "\n\n" + "\n\n".join(lines)
+            logger.info(f"[DART/annual] 사업보고서 섹션 주입: {list(annual_sections.keys())}")
 
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
     draft = gpt_write_picks(materials, picks, prices, context_text)
