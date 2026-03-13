@@ -1694,7 +1694,7 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3, session=None) -> 
 # → 첫 번째 매칭 키워드로 추출, 결과 키는 canonical_name 사용
 _ANNUAL_SECTION_KEYWORDS: dict = {
     "사업의 내용":  ["사업의 내용"],
-    "재무상태":    ["재무상태", "재무제표", "재무위험관리", "유동성 위험", "위험관리"],
+    "재무상태":    ["재무상태", "재무제표", "재무위험", "재무위험관리", "유동성"],
     "MD&A":       ["MD&A"],
     "경영진의 논의": ["경영진의 논의"],
 }
@@ -1766,11 +1766,17 @@ def _extract_sections_from_zip(
                 for canonical, keywords in section_keywords.items():
                     if canonical in result:
                         continue
+                    primary = keywords[0]
                     for kw in keywords:
                         idx = raw.find(kw)
                         if idx >= 0:
                             snippet = raw[idx: idx + max_chars]
                             result[canonical] = snippet
+                            if kw != primary:
+                                logger.info(
+                                    f"[DART/annual] '{canonical}' fallback 매칭: "
+                                    f"'{primary}' 없음 → '{kw}' 사용"
+                                )
                             logger.debug(
                                 f"[DART/annual] {xml_name} → '{canonical}' "
                                 f"(키워드: '{kw}') 위치={idx} {len(snippet)}자"
