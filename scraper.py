@@ -1282,11 +1282,14 @@ def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> d
 
         corp_name_val = (fin_data["list"][0].get("corp_name", stock_code)
                          if fin_data["list"] else stock_code)
+        did_fallback = auto_mode and used_year != candidate_years[0]
         result[stock_code] = {
-            "corp_name": corp_name_val,
-            "bsns_year": used_year,
-            "fs_div":    used_div,
-            "accounts":  accounts,
+            "corp_name":          corp_name_val,
+            "bsns_year":          used_year,          # 하위 호환 유지
+            "resolved_bsns_year": used_year,
+            "used_fallback":      did_fallback,
+            "fs_div":             used_div,
+            "accounts":           accounts,
         }
 
     logger.info(f"[DART] 재무 수치 조회 완료: {len(result)}개 종목")
