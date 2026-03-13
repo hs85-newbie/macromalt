@@ -1685,9 +1685,11 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3, session=None) -> 
 # 17. 사업보고서 섹션 파싱 (Phase 6-B)
 # ──────────────────────────────────────────────
 
-_ANNUAL_SECTION_HEADERS = ["사업의 내용", "MD&A", "경영진의 논의", "재무상태"]
+# 우선순위: 사업의 내용(1) > 재무상태(2) > MD&A/경영진의 논의(3, optional)
+# 1+2 추출 시 성공으로 간주. 3 미존재는 오류 처리하지 않음.
+# 3은 대형주/해외주식 확장 시 재검토.
+_ANNUAL_SECTION_HEADERS = ["사업의 내용", "재무상태", "MD&A", "경영진의 논의"]
 _ANNUAL_SECTION_MAX     = 400   # 섹션당 프롬프트 주입 상한 (자)
-_ANNUAL_HEADER_PROBE    = 200   # 헤더 존재 여부 탐지용 파일 앞부분 (자)
 
 
 def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
