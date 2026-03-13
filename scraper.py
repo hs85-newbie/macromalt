@@ -944,6 +944,9 @@ DART_TARGET_ACCOUNTS: list = [
     "자산총계",
     "부채총계",
     "자본총계",
+    # 현금흐름표 — DART account_nm 표기 두 가지 모두 포함
+    "영업활동현금흐름",
+    "영업활동으로인한현금흐름",
 ]
 
 
@@ -1182,8 +1185,13 @@ def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> d
             ...
         }
     """
-    if bsns_year is None:
-        bsns_year = str(datetime.now().year - 1)
+    # auto_mode: bsns_year 미지정 → 전년도 시도 후 2년 전으로 fallback
+    auto_mode = bsns_year is None
+    if auto_mode:
+        cur = datetime.now().year
+        candidate_years = [str(cur - 1), str(cur - 2)]
+    else:
+        candidate_years = [bsns_year]
 
     result: dict = {}
 
@@ -1193,25 +1201,36 @@ def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> d
             logger.warning(f"[DART] {stock_code} → corp_code 조회 실패, 재무 수집 스킵")
             continue
 
-        # CFS(연결) 우선, 없으면 OFS(개별)
+        # CFS(연결) 우선, 없으면 OFS(개별) — 연도 fallback 포함
         fin_data  = None
         used_div  = None
-        for fs_div in ("CFS", "OFS"):
-            params = {
-                "corp_code":  corp_code,
-                "bsns_year":  bsns_year,
-                "reprt_code": "11011",   # 사업보고서
-                "fs_div":     fs_div,
-            }
-            fin_data = _dart_get("fnlttSinglAcnt.json", params,
-                                 label=f"/fnltt {stock_code} {fs_div}")
+        used_year = None
+        for year in candidate_years:
+            for fs_div in ("CFS", "OFS"):
+                params = {
+                    "corp_code":  corp_code,
+                    "bsns_year":  year,
+                    "reprt_code": "11011",   # 사업보고서
+                    "fs_div":     fs_div,
+                }
+                fin_data = _dart_get("fnlttSinglAcnt.json", params,
+                                     label=f"/fnltt {stock_code} {fs_div}")
+                if fin_data and fin_data.get("list"):
+                    used_div  = fs_div
+                    used_year = year
+                    if auto_mode and year != candidate_years[0]:
+                        logger.info(
+                            f"[DART] {stock_code} fallback 적용 "
+                            f"({candidate_years[0]} 미공시 → {year})"
+                        )
+                    logger.info(f"[DART] {stock_code} 재무 조회 성공 ({fs_div}, {year})")
+                    break
             if fin_data and fin_data.get("list"):
-                used_div = fs_div
-                logger.info(f"[DART] {stock_code} 재무 조회 성공 ({fs_div}, {bsns_year})")
                 break
 
         if not fin_data or not fin_data.get("list"):
-            logger.warning(f"[DART] {stock_code} 재무 데이터 없음 (bsns_year={bsns_year})")
+            tried = ", ".join(candidate_years)
+            logger.warning(f"[DART] {stock_code} 재무 데이터 없음 (시도 연도: {tried})")
             continue
 
         # 수치 파싱 헬퍼
@@ -1232,8 +1251,17 @@ def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> d
             frmtrm = _parse_amount(item.get("frmtrm_amount", ""))
             raw[acct_nm] = {"thstrm": thstrm, "frmtrm": frmtrm}
 
-            if acct_nm in ("매출액", "영업이익", "당기순이익"):
+            _INCOME_ACCOUNTS = ("매출액", "영업이익", "당기순이익")
+            _CF_ACCOUNTS = ("영업활동현금흐름", "영업활동으로인한현금흐름")
+            if acct_nm in _INCOME_ACCOUNTS:
                 accounts[acct_nm] = {
+                    "thstrm": thstrm,
+                    "frmtrm": frmtrm,
+                    "unit":   "백만원",
+                }
+            elif acct_nm in _CF_ACCOUNTS:
+                # 두 표기 모두 "영업활동현금흐름"으로 통일
+                accounts["영업활동현금흐름"] = {
                     "thstrm": thstrm,
                     "frmtrm": frmtrm,
                     "unit":   "백만원",
@@ -1256,7 +1284,7 @@ def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> d
                          if fin_data["list"] else stock_code)
         result[stock_code] = {
             "corp_name": corp_name_val,
-            "bsns_year": bsns_year,
+            "bsns_year": used_year,
             "fs_div":    used_div,
             "accounts":  accounts,
         }
