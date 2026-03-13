@@ -1685,11 +1685,20 @@ def enrich_research_with_pdf(articles: list, max_pdf: int = 3, session=None) -> 
 # 17. 사업보고서 섹션 파싱 (Phase 6-B)
 # ──────────────────────────────────────────────
 
-# 우선순위: 사업의 내용(1) > 재무상태(2) > MD&A/경영진의 논의(3, optional)
-# 1+2 추출 시 성공으로 간주. 3 미존재는 오류 처리하지 않음.
-# 3은 대형주/해외주식 확장 시 재검토.
-_ANNUAL_SECTION_HEADERS = ["사업의 내용", "재무상태", "MD&A", "경영진의 논의"]
-_ANNUAL_SECTION_MAX     = 400   # 섹션당 프롬프트 주입 상한 (자)
+# 섹션 추출 우선순위 정책:
+#   1 사업의 내용  — 필수
+#   2 재무상태    — 필수. "재무상태 또는 이에 준하는 재무/위험 문맥" fallback 포함
+#   3 MD&A/경영진의 논의 — optional. 1+2 추출 시 성공으로 간주.
+#                          3은 대형주/해외주식 확장 시 재검토.
+# dict 구조: {canonical_name: [검색 키워드 우선순위 순]}
+# → 첫 번째 매칭 키워드로 추출, 결과 키는 canonical_name 사용
+_ANNUAL_SECTION_KEYWORDS: dict = {
+    "사업의 내용":  ["사업의 내용"],
+    "재무상태":    ["재무상태", "재무제표", "재무위험관리", "유동성 위험", "위험관리"],
+    "MD&A":       ["MD&A"],
+    "경영진의 논의": ["경영진의 논의"],
+}
+_ANNUAL_SECTION_MAX = 400   # 섹션당 프롬프트 주입 상한 (자)
 
 
 def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
@@ -1716,21 +1725,21 @@ def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
 
 def _extract_sections_from_zip(
     zip_bytes: bytes,
-    target_headers: list,
+    section_keywords: dict,
     max_chars: int = _ANNUAL_SECTION_MAX,
 ) -> dict:
     """
     사업보고서 ZIP 내 XML 파일들을 순회.
-    각 파일 전체 텍스트에서 target_headers 키워드를 검색하고,
-    키워드 발견 위치부터 max_chars 자를 추출해 {헤더: 텍스트} 반환.
-    단일 대형 XML 파일(사업보고서 전형) 및 분할 파일 모두 지원.
+    section_keywords: {canonical_name: [검색키워드, ...]} — 키워드 우선순위 순 fallback.
+    각 파일 전체 텍스트에서 첫 매칭 키워드 위치부터 max_chars 자 추출.
+    결과 키는 canonical_name. 단일 대형 XML 및 분할 파일 모두 지원.
     """
     result: dict = {}
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             xml_names = sorted(n for n in zf.namelist() if n.upper().endswith(".XML"))
             for xml_name in xml_names:
-                if len(result) >= len(target_headers):
+                if len(result) >= len(section_keywords):
                     break
                 try:
                     xml_bytes = zf.read(xml_name)
@@ -1753,18 +1762,20 @@ def _extract_sections_from_zip(
                 if not raw:
                     continue
 
-                # 헤더 탐지: 전체 텍스트에서 키워드 위치 검색
-                for header in target_headers:
-                    if header in result:
+                # 섹션별 키워드 우선순위 fallback 검색
+                for canonical, keywords in section_keywords.items():
+                    if canonical in result:
                         continue
-                    idx = raw.find(header)
-                    if idx >= 0:
-                        snippet = raw[idx: idx + max_chars]
-                        result[header] = snippet
-                        logger.debug(
-                            f"[DART/annual] {xml_name} → 섹션 '{header}' "
-                            f"위치={idx} {len(snippet)}자"
-                        )
+                    for kw in keywords:
+                        idx = raw.find(kw)
+                        if idx >= 0:
+                            snippet = raw[idx: idx + max_chars]
+                            result[canonical] = snippet
+                            logger.debug(
+                                f"[DART/annual] {xml_name} → '{canonical}' "
+                                f"(키워드: '{kw}') 위치={idx} {len(snippet)}자"
+                            )
+                            break
 
     except Exception as e:
         logger.warning(f"[DART/annual] ZIP 섹션 파싱 실패: {e}")
@@ -1805,7 +1816,7 @@ def run_dart_annual_report_sections(
             logger.warning(f"[DART/annual] {stock_code} ZIP 다운로드 실패")
             continue
 
-        sections = _extract_sections_from_zip(zip_bytes, _ANNUAL_SECTION_HEADERS, max_chars)
+        sections = _extract_sections_from_zip(zip_bytes, _ANNUAL_SECTION_KEYWORDS, max_chars)
         if sections:
             result[stock_code] = sections
             logger.info(
