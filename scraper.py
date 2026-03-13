@@ -13,10 +13,13 @@ Phase 6 변경:
   - run_research_sources()가 sources.json을 자동 순회 (하드코딩 제거)
 """
 
+import io
 import json
 import logging
 import os
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -908,6 +911,11 @@ def fetch_hankyung_consensus(days: int = 30) -> list:
 # ── 상수: API 기본 URL ─────────────────────────────────────────────────────
 DART_API_BASE = "https://opendart.fss.or.kr/api"
 
+# ── 상수: corp_code 캐시 파일 경로 ────────────────────────────────────────
+DART_CORP_CODE_CACHE = Path(__file__).parent / "dart_corp_codes.json"
+# 캐시 유효기간: 1일 (86400초). 당일 이미 다운로드했으면 재사용
+DART_CORP_CODE_CACHE_TTL = 86400
+
 # ── 상수: 공시 이벤트 키워드 → 이벤트 타입 매핑 (확장 가능)
 # 보고서명에 키워드가 포함될 경우 해당 event_type으로 분류됩니다.
 # 새 이벤트 유형 추가 시 이 딕셔너리만 수정하세요.
@@ -948,6 +956,79 @@ def _get_dart_api_key() -> str:
             "https://opendart.fss.or.kr/ 에서 무료 발급 후 설정하세요."
         )
     return key
+
+
+def _load_corp_code_map() -> dict:
+    """
+    stock_code(6자리) → corp_code(8자리) 매핑 딕셔너리를 반환합니다.
+
+    OpenDART corpCode.xml(ZIP)을 다운로드해 파싱하고,
+    DART_CORP_CODE_CACHE 경로에 JSON으로 캐싱합니다.
+    캐시가 TTL 이내이면 파일에서 로드해 재사용합니다.
+
+    반환값:
+        {"005930": "00126380", "000660": "00164779", ...}
+        실패 시 빈 딕셔너리 반환 (파이프라인 중단 없음).
+    """
+    # ── 캐시 히트 확인 ────────────────────────────────────────────────────
+    if DART_CORP_CODE_CACHE.exists():
+        age = datetime.now().timestamp() - DART_CORP_CODE_CACHE.stat().st_mtime
+        if age < DART_CORP_CODE_CACHE_TTL:
+            try:
+                with open(DART_CORP_CODE_CACHE, encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info(f"[DART] corp_code 캐시 로드: {len(data)}건 (갱신일 기준 {int(age/3600)}h 경과)")
+                return data
+            except (json.JSONDecodeError, OSError):
+                pass  # 캐시 손상 시 재다운로드
+
+    # ── corpCode.xml 다운로드 ─────────────────────────────────────────────
+    try:
+        key = _get_dart_api_key()
+    except ValueError as e:
+        logger.warning(f"[DART] corp_code 맵 로드 실패: {e}")
+        return {}
+
+    url = f"{DART_API_BASE}/corpCode.xml"
+    try:
+        resp = requests.get(url, params={"crtfc_key": key}, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning(f"[DART] corpCode.xml 다운로드 실패: {e}")
+        return {}
+
+    # ── ZIP → XML 파싱 ────────────────────────────────────────────────────
+    try:
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            xml_name = next(n for n in zf.namelist() if n.upper().endswith(".XML"))
+            xml_bytes = zf.read(xml_name)
+    except (zipfile.BadZipFile, StopIteration) as e:
+        logger.warning(f"[DART] corpCode.xml ZIP 파싱 실패: {e}")
+        return {}
+
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        logger.warning(f"[DART] corpCode.xml XML 파싱 실패: {e}")
+        return {}
+
+    # ── stock_code → corp_code 매핑 구축 ─────────────────────────────────
+    corp_map: dict = {}
+    for item in root.findall("list"):
+        stock_code = (item.findtext("stock_code") or "").strip()
+        corp_code  = (item.findtext("corp_code")  or "").strip()
+        if stock_code and corp_code:
+            corp_map[stock_code] = corp_code
+
+    # ── 캐시 저장 ─────────────────────────────────────────────────────────
+    try:
+        with open(DART_CORP_CODE_CACHE, "w", encoding="utf-8") as f:
+            json.dump(corp_map, f, ensure_ascii=False)
+        logger.info(f"[DART] corp_code 캐시 저장 완료: {len(corp_map)}건 → {DART_CORP_CODE_CACHE.name}")
+    except OSError as e:
+        logger.warning(f"[DART] corp_code 캐시 저장 실패: {e}")
+
+    return corp_map
 
 
 def _dart_get(endpoint: str, params: dict, label: str = "") -> Optional[dict]:
@@ -1066,13 +1147,10 @@ def run_dart_disclosure_scan(days: int = 14) -> list:
 def _stock_code_to_corp_code(stock_code: str) -> Optional[str]:
     """
     종목코드(6자리) → DART 고유번호(8자리) 변환.
-    fnlttSinglAcnt 호출 시 corp_code가 필요하므로 선행 조회합니다.
+    corpCode.xml 캐시(_load_corp_code_map)를 사용합니다.
     """
-    data = _dart_get("company.json", {"stock_code": stock_code},
-                     label=f"/company {stock_code}")
-    if data is None:
-        return None
-    return data.get("corp_code") or None
+    corp_map = _load_corp_code_map()
+    return corp_map.get(stock_code) or None
 
 
 def run_dart_financials(stock_codes: list, bsns_year: Optional[str] = None) -> dict:
@@ -1205,9 +1283,14 @@ def run_dart_company_info(stock_codes: list) -> dict:
             ...
         }
     """
+    corp_map = _load_corp_code_map()
     result: dict = {}
     for stock_code in stock_codes:
-        data = _dart_get("company.json", {"stock_code": stock_code},
+        corp_code = corp_map.get(stock_code)
+        if not corp_code:
+            logger.warning(f"[DART] {stock_code} → corp_code 매핑 없음, 기업정보 스킵")
+            continue
+        data = _dart_get("company.json", {"corp_code": corp_code},
                          label=f"/company_info {stock_code}")
         if data is None:
             continue
@@ -1215,7 +1298,7 @@ def run_dart_company_info(stock_codes: list) -> dict:
             "corp_name": data.get("corp_name", ""),
             "ind_tp":    data.get("ind_tp",    ""),
             "acc_mt":    data.get("acc_mt",    ""),
-            "corp_code": data.get("corp_code", ""),
+            "corp_code": corp_code,
         }
 
     logger.info(f"[DART] 기본정보 조회 완료: {len(result)}개 종목")
