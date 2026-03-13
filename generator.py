@@ -36,6 +36,7 @@ from scraper import (
     run_dart_financials,
     run_dart_company_info,
     format_dart_for_prompt,
+    enrich_research_with_pdf,
 )
 
 load_dotenv()
@@ -232,6 +233,9 @@ def format_research_for_prompt(research: list) -> str:
             lines.append(f"   URL: {url}")
         if summary:
             lines.append(f"   요약: {summary[:200]}")
+        pdf_snippet = item.get("pdf_snippet", "")
+        if pdf_snippet:
+            lines.append(f"   [PDF 본문 발췌] {pdf_snippet[:300]}")
 
     return "\n".join(lines)
 
@@ -1437,6 +1441,7 @@ def generate_deep_analysis(news: list, research: list) -> dict:
         {"title", "content", "theme", "key_data", "materials", "generated_at"}
         ※ materials: Post 2에 전달하기 위한 구조화 데이터
     """
+    enrich_research_with_pdf(research)
     news_text     = format_articles_for_prompt(news)
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
@@ -1523,6 +1528,7 @@ def generate_stock_picks_report(
     반환:
         {"title", "content", "picks", "prices", "generated_at"}
     """
+    enrich_research_with_pdf(research)
     news_text     = format_articles_for_prompt(news)
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"

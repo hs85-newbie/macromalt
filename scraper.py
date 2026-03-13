@@ -1414,6 +1414,139 @@ def format_dart_for_prompt(
 
 
 # ──────────────────────────────────────────────
+# 15. PDF 리포트 enrich (Phase 5-B)
+# ──────────────────────────────────────────────
+
+_PDF_MAX_BYTES = 5 * 1024 * 1024  # 5 MB 상한
+_PDF_SNIPPET_MAX = 800            # 최대 추출 문자 수
+_PDF_KEY_TERMS = (
+    "목표주가", "목표 주가", "투자의견", "영업이익", "매출액",
+    "전망", "리스크", "컨센서스", "BUY", "HOLD", "SELL",
+    "주당순이익", "PER", "EPS",
+)
+
+
+def _fetch_pdf_bytes(url: str) -> Optional[bytes]:
+    """PDF URL → bytes. 실패 시 None 반환 (예외 비전파)."""
+    if not url:
+        return None
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+            stream=True,
+        )
+        if resp.status_code != 200:
+            return None
+        ct = resp.headers.get("Content-Type", "")
+        if "pdf" not in ct.lower() and not url.lower().endswith(".pdf"):
+            return None
+        # 크기 제한: 스트리밍으로 5 MB까지만 읽음
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(65536):
+            total += len(chunk)
+            if total > _PDF_MAX_BYTES:
+                logger.debug(f"[PDF] {url} — 5 MB 초과, skip")
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except Exception as exc:
+        logger.debug(f"[PDF] 다운로드 실패 {url}: {exc}")
+        return None
+
+
+def _extract_pdf_key_sections(pdf_bytes: bytes) -> str:
+    """
+    pdfplumber로 핵심 섹션만 추출 → 최대 800자.
+    1) 1~2페이지 전체 텍스트
+    2) 나머지 페이지에서 키워드 근방 ±2줄
+    실패 시 빈 문자열 반환.
+    """
+    try:
+        import pdfplumber  # 선택적 의존성 — 설치 안 됐으면 예외 발생
+    except ImportError:
+        logger.warning("[PDF] pdfplumber 미설치 — pip install pdfplumber")
+        return ""
+    try:
+        import io as _io
+        collected: list[str] = []
+
+        with pdfplumber.open(_io.BytesIO(pdf_bytes)) as pdf:
+            pages = pdf.pages
+
+            # ① 앞 2페이지 전체
+            for page in pages[:2]:
+                text = page.extract_text() or ""
+                if text.strip():
+                    collected.append(text.strip())
+
+            # ② 나머지 페이지 — 키워드 근방 ±2줄
+            for page in pages[2:]:
+                text = page.extract_text() or ""
+                if not text.strip():
+                    continue
+                lines = text.splitlines()
+                matched_idx: set[int] = set()
+                for idx, line in enumerate(lines):
+                    if any(kw in line for kw in _PDF_KEY_TERMS):
+                        for j in range(max(0, idx - 2), min(len(lines), idx + 3)):
+                            matched_idx.add(j)
+                if matched_idx:
+                    snippet = "\n".join(lines[i] for i in sorted(matched_idx))
+                    collected.append(snippet)
+
+        merged = "\n".join(collected)
+        # 중복 공백 정리 + 하드 컷
+        merged = re.sub(r"\n{3,}", "\n\n", merged).strip()
+        return merged[:_PDF_SNIPPET_MAX]
+
+    except Exception as exc:
+        logger.debug(f"[PDF] 파싱 실패: {exc}")
+        return ""
+
+
+def enrich_research_with_pdf(articles: list, max_pdf: int = 3) -> list:
+    """
+    research article 리스트에 pdf_snippet 필드를 in-place 추가.
+    weight 내림차순 기준 상위 max_pdf 건만 시도.
+    실패한 항목은 건너뜀 (전체 중단 없음).
+    """
+    if not articles:
+        return articles
+
+    sorted_by_weight = sorted(
+        range(len(articles)),
+        key=lambda i: articles[i].get("weight", 1),
+        reverse=True,
+    )
+
+    tried = 0
+    for idx in sorted_by_weight:
+        if tried >= max_pdf:
+            break
+        article = articles[idx]
+        url = article.get("url", "")
+        if not url:
+            continue
+
+        pdf_bytes = _fetch_pdf_bytes(url)
+        if not pdf_bytes:
+            continue
+
+        tried += 1
+        snippet = _extract_pdf_key_sections(pdf_bytes)
+        if snippet:
+            article["pdf_snippet"] = snippet
+            logger.info(f"[PDF] enrich 완료: {article.get('title','?')[:40]} ({len(snippet)}자)")
+        else:
+            logger.debug(f"[PDF] 추출 내용 없음: {url}")
+
+    return articles
+
+
+# ──────────────────────────────────────────────
 # 14. 결과 출력 헬퍼 (디버깅용)
 # ──────────────────────────────────────────────
 def print_articles(articles: list) -> None:

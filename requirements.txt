@@ -45,3 +45,6 @@ yfinance>=1.2.0
 
 # [마크다운 변환] 마크다운 → WordPress HTML 변환
 markdown>=3.9
+
+# [PDF 파싱] 증권사 리포트 PDF 본문 추출 (Phase 5-B)
+pdfplumber>=0.11
