@@ -7,6 +7,7 @@ WordPress REST API를 통해 임시저장(Draft)으로 업로드합니다.
 
 import logging
 import os
+import re
 
 import requests
 from dotenv import load_dotenv
@@ -52,6 +53,15 @@ def _get_wp_config() -> dict:
 # ──────────────────────────────────────────────
 # 2. 마크다운 → WordPress 발행 함수
 # ──────────────────────────────────────────────
+def _strip_leading_h1(content: str) -> str:
+    """
+    WordPress 발행 전 content에서 맨 앞 <h1> 태그를 제거합니다.
+    WordPress가 title 필드를 별도로 렌더링하므로 content에 h1이 있으면
+    제목이 페이지에 두 번 출력됩니다. 발행 단계에서만 제거합니다.
+    """
+    return re.sub(r"^\s*<h1[^>]*>.*?</h1>\s*", "", content, count=1, flags=re.DOTALL)
+
+
 def publish_draft(title: str, content: str, category_ids: list = None) -> dict:
     """
     마크다운 콘텐츠를 WordPress에 임시저장(Draft)으로 업로드합니다.
@@ -88,6 +98,9 @@ def publish_draft(title: str, content: str, category_ids: list = None) -> dict:
                 category_ids = [2]
         else:
             category_ids = [2]
+
+    # 발행 전 content에서 중복 h1 제거 (WordPress가 title을 별도 렌더링하므로)
+    content = _strip_leading_h1(content)
 
     payload = {
         "title": title,

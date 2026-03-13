@@ -476,10 +476,95 @@ def _strip_code_fences(text: str) -> str:
     return text.strip()
 
 
+def _fix_double_typing(content: str) -> str:
+    """
+    GPT/Gemini 출력에서 발생하는 중복 타이핑 패턴을 교정합니다.
+
+    대상:
+      - 태그 중복: [해해석] → [해석], [전전망] → [전망]
+      - 공백 포함 태그: [해 해석] → [해석], [전 전망] → [전망]
+      - 한글 2~4자 단어가 공백 하나를 사이에 두고 즉시 반복: "미 미", "을 을" 등
+      - 연속 공백 → 단일 공백
+    """
+    # 1. 태그 중복 교정
+    content = re.sub(r"\[해해석\]",  "[해석]", content)
+    content = re.sub(r"\[전전망\]",  "[전망]", content)
+    content = re.sub(r"\[해\s해석\]", "[해석]", content)
+    content = re.sub(r"\[전\s전망\]", "[전망]", content)
+
+    # 2. 한글 단어 즉시 중복 제거: "미 미칠" → "미칠", "을 을" → "을"
+    #    패턴: (한글 1~4자) 공백 (동일 한글) — 단어 경계에서만
+    content = re.sub(
+        r"([가-힣]{1,4}) \1(?=[가-힣\s<])",
+        lambda m: m.group(1),
+        content,
+    )
+
+    # 3. 연속 공백 정리
+    content = re.sub(r"[ \t]{2,}", " ", content)
+
+    return content
+
+
+def _format_source_section(content: str) -> str:
+    """
+    '참고 출처' 섹션을 증권사 리서치 / 뉴스 기사 / 기타로 분류해
+    시각적으로 명확한 구조로 재구성합니다.
+    """
+    BROKER_KW = ["증권", "투자", "리서치", "Research", "securities", "애널리스트"]
+    NEWS_KW   = ["경제", "신문", "뉴스", "통신", "비즈", "Bloomberg", "Reuters",
+                 "로이터", "블룸버그", "CNBC", "전자신문", "조선", "매일", "한경"]
+
+    BOX_STYLE  = ("background:#f9f9f9;border-left:4px solid #b36b00;"
+                  "padding:14px 18px;margin:30px 0 0 0;border-radius:0 4px 4px 0;")
+    H_STYLE    = "font-size:13px;font-weight:700;color:#555;margin:0 0 8px 0;"
+    CAT_STYLE  = "font-size:12px;color:#999;margin:6px 0 2px 0;"
+    UL_STYLE   = "margin:0;padding-left:18px;"
+    LI_STYLE   = "font-size:13px;line-height:1.8;color:#555;margin:2px 0;"
+
+    def _rebuild(match: re.Match) -> str:
+        raw = re.sub(r"<[^>]+>", " ", match.group(0))
+        parts = re.split(r"[\n,·•]+", raw)
+        items = [p.strip(" \t\r-") for p in parts if len(p.strip()) > 2]
+        items = [i for i in items if i.lower() not in ("참고 출처", "참고출처")]
+
+        brokers = [i for i in items if any(k in i for k in BROKER_KW)]
+        news    = [i for i in items if any(k in i for k in NEWS_KW) and i not in brokers]
+        others  = [i for i in items if i not in brokers and i not in news]
+
+        out = [f'<div style="{BOX_STYLE}">',
+               f'<h3 style="{H_STYLE}">참고 출처</h3>']
+
+        def _section(label: str, icon: str, lst: list) -> None:
+            if not lst:
+                return
+            out.append(f'<p style="{CAT_STYLE}">{icon} {label}</p>')
+            out.append(f'<ul style="{UL_STYLE}">')
+            for x in lst:
+                out.append(f'<li style="{LI_STYLE}">{x}</li>')
+            out.append("</ul>")
+
+        _section("증권사 리서치", "📊", brokers)
+        _section("뉴스 기사",    "📰", news)
+        _section("기타",         "📌", others)
+
+        out.append("</div>")
+        return "\n".join(out)
+
+    content = re.sub(
+        r"<h3[^>]*>\s*참고\s*출처\s*</h3>.*?(?=<h3|<!--\s*PICKS|$)",
+        _rebuild,
+        content,
+        flags=re.DOTALL,
+    )
+    return content
+
+
 def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
     """
     GPT 초고에서 PICKS JSON 주석을 제거하고,
     각 티커의 {PRICE_PLACEHOLDER}를 실제 종가(기준일 포함)로 교체합니다.
+    Phase 5-A: 오탈자·중복 타이핑 교정 + 참고 출처 섹션 재구성 추가.
     """
     content = _strip_code_fences(raw_content)  # Phase 4.3: 코드펜스/백틱 제거
     content = re.sub(r"<!--\s*PICKS:\s*\[.*?\]\s*-->", "", content, flags=re.DOTALL)
@@ -492,6 +577,11 @@ def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
 
     content = content.replace("{PRICE_PLACEHOLDER}", "N/A")
     content = re.sub(r"\n{3,}", "\n\n", content)
+
+    # Phase 5-A 후처리
+    content = _fix_double_typing(content)      # 오탈자/중복 타이핑 교정
+    content = _format_source_section(content)  # 참고 출처 섹션 재구성
+
     return content.strip()
 
 
@@ -1370,6 +1460,10 @@ def generate_deep_analysis(news: list, research: list) -> dict:
         final_content = verify_result["revised_content"]
     else:
         final_content = draft
+
+    # ── Phase 5-A 후처리 ─────────────────────────────────────────────────
+    final_content = _fix_double_typing(final_content)
+    final_content = _format_source_section(final_content)
 
     # ── Phase 4.3: 보존율 요약 로그 ──────────────────────────────────────
     final_len = len(final_content)
