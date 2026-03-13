@@ -1,7 +1,7 @@
 # macromalt Phase 8 Handoff
 
 작성일: 2026-03-13
-브랜치: main (4c3084e)
+브랜치: main (6474c87)
 
 ---
 
@@ -20,6 +20,7 @@
 | 3 | 기준1 오탐 제거 (과거 확정 실적 예외) + 기준5 표현 2종 추가 (수혜를 받을 수 있는, 실적 개선 효과를 기대할 수 있는) | 5fc5b82 |
 | 4 | publisher.py: `"draft"` → `"publish"` | 6ded3a0 |
 | 5 | portfolio.json 업데이트 | 4c3084e |
+| 6 | 기존 draft 포스트(p=104, p=105) WP REST API로 publish 전환 | (운영 작업, 커밋 없음) |
 
 ---
 
@@ -86,8 +87,8 @@
 | publish 상태 발행 | ❌ draft | ✅ publish |
 
 최종 발행 URL:
-- Post1: https://macromalt.com/심층분석-중동-지정학적-리스크와-증시-변동성/
-- Post2: https://macromalt.com/캐시의-픽-sk이노베이션-외-국제-유가-급등/
+- Post1 (p=104): https://macromalt.com/심층분석-중동-지정학적-리스크-고조에-따른-국제-유-2/
+- Post2 (p=105): https://macromalt.com/캐시의-픽-sk하이닉스-외-중동-리스크와-유가-상승/
 
 ---
 
