@@ -67,6 +67,13 @@ def _call_gpt(system: str, user: str, label: str,
     client = OpenAI(api_key=api_key)
     logger.info(f"GPT-4o 호출 시작 ({label})")
 
+    if os.getenv("DEBUG_LLM"):
+        logger.debug(
+            f"[DEBUG_LLM] GPT payload ({label}) | "
+            f"model=gpt-4o temperature={temperature} max_tokens={max_tokens} "
+            f"system_len={len(system)} user_len={len(user)}"
+        )
+
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -100,6 +107,14 @@ def _call_gemini(system: str, user: str, label: str,
     try:
         client = genai.Client(api_key=api_key)
         logger.info(f"Gemini 호출 시작 ({label})")
+
+        if os.getenv("DEBUG_LLM"):
+            logger.debug(
+                f"[DEBUG_LLM] Gemini payload ({label}) | "
+                f"model=gemini-2.5-flash temperature={temperature} "
+                f"max_output_tokens=3000 thinking_budget=0 "
+                f"system_len={len(system)} user_len={len(user)}"
+            )
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
