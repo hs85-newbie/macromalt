@@ -1376,7 +1376,9 @@ def format_dart_for_prompt(
             corp_name = info.get("corp_name", stock_code)
             bsns_year = info.get("bsns_year", "")
             fs_div    = info.get("fs_div", "")
-            lines.append(f"\n▶ {corp_name} ({stock_code}) — {bsns_year}년 {fs_div}")
+            year_str      = info.get("resolved_bsns_year") or bsns_year
+            fallback_note = " (fallback 적용)" if info.get("used_fallback") else ""
+            lines.append(f"\n▶ {corp_name} ({stock_code}) — DART 재무 기준연도: {year_str}{fallback_note} / {fs_div}")
             for acct_nm, values in info.get("accounts", {}).items():
                 thstrm = values.get("thstrm")
                 frmtrm = values.get("frmtrm")
