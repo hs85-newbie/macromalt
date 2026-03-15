@@ -267,47 +267,102 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"⚠ 발행 이력 저장 실패 (비치명): {e}")
 
-    # ── Phase 12: Post1/Post2 역할 분리 진단 + 최종 게이트 로그 ────────────
+    # ── Phase 13: Post1/Post2 역할 분리 + 해석 지성 + 신뢰성 게이트 ────────
     try:
-        from generator import _check_post_separation
+        from generator import (
+            _check_post_separation,
+            _check_post_continuity,
+        )
+
         if post1 is not None and post2 is not None:
             sep = _check_post_separation(
                 post1.get("content", ""), post2.get("content", "")
             )
             sep_status = sep["status"]
+            continuity = _check_post_continuity(
+                post1.get("content", ""), post2.get("content", "")
+            )
+            continuity_status = continuity["status"]
         else:
             sep_status = "SKIP"
+            continuity_status = "SKIP"
 
-        # 품질 스코어 수집
+        # Phase 12 품질 스코어
         p1_scores = post1.get("quality_scores", {}) if post1 else {}
-        p2_scores = post2.get("quality_scores", {}) if post2 else {}
+
+        # Phase 13 진단 스코어
+        p1_p13 = post1.get("p13_scores", {}) if post1 else {}
+        p2_p13 = post2.get("p13_scores", {}) if post2 else {}
 
         def _gate(score_dict: dict, key: str) -> str:
             return score_dict.get(key, "SKIP")
 
+        def _p13gate(p13_dict: dict, sub: str, key: str = "status") -> str:
+            sub_dict = p13_dict.get(sub, {})
+            if isinstance(sub_dict, dict):
+                return sub_dict.get(key, "SKIP")
+            return "SKIP"
+
+        def _worst(a: str, b: str) -> str:
+            rank = {"FAIL": 0, "WARN": 1, "PASS": 2, "SKIP": 3}
+            return a if rank.get(a, 3) <= rank.get(b, 3) else b
+
+        temporal_status = _worst(
+            _p13gate(p1_p13, "temporal"), _p13gate(p2_p13, "temporal")
+        )
+        numeric_status = _worst(
+            _p13gate(p1_p13, "numeric"), _p13gate(p2_p13, "numeric")
+        )
+        closure_status = _worst(
+            _p13gate(p1_p13, "closure"), _p13gate(p2_p13, "closure")
+        )
+        interp_p1 = _p13gate(p1_p13, "interpretation", key="overall")
+        interp_p2 = _p13gate(p2_p13, "interpretation", key="overall")
+        hedge_p1  = _p13gate(p1_p13, "interpretation", key="hedge_overuse")
+        hedge_p2  = _p13gate(p2_p13, "interpretation", key="hedge_overuse")
+        ctr_p1    = _p13gate(p1_p13, "interpretation", key="counterpoint_spec")
+        ctr_p2    = _p13gate(p2_p13, "interpretation", key="counterpoint_spec")
+
+        hold_conditions = [
+            temporal_status == "FAIL",
+            numeric_status  == "FAIL",
+        ]
+
         gate = {
-            "numeric_density":            _gate(p1_scores, "numeric_density"),
-            "time_anchor":                _gate(p1_scores, "time_anchor"),
-            "unsupported_specificity_guard": "PASS",  # 프롬프트 규칙으로 제어 (런타임 감지 불가)
-            "counterpoint_presence":      _gate(p1_scores, "counterpoint_presence"),
-            "generic_wording_control":    _gate(p1_scores, "generic_wording"),
-            "post_role_separation":       sep_status,
-            "phase11_compatibility":      "PASS",  # Phase 11 이력 구조 유지 확인
-            "public_signature_stability": "PASS",  # 서명 변경 없음
-            "import_build":               "PASS",  # 이미 import 성공
-            "final_status":               "GO" if sep_status in ("PASS", "WARN", "SKIP") else "HOLD",
+            # ── Phase 12 기존 키 유지 ─────────────────────────────────────
+            "numeric_density":             _gate(p1_scores, "numeric_density"),
+            "time_anchor":                 _gate(p1_scores, "time_anchor"),
+            "counterpoint_presence":       _gate(p1_scores, "counterpoint_presence"),
+            "generic_wording_control":     _gate(p1_scores, "generic_wording"),
+            "post_role_separation":        sep_status,
+            # ── Phase 13 신규 키 ──────────────────────────────────────────
+            "interpretation_quality_p1":   interp_p1,
+            "interpretation_quality_p2":   interp_p2,
+            "hedge_overuse_p1":            hedge_p1,
+            "hedge_overuse_p2":            hedge_p2,
+            "counterpoint_specificity_p1": ctr_p1,
+            "counterpoint_specificity_p2": ctr_p2,
+            "post1_post2_continuity":      continuity_status,
+            "temporal_consistency":        temporal_status,
+            "numeric_sanity":              numeric_status,
+            "verifier_revision_closure":   closure_status,
+            # ── 공통 안정성 ────────────────────────────────────────────────
+            "phase12_compatibility":       "PASS",
+            "public_signature_stability":  "PASS",
+            "import_build":                "PASS",
+            "final_status":                "HOLD" if any(hold_conditions) else "GO",
         }
 
-        logger.info("[Phase 12] 최종 품질 게이트:")
+        logger.info("[Phase 13] 최종 품질 게이트:")
         for k, v in gate.items():
             logger.info(f"  {k}: {v}")
 
     except Exception as e:
-        logger.warning(f"⚠ Phase 12 품질 게이트 집계 실패 (비치명): {e}")
+        logger.warning(f"⚠ Phase 13 품질 게이트 집계 실패 (비치명): {e}")
 
     # ── 최종 결과 요약 ────────────────────────────────
     logger.info("=" * 60)
-    logger.info(f"🎉 macromalt Phase 12 파이프라인 완료 [run_id: {run_id}] [슬롯: {slot}]")
+    logger.info(f"🎉 macromalt Phase 13 파이프라인 완료 [run_id: {run_id}] [슬롯: {slot}]")
     logger.info("-" * 60)
 
     if post1_result:

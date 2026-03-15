@@ -785,6 +785,504 @@ def _check_post_separation(post1_content: str, post2_content: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SECTION A-3: Phase 13 — 해석 지성 & 시간/수치 신뢰성 강화
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Track A-1: 비자명성 기준 ────────────────────────────────────────────────
+_P13_INTERPRETATION_STANDARD: str = """
+[Phase 13 — 해석 지성: 비자명성 기준]
+[해석] 레이블 문장은 독자가 헤드라인만 읽어도 유추할 수 있는 내용이어서는 안 됩니다.
+
+다음은 [해석]이 아닌 상식적 인과로 금지합니다:
+- "유가 상승 → 인플레이션 압력" (교과서 인과)
+- "금리 상승 → 밸류에이션 부담" (교과서 인과)
+- "이익 추정치 상향 → 투자자 관심 증가" (당연한 결론)
+- "지정학 리스크 → 시장 불확실성" (동어 반복)
+
+[해석]이 성립하려면 다음 중 하나 이상 충족이 필요합니다:
+(a) 이 시점·이 데이터 조합에서만 나오는 특수한 함의
+(b) 상식적으로 연결되지 않는 두 변수 간의 비자명적 연결
+(c) 상충하는 신호들 사이의 긴장을 해소하는 판단
+(d) 오늘이 같은 테마의 다른 날과 왜 다른지 구체적 설명
+(e) 투자자의 판단 기준·섹터 선호·시나리오 가중치에 영향을 주는 해석
+
+선호하는 해석 형태:
+- 두 상충 신호의 우열 관계 ("X와 Y가 동시 발생 시 Z보다 W에 집중해야 하는 이유는...")
+- 이차 효과·간접 전달 경로 ("이 움직임의 직접 피해자는 A이나, 간접 영향은 B가 더 크다")
+- 섹터/종목 집중도 불균형 ("지수는 ±X%이나 이익 개선의 90%는 반도체 1개 섹터 집중")
+- 레짐 전환 시사 ("이 조합은 단기 노이즈가 아닌 X 국면 전환 신호일 수 있다")
+
+비자명적 [해석] 1개가 범용 인과 3개보다 낫습니다. 수를 줄이더라도 품질을 높이십시오."""
+
+# ── Track A-2: 헤징 언어 3분류 ──────────────────────────────────────────────
+_P13_HEDGING_TRIAGE_RULES: str = """
+[Phase 13 — 헤징 언어 3분류 규칙]
+
+Type 1 — 팩트 서술 (과거/현재 수치·날짜 명시 이벤트):
+  규칙: 헤징 금지. 출처 또는 시점 명시 후 직접 서술.
+  ❌ "KOSPI는 0.48% 하락한 것으로 파악됩니다"
+  ✅ "KOSPI는 전일 대비 0.48% 하락한 X,XXX.XX pt에 마감했습니다 [출처]"
+
+Type 2 — 분석적 연결 (인과·해석·함의):
+  규칙: 문단당 1회 완화형 헤징 허용. 이후 지지 문장은 직접 서술.
+  ❌ "금리 상승은 밸류에이션에 부담을 줄 것으로 보이며, 채권 시장에도 영향을 미치는 것으로 파악됩니다"
+  ✅ "금리 상승은 밸류에이션 부담으로 작용한다. 현 수준에서 10bp 추가 상승 시 PER 압박 X%."
+
+Type 3 — 전망·시나리오 (미래 경로, 조건부 기대):
+  규칙: 헤징 허용. 단 반드시 명시적 조건(만약/발생 시/~한다면/if) 포함 필수.
+  ❌ "유가 상승이 지속될 경우 긍정적 영향이 있을 것으로 예상됩니다"
+  ✅ "WTI $X 돌파가 2주 이상 유지된다면, 에너지 기업 영업이익률은 Y%p 개선 압력을 받는다"
+
+"것으로 파악됩니다/보입니다/추정됩니다/예상됩니다"를 모든 문장에 기계적으로 붙이지 마십시오."""
+
+# ── Track A-3: 반론 최소 규격 ───────────────────────────────────────────────
+_P13_COUNTERPOINT_SPEC: str = """
+[Phase 13 — 반론 최소 규격]
+
+반론 섹션 각 항목은 반드시 세 요소를 포함해야 합니다:
+① 구체적 조건 — 어떤 상황이 발생해야 반론이 성립하는가
+② 그 조건 하의 결과 — 무슨 일이 생기는가
+③ 오늘의 핵심 논지와의 충돌 — 왜 오늘 분석을 약화시키는가
+
+❌ 금지 형태:
+- "반도체 시장의 변동성이 리스크로 작용할 수 있습니다" (카테고리 이름 = 리스크)
+- "글로벌 불확실성이 지속될 경우 부담이 될 수 있습니다" (순환 논리)
+- "유가 변동성은 여전히 리스크입니다" (동어 반복)
+
+✅ 허용 형태 예시:
+"IEA가 3분기 수요 전망을 X% 하향할 경우, 유가 상승 모멘텀은 2주 내 되돌림될 수 있으며,
+이는 오늘 논지의 전제인 '에너지 기업 이익률 개선' 근거를 약화시킨다."
+
+반론은 오늘의 분석을 구체적으로 '틀릴 수도 있음'을 보여야 합니다.
+카테고리 리스크 나열은 반론으로 인정하지 않습니다."""
+
+# ── Track A-4: 분석 뼈대 ────────────────────────────────────────────────────
+_P13_ANALYTICAL_SPINE_RULE: str = """
+[Phase 13 — 분석 뼈대(Analytical Spine)]
+
+기사 작성 전 내부적으로 뼈대 문장 1개를 설정하십시오:
+형식: "[팩트 X]와 [팩트 Y]가 동시 발생 중이며, 이는 투자자가 [Z] 대신 [W]에 주목해야 함을 시사"
+
+뼈대 요건:
+- 팩트 나열이 아닌 논지 (argument, not summary)
+- 헤드라인 요약이 아닌 해석적 주장
+- 전체 기사 구조가 이 뼈대를 뒷받침하는 방향으로 구성
+
+뼈대는 기사 제목 또는 첫 단락 핵심 문장에 반영되어야 합니다.
+평행 사실 나열 구조를 피하고 하나의 논지로 집중하십시오."""
+
+# ── Track A-5: Post2 연속성 규칙 ────────────────────────────────────────────
+_P13_POST2_CONTINUITY_RULE: str = """
+[Phase 13 — Post2 연속성 규칙]
+
+Post2(캐시의 픽)는 Post1(심층분석)이 종료된 시점에서 시작합니다.
+Post1의 매크로/테마 설정을 다시 설명하지 마십시오.
+
+'오늘 이 테마를 보는 이유' 섹션 구조:
+  Post1이 도출한 결론 → 이 테마에서 가장 직접 영향받는 종목 탐색으로 즉시 진입
+
+❌ 금지:
+- "최근 X가 발생하면서..." 배경 재설명
+- Post1에서 이미 나온 호르무즈/금리/환율 맥락 반복
+- "최근 시장이 주목하는..." 류의 매크로 재진입
+
+✅ 허용:
+- "Post1 분석에서 [X]라는 결론이 도출되었다. 이 조건에서 직접 수혜/피해를 받는 종목은..."
+- 종목 선정 기준과 그 기준이 이번 테마에서 갖는 특수성
+- Post1 핵심 수치 1개 인용 후 바로 종목 분석 진입"""
+
+# ── Track A: Gemini Step1 뼈대 협력 힌트 ─────────────────────────────────
+_P13_GEMINI_SPINE_HINT: str = """
+[Phase 13 — 분석 재료 뼈대 협력]
+"theme" 필드는 단순 주제명이 아닌 분석적 논지를 포함하십시오.
+❌ "글로벌 지정학적 리스크와 이익 추정치 상향"
+✅ "지정학 리스크에도 이익 추정치 상향 지속 — 시장이 리스크를 단기 노이즈로 처리하는 국면에서 섹터 선별 기준 이동이 핵심"
+
+"counter_interpretations" 항목은 "[조건]: [결과] — [논지와의 충돌]" 형식으로 작성하십시오.
+범용 리스크 카테고리만 쓰지 마십시오."""
+
+# ── Track A: 조합 규칙 문자열 (프롬프트 삽입용) ──────────────────────────
+_P13_POST1_INTELLIGENCE_RULES: str = (
+    _P13_ANALYTICAL_SPINE_RULE + "\n"
+    + _P13_INTERPRETATION_STANDARD + "\n"
+    + _P13_HEDGING_TRIAGE_RULES + "\n"
+    + _P13_COUNTERPOINT_SPEC + "\n"
+)
+
+_P13_POST2_INTELLIGENCE_RULES: str = (
+    _P13_POST2_CONTINUITY_RULE + "\n"
+    + _P13_ANALYTICAL_SPINE_RULE + "\n"
+    + _P13_INTERPRETATION_STANDARD + "\n"
+    + _P13_HEDGING_TRIAGE_RULES + "\n"
+    + _P13_COUNTERPOINT_SPEC + "\n"
+)
+
+# ── Track A: 해석 품질 진단 상수 ─────────────────────────────────────────
+_P13_HEDGE_PHRASES: list = [
+    "것으로 파악됩니다", "것으로 보입니다", "것으로 추정됩니다", "것으로 예상됩니다",
+    "것으로 판단됩니다", "것으로 분석됩니다", "것으로 전망됩니다", "것으로 생각됩니다",
+    "로 파악됩니다", "로 보입니다", "로 추정됩니다", "로 예상됩니다",
+]
+
+_P13_WEAK_INTERP_PATTERNS: list = [
+    ("유가", "인플레"), ("유가", "물가"), ("금리 상승", "밸류에이션"),
+    ("금리 상승", "부담"), ("이익 추정치", "관심 증가"), ("지정학", "불확실"),
+    ("지정학", "변동성"), ("이익 상향", "시장 관심"), ("원화 약세", "수입 물가"),
+    ("호르무즈", "유가 급등"), ("금리", "채권 부담"),
+]
+
+_P13_COUNTERPOINT_CONDITION_MARKERS: list = [
+    "만약", "만일", "한다면", "발생 시", "경우", "하향 시", "상향 시",
+    "지속 시", "현실화", "실제로", "봉쇄", "시나리오", "하락 전환",
+]
+
+# ── Track B: 수치 합리성 범위 (2024-2027 추정, 넓게 설정) ────────────────
+_P13_SANITY_RANGES: dict = {
+    "kospi":  (1800, 4500),
+    "kosdaq": (500,  1800),
+    "usdkrw": (1050, 1800),
+}
+
+
+def _score_interpretation_quality(content: str, label: str = "") -> dict:
+    """Phase 13 Track A: 해석 품질을 rule-based로 진단한다.
+
+    Returns:
+        {hedge_overuse, hedge_count, hedge_ratio,
+         weak_interpretation, weak_interp_hits,
+         counterpoint_spec, condition_hits, overall}
+    """
+    import re as _re
+
+    plain = _re.sub(r"<[^>]+>", " ", content)
+    sentences = [s.strip() for s in _re.split(r"[.。!?！？]\s*", plain) if s.strip()]
+    total_sent = max(len(sentences), 1)
+    hedge_count = sum(plain.count(p) for p in _P13_HEDGE_PHRASES)
+    hedge_ratio = hedge_count / total_sent
+    hedge_status = (
+        "FAIL" if hedge_ratio > 0.5
+        else "WARN" if hedge_ratio > 0.30
+        else "PASS"
+    )
+
+    weak_hits = sum(
+        1 for (kw1, kw2) in _P13_WEAK_INTERP_PATTERNS
+        if kw1 in plain and kw2 in plain
+    )
+    interp_status = (
+        "FAIL" if weak_hits >= 3
+        else "WARN" if weak_hits >= 1
+        else "PASS"
+    )
+
+    ctr_match = _re.search(r"반대|반론|체크포인트|리스크|위험|Counter", plain, _re.IGNORECASE)
+    if ctr_match:
+        ctr_text = plain[ctr_match.start():]
+        cond_hits = sum(ctr_text.count(m) for m in _P13_COUNTERPOINT_CONDITION_MARKERS)
+        counter_status = "PASS" if cond_hits >= 2 else ("WARN" if cond_hits >= 1 else "FAIL")
+    else:
+        cond_hits = 0
+        counter_status = "WARN"
+
+    all_statuses = [hedge_status, interp_status, counter_status]
+    overall = (
+        "FAIL" if "FAIL" in all_statuses
+        else "WARN" if "WARN" in all_statuses
+        else "PASS"
+    )
+
+    result = {
+        "hedge_overuse":       hedge_status,
+        "hedge_count":         hedge_count,
+        "hedge_ratio":         round(hedge_ratio, 2),
+        "weak_interpretation": interp_status,
+        "weak_interp_hits":    weak_hits,
+        "counterpoint_spec":   counter_status,
+        "condition_hits":      cond_hits,
+        "overall":             overall,
+    }
+
+    logger.info(
+        f"[Phase 13] 해석 품질 [{label}] | "
+        f"헤징: {hedge_status}({hedge_count}회/{total_sent}문장) | "
+        f"약한해석: {interp_status}({weak_hits}건) | "
+        f"반론조건: {counter_status}({cond_hits}마커)"
+    )
+    flags = []
+    if hedge_status != "PASS":
+        flags.append(f"hedge_overuse({hedge_count}/{total_sent})")
+    if interp_status != "PASS":
+        flags.append(f"weak_interp({weak_hits}패턴)")
+    if counter_status != "PASS":
+        flags.append(f"counterpoint_spec({counter_status})")
+    if flags:
+        logger.warning(f"[Phase 13] 해석 품질 경고 [{label}] — {', '.join(flags)}")
+
+    return result
+
+
+def _check_temporal_sanity(content: str, run_date_str: str = "") -> dict:
+    """Phase 13 Track B: 시간 일관성 및 연간 실적 혼용 여부를 검사.
+
+    Returns:
+        {status, flags, stale_date_count, forecast_confusion_count}
+    """
+    import re as _re
+    from datetime import datetime as _dt
+
+    plain = _re.sub(r"<[^>]+>", " ", content)
+    flags = []
+    run_year = int(run_date_str[:4]) if run_date_str and len(run_date_str) >= 4 else 2026
+
+    fact_verbs = r"(기록했습니다|달성했습니다|증가했습니다|감소했습니다|마감했습니다)"
+    for m in _re.finditer(r"(20\d{2})년[^.]{0,80}?" + fact_verbs, plain):
+        year = int(m.group(1))
+        if year >= run_year:
+            flags.append(
+                f"FUTURE_AS_FACT: {year}년 실적을 확정 사실 동사로 서술 (발행연도 {run_year})"
+            )
+
+    forecast_verbs = r"(전망됩니다|추정됩니다|것으로 전망|것으로 추정)"
+    for m in _re.finditer(r"(20\d{2})년[^.]{0,80}?" + forecast_verbs, plain):
+        year = int(m.group(1))
+        if year < run_year - 1:
+            flags.append(
+                f"PAST_AS_FORECAST: {year}년을 전망 동사로 서술 (이미 확정 연도)"
+            )
+
+    stale_count = 0
+    if run_date_str:
+        try:
+            run_dt = _dt.strptime(run_date_str[:10], "%Y-%m-%d")
+            for d_str in _re.findall(r"(\d{4}-\d{2}-\d{2})", plain):
+                try:
+                    d = _dt.strptime(d_str, "%Y-%m-%d")
+                    delta = (run_dt - d).days
+                    if 7 < delta <= 365:
+                        flags.append(f"STALE_DATE_REF: {d_str} ({delta}일 경과)")
+                        stale_count += 1
+                except ValueError:
+                    pass
+        except Exception:
+            pass
+
+    vague_count = plain.count("최근") + plain.count("근래")
+    if vague_count >= 5:
+        flags.append(f"VAGUE_RECENCY: '최근/근래' {vague_count}회 (날짜 없이 반복)")
+
+    fc_count = sum(1 for f in flags if "FACT" in f or "FORECAST" in f)
+    status = (
+        "FAIL" if any("FUTURE_AS_FACT" in f for f in flags)
+        else "WARN" if flags
+        else "PASS"
+    )
+
+    result = {
+        "status":                   status,
+        "flags":                    flags[:8],
+        "stale_date_count":         stale_count,
+        "forecast_confusion_count": fc_count,
+    }
+
+    if flags:
+        logger.warning(f"[Phase 13] 시간 일관성 이슈: {len(flags)}건")
+        for f in flags[:5]:
+            logger.warning(f"  ⚠ {f}")
+    else:
+        logger.info("[Phase 13] 시간 일관성: 이슈 없음")
+
+    return result
+
+
+def _check_numeric_sanity(content: str) -> dict:
+    """Phase 13 Track B: 주요 시장 수치의 합리적 범위를 경량 점검.
+
+    Returns:
+        {status, flags, suspicious_count}
+    """
+    import re as _re
+
+    flags = []
+    plain = _re.sub(r"<[^>]+>", " ", content)
+
+    def _check_range(label: str, nums_str: list, key: str) -> None:
+        lo, hi = _P13_SANITY_RANGES[key]
+        for n_str in nums_str:
+            try:
+                n = float(n_str.replace(",", ""))
+                if not (lo <= n <= hi):
+                    flags.append(f"SUSPICIOUS_{label}: {n} (합리적 범위 {lo}–{hi})")
+            except ValueError:
+                pass
+
+    # 4자리 이상 숫자 + pt/포인트 — 중간에 퍼센트 숫자가 있어도 포착
+    kospi_raw = _re.findall(
+        r"(?:KOSPI|코스피).{0,80}?([\d,]{4,}\.?\d*)\s*(?:pt|포인트)",
+        plain, _re.IGNORECASE | _re.DOTALL,
+    )
+    _check_range("KOSPI", kospi_raw, "kospi")
+
+    kosdaq_raw = _re.findall(
+        r"(?:KOSDAQ|코스닥).{0,80}?([\d,]{4,}\.?\d*)\s*(?:pt|포인트)",
+        plain, _re.IGNORECASE | _re.DOTALL,
+    )
+    _check_range("KOSDAQ", kosdaq_raw, "kosdaq")
+
+    usdkrw_raw = (
+        _re.findall(r"([\d,]+)\s*원[/\s]*달러", plain)
+        + _re.findall(r"달러당\s*([\d,]+)\s*원", plain)
+    )
+    for n_str in usdkrw_raw:
+        try:
+            n = float(n_str.replace(",", ""))
+            if 100 < n < 10_000:
+                lo, hi = _P13_SANITY_RANGES["usdkrw"]
+                if not (lo <= n <= hi):
+                    flags.append(f"SUSPICIOUS_USDKRW: {n} (합리적 범위 {lo}–{hi})")
+        except ValueError:
+            pass
+
+    status = (
+        "FAIL" if len(flags) >= 2
+        else "WARN" if flags
+        else "PASS"
+    )
+
+    result = {
+        "status":           status,
+        "flags":            flags[:6],
+        "suspicious_count": len(flags),
+    }
+
+    if flags:
+        logger.warning(f"[Phase 13] 수치 이상 감지: {len(flags)}건")
+        for f in flags[:5]:
+            logger.warning(f"  ⚠ {f}")
+    else:
+        logger.info("[Phase 13] 수치 합리성: 이슈 없음")
+
+    return result
+
+
+def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
+    """Phase 13 Track B: Gemini 검수 이슈가 Step3 수정 후 실제 해소되었는지 확인.
+
+    Returns:
+        {status, total_checked, resolved_count, unresolved_count, unresolved}
+    """
+    import re as _re
+
+    if not issues or not revised:
+        return {
+            "status": "SKIP", "total_checked": 0,
+            "resolved_count": 0, "unresolved_count": 0, "unresolved": [],
+        }
+
+    TEMPORAL_NUMERIC_KW = [
+        "[1]", "[시점 일관성]", "[숫자", "[수치", "시점", "일관성",
+        "기준 날짜", "출처 날짜", "연간", "전망치", "확정",
+    ]
+
+    high_risk = [
+        iss for iss in issues
+        if any(kw in iss for kw in TEMPORAL_NUMERIC_KW)
+    ]
+
+    resolved, unresolved = [], []
+    for issue in high_risk:
+        quoted = _re.findall(
+            r"[\u2018\u2019\u201c\u201d']([^\u2018\u2019\u201c\u201d']{10,80})[\u2018\u2019\u201c\u201d']",
+            issue,
+        )
+        if not quoted:
+            quoted_pairs = _re.findall(r"'([^']{10,60})'|\"([^\"]{10,60})\"", issue)
+            quoted = [q[0] or q[1] for q in quoted_pairs if (q[0] or q[1])]
+
+        if not quoted:
+            resolved.append(issue[:60] + "…")
+            continue
+
+        still_present = any(phrase in revised for phrase in quoted if phrase)
+        (unresolved if still_present else resolved).append(issue[:80] + "…")
+
+    total = len(high_risk)
+    un_cnt = len(unresolved)
+    status = (
+        "FAIL"  if un_cnt >= 2
+        else "WARN"  if un_cnt >= 1
+        else "PASS"  if total > 0
+        else "SKIP"
+    )
+
+    result = {
+        "status":           status,
+        "total_checked":    total,
+        "resolved_count":   len(resolved),
+        "unresolved_count": un_cnt,
+        "unresolved":       unresolved[:3],
+    }
+
+    logger.info(
+        f"[Phase 13] 검수 해소 확인 | 고위험 {total}건 | "
+        f"해소 {len(resolved)} / 미해소 {un_cnt} | 상태: {status}"
+    )
+    for u in unresolved:
+        logger.warning(f"  ⚠ 미해소 이슈: {u}")
+
+    return result
+
+
+def _check_post_continuity(post1_content: str, post2_content: str) -> dict:
+    """Phase 13 Track A-5: Post2 도입부가 Post1 도입부를 반복하는지 진단.
+
+    Returns:
+        {status, ngram_overlap_count, bg_repeat_count, sample_overlaps}
+    """
+    import re as _re
+
+    def _text(html: str, limit: int = 400) -> str:
+        return _re.sub(r"<[^>]+>", " ", html)[:limit]
+
+    p1_intro = _text(post1_content)
+    p2_intro = _text(post2_content, 600)
+
+    def _ngrams(text: str, n: int = 4) -> set:
+        words = text.split()
+        return {" ".join(words[i:i+n]) for i in range(max(0, len(words) - n + 1))}
+
+    overlap = _ngrams(p1_intro) & _ngrams(p2_intro)
+    overlap_count = len(overlap)
+
+    BG_PATTERNS = [
+        "최근 호르무즈", "호르무즈 해협", "미국채 금리 상승", "원화 약세",
+        "유가가 급등", "원자재 가격", "지정학적 리스크가 고조",
+    ]
+    bg_repeat = sum(1 for p in BG_PATTERNS if p in p2_intro)
+
+    status = (
+        "FAIL" if (overlap_count >= 3 or bg_repeat >= 2)
+        else "WARN" if (overlap_count >= 1 or bg_repeat >= 1)
+        else "PASS"
+    )
+
+    result = {
+        "status":              status,
+        "ngram_overlap_count": overlap_count,
+        "bg_repeat_count":     bg_repeat,
+        "sample_overlaps":     sorted(overlap)[:3],
+    }
+
+    logger.info(
+        f"[Phase 13] Post1/Post2 연속성 | n-gram 중복: {overlap_count}개 | "
+        f"배경 재설명: {bg_repeat}건 | 상태: {status}"
+    )
+    if status != "PASS":
+        logger.warning(f"[Phase 13] Post2 도입부 중복 감지 — {status}")
+
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SECTION A: 내부 유틸 — API 호출 래퍼
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -2046,7 +2544,7 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
         research_text=research_text,
         news_text=news_text,
         dart_text=dart_text,
-    ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES
+    ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES + _P13_GEMINI_SPINE_HINT
     raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
     result = _parse_json_response(raw) if raw else None
 
@@ -2082,8 +2580,9 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
     materials_json = json.dumps(materials, ensure_ascii=False, indent=2)
     # Phase 10: 슬롯별 작성 방향 힌트를 user 메시지 앞에 prepend
     # Phase 12: 증거 밀도 & 구조 규칙을 슬롯 힌트 앞에 prepend
+    # Phase 13: 해석 지성 규칙을 P12 규칙 앞에 prepend
     slot_hint = _SLOT_POST1_WRITER_HINTS.get(slot, _SLOT_POST1_WRITER_HINTS["default"])
-    user_msg = _P12_POST1_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_ANALYSIS_USER.format(
+    user_msg = _P13_POST1_INTELLIGENCE_RULES + _P12_POST1_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_ANALYSIS_USER.format(
         materials_json=materials_json,
         context_text=context_text,
     )
@@ -2130,8 +2629,9 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
 
     # Phase 10: 슬롯별 Post2 방향 힌트를 user 메시지 앞에 prepend
     # Phase 12: 증거 밀도 & 구조 규칙을 슬롯 힌트 앞에 prepend
+    # Phase 13: 해석 지성 + Post2 연속성 규칙을 P12 규칙 앞에 prepend
     slot_hint = _SLOT_POST2_WRITER_HINTS.get(slot, _SLOT_POST2_WRITER_HINTS["default"])
-    user_msg = _P12_POST2_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_PICKS_USER.format(
+    user_msg = _P13_POST2_INTELLIGENCE_RULES + _P12_POST2_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_PICKS_USER.format(
         theme=theme,
         materials_summary=materials_summary,
         tickers_and_prices=tickers_and_prices,
@@ -2336,6 +2836,21 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     # ── Phase 12: 품질 스코어링 ────────────────────────────────────────────
     quality_scores = _score_post_quality(final_content, label="Post1")
 
+    # ── Phase 13: 해석 품질 + 시간/수치 신뢰성 진단 ────────────────────────
+    run_date_str = datetime.now().strftime("%Y-%m-%d")
+    p13_interp   = _score_interpretation_quality(final_content, label="Post1")
+    p13_temporal = _check_temporal_sanity(final_content, run_date_str)
+    p13_numeric  = _check_numeric_sanity(final_content)
+    p13_closure  = _check_verifier_closure(
+        verify_result.get("issues", []), draft, final_content
+    )
+    p13_scores: dict = {
+        "interpretation": p13_interp,
+        "temporal":       p13_temporal,
+        "numeric":        p13_numeric,
+        "closure":        p13_closure,
+    }
+
     # 제목 구성 (h1 태그에서 추출, 없으면 직접 생성)
     h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", final_content, re.DOTALL)
     if h1_match:
@@ -2355,6 +2870,7 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         "key_data":       key_data,
         "materials":      materials,      # Post 2에 재사용
         "quality_scores": quality_scores, # Phase 12: 품질 진단 결과
+        "p13_scores":     p13_scores,     # Phase 13: 해석 지성 + 신뢰성 진단
         "generated_at":   datetime.now().isoformat(),
     }
 
@@ -2487,6 +3003,23 @@ def generate_stock_picks_report(
     # ── Phase 12: 품질 스코어링 ────────────────────────────────────────────
     quality_scores = _score_post_quality(final_content, label="Post2")
 
+    # ── Phase 13: 해석 품질 + 시간/수치 신뢰성 + Post2 연속성 진단 ─────────
+    _run_date_str   = datetime.now().strftime("%Y-%m-%d")
+    p13_interp      = _score_interpretation_quality(final_content, label="Post2")
+    p13_temporal    = _check_temporal_sanity(final_content, _run_date_str)
+    p13_numeric     = _check_numeric_sanity(final_content)
+    p13_closure     = _check_verifier_closure(
+        verify_result.get("issues", []), draft, raw_content
+    )
+    p13_continuity  = _check_post_continuity(post1_content, final_content)
+    p13_scores: dict = {
+        "interpretation": p13_interp,
+        "temporal":       p13_temporal,
+        "numeric":        p13_numeric,
+        "closure":        p13_closure,
+        "continuity":     p13_continuity,
+    }
+
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     return {
@@ -2496,6 +3029,7 @@ def generate_stock_picks_report(
         "prices":               prices,
         "picks_comment_in_raw": picks_comment_in_raw,  # P10 검증용
         "quality_scores":       quality_scores,         # Phase 12: 품질 진단 결과
+        "p13_scores":           p13_scores,             # Phase 13: 해석 지성 + 신뢰성 진단
         "generated_at":         datetime.now().isoformat(),
     }
 
