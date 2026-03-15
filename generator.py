@@ -499,6 +499,292 @@ def _build_history_context(slot: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SECTION A-2: Phase 12 — 증거 밀도 & 글쓰기 품질 강화
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── 품질 임계값 설정 (튜닝 가능) ───────────────────────────────────────────────
+_P12_QUALITY_THRESHOLDS: dict = {
+    "numeric_density_pass":  5,   # 숫자 패턴 5개 이상 → PASS
+    "numeric_density_warn":  2,   # 2~4개 → WARN, 2 미만 → FAIL
+    "time_anchor_pass":      3,   # 시점 앵커 3개 이상 → PASS
+    "time_anchor_warn":      1,   # 1~2개 → WARN, 0 → FAIL
+    "counterpoint_pass":     2,   # 반론 마커 2개 이상 → PASS
+    "counterpoint_warn":     1,   # 1개 → WARN, 0 → FAIL
+    "generic_phrase_pass":   2,   # 일반어 2개 이하 → PASS
+    "generic_phrase_warn":   5,   # 3~5개 → WARN, 6 이상 → FAIL
+    "evidence_binding_pass": 2,   # 출처 패턴 2개 이상 → PASS
+}
+
+# ── 일반적(비근거) 표현 목록 ────────────────────────────────────────────────────
+_P12_GENERIC_PHRASES: list = [
+    "긍정적", "영향을 줄 수 있다", "주목할 필요", "관심이 필요",
+    "부각될 수 있다", "기대감", "수혜 기대", "기대감이 높아", "전망이 밝",
+    "불확실성이 높아", "변동성 확대", "면밀한 모니터링", "추이를 지켜볼",
+    "관심이 집중", "주목받고 있", "시장의 관심",
+]
+
+# ── 반론 마커 목록 ──────────────────────────────────────────────────────────────
+_P12_COUNTERPOINT_MARKERS: list = [
+    "반대", "반론", "다만", "그러나", "하지만", "단,", "단 ",
+    "리스크", "불확실", "우려", "하락 가능", "약세 전환", "체크포인트",
+    "과도한 기대", "반영 과잉", "되돌림", "조정 가능", "역풍",
+]
+
+# ── Gemini 분석 단계 — 증거 밀도 지시 (user 메시지에 append) ─────────────────
+_P12_ANALYST_EVIDENCE_RULES: str = """
+[Phase 12 — 분석 재료 증거 밀도 규칙]
+1. facts 배열 각 항목의 content 필드는 가능하면 수치(%, 금액, 성장률, 날짜, 분기)를 포함한다.
+   수집 자료에 수치가 없는 경우 → writing_notes에 "수치 근거 부족: [해당 축]" 형태로 명시한다.
+2. theme_sub_axes 3개는 각각 facts 배열의 다른 항목과 연결되어야 하며,
+   최소 1개의 축은 구체적 수치(변화율, 금액, 날짜)를 포함한 팩트로 뒷받침되어야 한다.
+3. market_impact는 추상 서술("우려 증가") 대신
+   "지표 X 변화 → 섹터/시장 Y에 영향 Z" 구조로 작성한다.
+4. counter_interpretations는 "불확실성 우려" 수준이 아니라
+   구체적 조건("지표 X가 Y 수준 이상 지속되면 Z 이유로 역풍")으로 작성한다.
+5. 수집 자료에 없는 수치를 임의로 생성·추정하지 않는다.
+   근거 없는 수치는 생략하고 writing_notes에 부재 사실을 기록한다.
+"""
+
+# ── GPT Post1 — 증거 밀도 & 구조 지시 (user 메시지에 prepend) ─────────────────
+_P12_POST1_EVIDENCE_RULES: str = """[Phase 12 — Post1 근거 밀도 & 구조 규칙]
+1. 각 <h3> 섹션에 아래 4요소를 반드시 포함한다:
+   ① 구체 사실(날짜·출처 포함) ② 수치 또는 시점 앵커 ③ 인과 경로 ④ 영향 대상(업종/국가/섹터)
+2. 시점 앵커 필수: 각 섹션에 최소 1개의 날짜·기간 표현
+   (예: "이번 주", "지난 분기", "2024년 Q3", "최근 3개월", "N일 기준")
+   수집 자료에 날짜가 없으면 "시점 불명" 명시 후 서술한다.
+3. 반대 시각 섹션은 추상("불확실성 우려") 대신
+   구체 조건+수치+근거("X 지표가 Y 수준 유지 시 Z 리스크")로 작성한다.
+4. 수집 자료에 없는 수치는 생성하지 않는다.
+   수치 없이 서술해야 하면 "[수치 미확인]" 표시 후 사실 기반 서술로 대체한다.
+5. Post1은 거시·시장 구조·파급 경로 중심. Post2 종목 분석과 동일 문장 반복 금지.
+"""
+
+# ── GPT Post2 — 증거 밀도 & 구조 지시 (user 메시지에 prepend) ─────────────────
+_P12_POST2_EVIDENCE_RULES: str = """[Phase 12 — Post2 근거 밀도 & 구조 규칙]
+1. 각 종목 섹션은 4단계 구조를 따른다:
+   ① Why now: 최근 7일 이내 구체 사건·발표·수치 필수 (추상 이유 단독 불가)
+   ② 실적·사업 근거: 매출/영업이익/성장률/PER/수주잔고 중 최소 1개
+   ③ 리서치·데이터 연결: 애널리스트 의견 또는 산업 데이터 최소 2건
+   ④ 반영된 변수: 이미 주가에 반영된 기대치 (PER 배수, 수급 집중 기간 등)
+2. 수치 미확인 시: "[수치 미확인 — 사유]" 명시 후 이벤트·공시·발표 팩트로 대체한다.
+3. Post1 거시 배경을 그대로 반복하지 않는다. 종목·섹터 레벨 구체 이유에 집중한다.
+4. 수집 자료에 없는 수치·전망치는 절대 생성하지 않는다.
+"""
+
+# ── 수치 하이라이트 블록 생성 임계값 ────────────────────────────────────────────
+_P12_HIGHLIGHT_MIN_ITEMS = 3    # 이 수 이상일 때만 블록 생성
+_P12_HIGHLIGHT_MAX_ITEMS = 12   # 최대 항목 수
+
+
+def _build_numeric_highlight_block(articles: list, research: list) -> str:
+    """Phase 12: 수집 자료에서 수치/날짜 포함 문장을 요약해 Gemini 입력에 선주입.
+
+    LLM이 구체적 수치를 더 쉽게 발견하도록 입력 패킹을 개선한다.
+    수집 자료를 수정하지 않고, 별도 블록으로 prepend만 수행 (비파괴).
+    """
+    _num_pat = re.compile(
+        r"[^\n]{5,50}"
+        r"(?:\d+[.,]?\d*\s*[%\$₩원억조만배달러]"
+        r"|\d{4}년|\d{1,2}월\s*\d{1,2}일"
+        r"|[Qq][1-4]|[1-4]분기"
+        r"|(?:전년|전월|전분기|YoY|QoQ)[\s비]*\d)"
+        r"[^\n]{0,40}",
+        re.IGNORECASE,
+    )
+
+    seen: set = set()
+    evidence: list = []
+
+    # 리서치 우선 (weight 높은 항목)
+    sorted_res = sorted(research, key=lambda x: x.get("weight", 0), reverse=True)
+    for item in sorted_res[:10]:
+        for field in ("summary", "content", "pdf_snippet"):
+            text = item.get(field) or ""
+            for m in _num_pat.findall(text)[:2]:
+                snippet = m.strip()
+                if snippet not in seen and len(snippet) >= 10:
+                    source = item.get("source", "리서치")
+                    evidence.append(f"[{source}] {snippet}")
+                    seen.add(snippet)
+
+    # 뉴스 보완 (recent tier 우선)
+    sorted_art = sorted(
+        articles, key=lambda x: 0 if x.get("date_tier") == "recent" else 1
+    )
+    for item in sorted_art[:10]:
+        text = item.get("summary") or ""
+        for m in _num_pat.findall(text)[:1]:
+            snippet = m.strip()
+            if snippet not in seen and len(snippet) >= 10:
+                source = item.get("source", "뉴스")
+                evidence.append(f"[{source}] {snippet}")
+                seen.add(snippet)
+
+    evidence = evidence[:_P12_HIGHLIGHT_MAX_ITEMS]
+
+    if len(evidence) < _P12_HIGHLIGHT_MIN_ITEMS:
+        return ""   # 수치 항목이 너무 적으면 블록 생략 (noise 방지)
+
+    lines = ["\n[📊 Phase 12 — 수치 근거 요약 | 아래 수치를 근거로 우선 활용하십시오]"]
+    lines.extend(f"- {e}" for e in evidence)
+    lines.append("")
+    logger.info(f"[Phase 12] 수치 하이라이트 블록 생성: {len(evidence)}개 항목")
+    return "\n".join(lines)
+
+
+def _score_post_quality(content: str, label: str = "") -> dict:
+    """Phase 12: 생성된 HTML post의 증거 밀도 & 구조 품질을 rule-based로 평가.
+
+    비파괴적 진단 전용 — 출력을 수정하거나 차단하지 않음.
+    결과는 로그에 기록되고 dict로 반환된다.
+
+    Returns:
+        {
+          "numeric_density": "PASS"|"WARN"|"FAIL",
+          "time_anchor": "PASS"|"WARN"|"FAIL",
+          "counterpoint_presence": "PASS"|"WARN"|"FAIL",
+          "generic_wording": "PASS"|"WARN"|"FAIL",
+          "evidence_binding": "PASS"|"WARN"|"FAIL",
+          + numeric counts
+        }
+    """
+    t = _P12_QUALITY_THRESHOLDS
+
+    # 1. 숫자 밀도
+    num_patterns = re.findall(
+        r"\d+[.,]?\d*\s*[%\$₩원억조만배달러엔]"
+        r"|\d{4}년\s*\d{1,2}월"
+        r"|\d{4}년\s*[Qq1-4]분기"
+        r"|\d{1,3}[.,]\d+%"
+        r"|[+-]?\d+[.,]?\d*\s*[pP][pP]"
+        r"|[A-Z]{2,5}\s*\d{3,5}",
+        content,
+    )
+    num_count = len(num_patterns)
+    numeric_density = (
+        "PASS" if num_count >= t["numeric_density_pass"]
+        else "WARN" if num_count >= t["numeric_density_warn"]
+        else "FAIL"
+    )
+
+    # 2. 시점 앵커
+    time_anchors = re.findall(
+        r"\d{4}년|\d{1,2}월\s*\d{1,2}일|\d{4}년\s*[Qq1-4]분기"
+        r"|이번\s*주|지난\s*주|어제|오늘|최근\s*\d+[일주개월년]"
+        r"|전월|전분기|전년|YoY|QoQ",
+        content,
+    )
+    time_count = len(time_anchors)
+    time_anchor = (
+        "PASS" if time_count >= t["time_anchor_pass"]
+        else "WARN" if time_count >= t["time_anchor_warn"]
+        else "FAIL"
+    )
+
+    # 3. 반론 존재
+    counter_hits = sum(content.count(m) for m in _P12_COUNTERPOINT_MARKERS)
+    counterpoint_presence = (
+        "PASS" if counter_hits >= t["counterpoint_pass"]
+        else "WARN" if counter_hits >= t["counterpoint_warn"]
+        else "FAIL"
+    )
+
+    # 4. 일반어 남용
+    generic_count = sum(content.count(p) for p in _P12_GENERIC_PHRASES)
+    generic_wording = (
+        "PASS" if generic_count <= t["generic_phrase_pass"]
+        else "WARN" if generic_count <= t["generic_phrase_warn"]
+        else "FAIL"
+    )
+
+    # 5. 근거 결합 (출처 패턴)
+    source_pats = re.findall(
+        r"\([가-힣a-zA-Z\s]{2,20}\s*(?:발표|기준|추정|전망|분석|조사|집계|자료)\)"
+        r"|\([가-힣a-zA-Z]{2,15}\s*(?:리서치|증권|투자|은행|연구소)\)"
+        r"|출처\s*[:：]\s*.{2,30}"
+        r"|[가-힣]{2,10}\s*(?:리서치|증권|투자|연구소|은행)\s*(?:에 따르면|자료|발표|보고서)",
+        content,
+    )
+    src_count = len(source_pats)
+    evidence_binding = "PASS" if src_count >= t["evidence_binding_pass"] else "WARN"
+
+    scores = {
+        "numeric_density":       numeric_density,
+        "time_anchor":           time_anchor,
+        "counterpoint_presence": counterpoint_presence,
+        "generic_wording":       generic_wording,
+        "evidence_binding":      evidence_binding,
+        "numeric_count":         num_count,
+        "time_anchor_count":     time_count,
+        "generic_phrase_count":  generic_count,
+        "source_pattern_count":  src_count,
+    }
+
+    if label:
+        logger.info(
+            f"[Phase 12] 품질 스코어 [{label}] | "
+            f"숫자밀도: {numeric_density}({num_count}) | "
+            f"시점앵커: {time_anchor}({time_count}) | "
+            f"반론: {counterpoint_presence}({counter_hits}) | "
+            f"일반어: {generic_wording}({generic_count}) | "
+            f"근거결합: {evidence_binding}({src_count})"
+        )
+        flags = [k for k, v in scores.items()
+                 if isinstance(v, str) and v in ("WARN", "FAIL")]
+        if flags:
+            logger.warning(f"[Phase 12] 품질 경고 [{label}] — 개선 대상: {flags}")
+
+    return scores
+
+
+def _check_post_separation(post1_content: str, post2_content: str) -> dict:
+    """Phase 12: Post1/Post2 역할 분리 정도를 진단한다.
+
+    <h3> 헤딩 중복 여부와 주요 단락 내용 교차 빈도를 체크한다.
+    비파괴적 진단 전용 — 출력을 수정하거나 차단하지 않음.
+
+    Returns:
+        {"status": "PASS"|"WARN"|"FAIL", "overlap_headings": list, "overlap_count": int}
+    """
+    def _extract_h3s(html: str) -> set:
+        raw = re.findall(r"<h3[^>]*>(.*?)</h3>", html, re.DOTALL | re.IGNORECASE)
+        return {re.sub(r"<[^>]+>", "", h).strip() for h in raw if h.strip()}
+
+    p1_h3s = _extract_h3s(post1_content)
+    p2_h3s = _extract_h3s(post2_content)
+    overlap = p1_h3s & p2_h3s
+
+    # 단락 단위 중복 체크 (80자 이상 단락이 상대편에도 있는 경우)
+    p2_text = re.sub(r"<[^>]+>", "", post2_content)
+    p1_paras = [
+        s.strip() for s in
+        re.sub(r"<[^>]+>", "", post1_content).split("\n")
+        if len(s.strip()) >= 80
+    ]
+    deep_repeats = sum(1 for p in p1_paras if p in p2_text)
+
+    total_overlap = len(overlap) + deep_repeats
+    status = (
+        "PASS" if total_overlap == 0
+        else "WARN" if total_overlap <= 2
+        else "FAIL"
+    )
+
+    logger.info(
+        f"[Phase 12] Post1/Post2 역할 분리 | "
+        f"h3 중복: {len(overlap)}개 | 단락 중복: {deep_repeats}개 | 상태: {status}"
+    )
+    if overlap:
+        logger.warning(f"[Phase 12] 중복 h3 헤딩: {sorted(overlap)}")
+
+    return {
+        "status":           status,
+        "overlap_headings": sorted(overlap),
+        "overlap_count":    total_overlap,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SECTION A: 내부 유틸 — API 호출 래퍼
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1754,12 +2040,13 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
          "uncertainties", "writing_notes"}
     """
     # Phase 10: 슬롯 컨텍스트 + 이력 컨텍스트 append
+    # Phase 12: 증거 밀도 규칙 append
     slot_ctx    = _SLOT_ANALYST_CONTEXTS.get(slot, _SLOT_ANALYST_CONTEXTS["default"])
     user_msg = GEMINI_ANALYST_USER.format(
         research_text=research_text,
         news_text=news_text,
         dart_text=dart_text,
-    ) + slot_ctx + history_context
+    ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES
     raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
     result = _parse_json_response(raw) if raw else None
 
@@ -1794,8 +2081,9 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
     """
     materials_json = json.dumps(materials, ensure_ascii=False, indent=2)
     # Phase 10: 슬롯별 작성 방향 힌트를 user 메시지 앞에 prepend
+    # Phase 12: 증거 밀도 & 구조 규칙을 슬롯 힌트 앞에 prepend
     slot_hint = _SLOT_POST1_WRITER_HINTS.get(slot, _SLOT_POST1_WRITER_HINTS["default"])
-    user_msg = slot_hint + "\n" + GPT_WRITER_ANALYSIS_USER.format(
+    user_msg = _P12_POST1_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_ANALYSIS_USER.format(
         materials_json=materials_json,
         context_text=context_text,
     )
@@ -1841,8 +2129,9 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
     tickers_and_prices = "\n".join(tickers_lines)
 
     # Phase 10: 슬롯별 Post2 방향 힌트를 user 메시지 앞에 prepend
+    # Phase 12: 증거 밀도 & 구조 규칙을 슬롯 힌트 앞에 prepend
     slot_hint = _SLOT_POST2_WRITER_HINTS.get(slot, _SLOT_POST2_WRITER_HINTS["default"])
-    user_msg = slot_hint + "\n" + GPT_WRITER_PICKS_USER.format(
+    user_msg = _P12_POST2_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_PICKS_USER.format(
         theme=theme,
         materials_summary=materials_summary,
         tickers_and_prices=tickers_and_prices,
@@ -2007,6 +2296,11 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     history_ctx = _build_history_context(slot)
     logger.info(f"[Phase 10] 슬롯: {slot} | 이력 컨텍스트 길이: {len(history_ctx)}자")
 
+    # ── Phase 12: 수치 하이라이트 블록 생성 + Gemini 입력에 주입 ───────────
+    numeric_highlight = _build_numeric_highlight_block(news, research)
+    if numeric_highlight:
+        history_ctx = history_ctx + numeric_highlight  # 기존 이력 컨텍스트 뒤에 추가
+
     # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
     materials = gemini_analyze(news_text, research_text, dart_text=dart_text,
                                slot=slot, history_context=history_ctx)
@@ -2039,6 +2333,9 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         f"({final_len / draft_len * 100:.1f}% 보존)" if draft_len else "Post1 분량 | 초안 없음"
     )
 
+    # ── Phase 12: 품질 스코어링 ────────────────────────────────────────────
+    quality_scores = _score_post_quality(final_content, label="Post1")
+
     # 제목 구성 (h1 태그에서 추출, 없으면 직접 생성)
     h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", final_content, re.DOTALL)
     if h1_match:
@@ -2052,12 +2349,13 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     logger.info(f"Post1 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     return {
-        "title":        title,
-        "content":      final_content,
-        "theme":        theme,
-        "key_data":     key_data,
-        "materials":    materials,   # Post 2에 재사용
-        "generated_at": datetime.now().isoformat(),
+        "title":          title,
+        "content":        final_content,
+        "theme":          theme,
+        "key_data":       key_data,
+        "materials":      materials,      # Post 2에 재사용
+        "quality_scores": quality_scores, # Phase 12: 품질 진단 결과
+        "generated_at":   datetime.now().isoformat(),
     }
 
 
@@ -2186,15 +2484,19 @@ def generate_stock_picks_report(
     # P10 검증용: assemble 이전 raw_content 기준으로 PICKS 주석 존재 여부 기록
     picks_comment_in_raw = bool(re.search(r"<!--\s*PICKS:", raw_content))
 
+    # ── Phase 12: 품질 스코어링 ────────────────────────────────────────────
+    quality_scores = _score_post_quality(final_content, label="Post2")
+
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     return {
-        "title":              title,
-        "content":            final_content,
-        "picks":              parsed_picks,
-        "prices":             prices,
-        "picks_comment_in_raw": picks_comment_in_raw,  # P10 검증용 (assemble 이전 raw 기준)
-        "generated_at":       datetime.now().isoformat(),
+        "title":                title,
+        "content":              final_content,
+        "picks":                parsed_picks,
+        "prices":               prices,
+        "picks_comment_in_raw": picks_comment_in_raw,  # P10 검증용
+        "quality_scores":       quality_scores,         # Phase 12: 품질 진단 결과
+        "generated_at":         datetime.now().isoformat(),
     }
 
 
