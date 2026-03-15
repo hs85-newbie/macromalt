@@ -54,6 +54,228 @@ _PDF_PROMPT_SNIPPET_LEN = 400
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SECTION A-0: Phase 10 — 슬롯 분기, 이력 관리
+# ──────────────────────────────────────────────────────────────────────────────
+
+import os as _os  # 경로 처리용 (상단 import os 이미 있음, 여기서는 alias 없이 재사용)
+
+_PUBLISH_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "publish_history.json")
+_PUBLISH_HISTORY_MAX  = 5  # 최근 N건만 유지
+
+
+# ── 슬롯별 Gemini 분석 질문 방향 (GEMINI_ANALYST_USER에 append) ──────────────
+
+_SLOT_ANALYST_CONTEXTS: dict = {
+    "morning": (
+        "\n[슬롯: 아침 — 미국장 마감 → 한국장 개장 전]\n"
+        "핵심 질문 방향:\n"
+        "- 이 테마가 어젯밤 미국장 마감에 어떻게 작동했으며, 오늘 한국장 개장 전에 무엇을 확인해야 하는가?\n"
+        "- theme_sub_axes 권장 구성: ① 미국장 마감 원인 ② 한국장 선반영 여부 ③ 오늘 개장 전 핵심 변수\n"
+        "[주제 선정 가중치 — Phase 10]\n"
+        "- [최근 7일] 자료 3건 이상 수렴하는 테마를 최우선 선택한다.\n"
+        "- [7-30일] 자료만 있는 테마는 현재 시황 확인 불충분으로 처리, 선택 보류.\n"
+        "- [날짜불명] 자료만 있는 테마는 선택 금지.\n"
+        "- 최근 7일 자료가 뒷받침되지 않는 theme_sub_axes는 생성하지 않는다.\n"
+    ),
+    "evening": (
+        "\n[슬롯: 저녁 — 한국장 마감 리뷰]\n"
+        "핵심 질문 방향:\n"
+        "- 이 테마가 오늘 한국장에서 실제로 어떤 업종/종목 차별화를 만들었으며, 내일 어디를 봐야 하는가?\n"
+        "- theme_sub_axes 권장 구성: ① 오늘 한국장 주요 움직임 ② 예상 대비 차이와 원인 ③ 내일 체크포인트\n"
+        "[주제 선정 가중치 — Phase 10]\n"
+        "- [최근 7일] 자료 3건 이상 수렴하는 테마를 최우선 선택한다.\n"
+        "- [7-30일] 자료만 있는 테마는 현재 시황 확인 불충분으로 처리, 선택 보류.\n"
+        "- [날짜불명] 자료만 있는 테마는 선택 금지.\n"
+        "- 최근 7일 자료가 뒷받침되지 않는 theme_sub_axes는 생성하지 않는다.\n"
+    ),
+    "us_open": (
+        "\n[슬롯: 미국장 개장 전]\n"
+        "핵심 질문 방향:\n"
+        "- 오늘 밤 미국장에서 이 테마가 추가 반영될까, 되돌릴까?\n"
+        "  뉴스/선물/금리/유가/실적 중 무엇이 가장 큰 변수인가?\n"
+        "- theme_sub_axes 권장 구성: ① 오늘 밤 미국장 핵심 변수 ② 반영/되돌림 시나리오 ③ 주목 데이터 포인트\n"
+        "[주제 선정 가중치 — Phase 10]\n"
+        "- [최근 7일] 자료 3건 이상 수렴하는 테마를 최우선 선택한다.\n"
+        "- [7-30일] 자료만 있는 테마는 현재 시황 확인 불충분으로 처리, 선택 보류.\n"
+        "- [날짜불명] 자료만 있는 테마는 선택 금지.\n"
+        "- 최근 7일 자료가 뒷받침되지 않는 theme_sub_axes는 생성하지 않는다.\n"
+    ),
+    "default": (
+        "\n[슬롯: 일반 브리핑]\n"
+        "핵심 질문 방향:\n"
+        "- 특정 시장 개장/마감 문맥에 구애받지 않고, 현재 시점에서 가장 중요한 경제/금융 이슈를 중심으로 분석한다.\n"
+        "- theme_sub_axes: 현재 데이터에서 인과관계가 가장 선명한 3개 하위 축으로 자유 구성.\n"
+        "[주제 선정 가중치 — Phase 10]\n"
+        "- [최근 7일] 자료 3건 이상 수렴하는 테마를 최우선 선택한다.\n"
+        "- [7-30일] 자료만 있는 테마는 현재 시황 확인 불충분으로 처리, 선택 보류.\n"
+        "- [날짜불명] 자료만 있는 테마는 선택 금지.\n"
+        "- 최근 7일 자료가 뒷받침되지 않는 theme_sub_axes는 생성하지 않는다.\n"
+    ),
+}
+
+# ── 슬롯별 GPT Post1 작성 방향 (GPT_WRITER_ANALYSIS_USER에 prepend) ──────────
+
+_SLOT_POST1_WRITER_HINTS: dict = {
+    "morning": (
+        "[슬롯 작성 방향 — 아침]\n"
+        "이 글은 '미국장 마감 원인 + 오늘 한국장 개장 전 프리뷰' 구조로 작성한다.\n"
+        "- 섹션 1: overnight 핵심 변수가 미국장 마감에 어떻게 작용했는가\n"
+        "- 섹션 2: 그 흐름이 한국장에 어떤 방향으로 연결될 수 있는가\n"
+        "- 섹션 3: 오늘 한국 개장 전 확인해야 할 핵심 체크포인트\n"
+    ),
+    "evening": (
+        "[슬롯 작성 방향 — 저녁]\n"
+        "이 글은 '한국장 실제 결과 + 내일 체크포인트' 구조로 작성한다.\n"
+        "- 섹션 1: 오늘 한국장의 실제 결과 — 어떤 업종/종목이 차별화됐는가\n"
+        "- 섹션 2: 오전 예상과 실제 결과의 차이 — 무엇이 달랐는가, 왜인가\n"
+        "- 섹션 3: 내일을 위한 변수 — 내일 체크해야 할 핵심 포인트\n"
+    ),
+    "us_open": (
+        "[슬롯 작성 방향 — 미국장 개장 전]\n"
+        "이 글은 '오늘 밤 미국장 핵심 변수 브리핑' 구조로 작성한다.\n"
+        "- 섹션 1: 오늘 밤 미국장의 핵심 변수 — 뉴스/선물/금리/유가/실적 중 무엇인가\n"
+        "- 섹션 2: 이 변수가 추가 반영될 시나리오 vs 되돌릴 시나리오\n"
+        "- 섹션 3: 오늘 밤 주목할 데이터/이벤트 포인트\n"
+    ),
+    "default": (
+        "[슬롯 작성 방향 — 일반 브리핑]\n"
+        "특정 시장 개장/마감 시점에 구애받지 않는 중립 구조로 작성한다.\n"
+        "- 섹션 1: 현재 시점의 핵심 경제·금융 이슈와 배경\n"
+        "- 섹션 2: 이 이슈의 시장 파급 경로와 업종/자산 영향\n"
+        "- 섹션 3: 향후 주목해야 할 변수와 체크포인트\n"
+    ),
+}
+
+# ── 슬롯별 GPT Post2(캐시의 픽) 작성 방향 ────────────────────────────────────
+
+_SLOT_POST2_WRITER_HINTS: dict = {
+    "morning": (
+        "[Post2 슬롯 방향 — 아침]\n"
+        "한국장 개장 전, 이 테마 맥락에서 상대적으로 체크할 종목·섹터를 선정한다.\n"
+        "오늘 개장 시 구체적 트리거가 있는 종목을 우선한다.\n"
+    ),
+    "evening": (
+        "[Post2 슬롯 방향 — 저녁]\n"
+        "오늘 한국장에서 이 테마 관련 실제로 의미 있었던 종목·섹터를 선정한다.\n"
+        "내일도 논리가 지속될 근거가 있는 종목을 우선한다.\n"
+    ),
+    "us_open": (
+        "[Post2 슬롯 방향 — 미국장 개장 전]\n"
+        "오늘 밤 미국장에서 이 테마에 상대적으로 민감할 종목·섹터를 선정한다.\n"
+        "오늘 밤 변수에 직접 노출되는 종목을 우선한다.\n"
+    ),
+    "default": (
+        "[Post2 슬롯 방향 — 일반 브리핑]\n"
+        "현재 테마 맥락에서 논리가 선명하고 데이터 근거가 풍부한 종목·섹터를 선정한다.\n"
+    ),
+}
+
+
+def _load_publish_history() -> list:
+    """publish_history.json에서 최근 발행 이력을 로드합니다."""
+    if not os.path.exists(_PUBLISH_HISTORY_PATH):
+        return []
+    try:
+        with open(_PUBLISH_HISTORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def save_publish_history(slot: str, post1: dict, post2: Optional[dict]) -> None:
+    """파이프라인 완료 후 발행 이력을 publish_history.json에 저장합니다.
+    최대 _PUBLISH_HISTORY_MAX 건만 유지합니다 (오래된 것부터 제거).
+    """
+    history = _load_publish_history()
+    entry = {
+        "published_at": datetime.now().isoformat(),
+        "slot":         slot,
+        "theme":        post1.get("theme", ""),
+        "sub_axes":     post1.get("materials", {}).get("theme_sub_axes", []),
+        "post1_title":  post1.get("title", ""),
+        "post2_title":  post2.get("title", "") if post2 else "",
+    }
+    history.append(entry)
+    # 최근 N건만 유지
+    history = history[-_PUBLISH_HISTORY_MAX:]
+    with open(_PUBLISH_HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+    logger.info(f"[Phase 10] 발행 이력 저장 완료 | 누적 {len(history)}건 | 슬롯: {slot} | 테마: {entry['theme'][:40]}")
+
+
+def _build_history_context(slot: str) -> str:
+    """최근 발행 이력을 Gemini 분석 프롬프트용 텍스트로 변환합니다.
+    같은 테마+슬롯이 반복될 경우 관점 전환 지시를 추가합니다.
+    """
+    history = _load_publish_history()
+    if not history:
+        return ""
+
+    now = datetime.now()
+    lines = [f"\n[최근 발행 이력 — {len(history)}건 | Phase 10 반복 완화 규칙]"]
+
+    repeat_same_slot_48h  = False  # 같은 슬롯 + 48h 이내 동일 테마 감지
+    repeat_same_axes_24h  = False  # 동일 sub_axes[0] + 24h 이내 감지
+
+    for entry in reversed(history):  # 최신 순
+        pub_str  = entry.get("published_at", "")
+        e_slot   = entry.get("slot", "")
+        theme    = entry.get("theme", "")
+        axes     = entry.get("sub_axes", [])
+        p1_title = entry.get("post1_title", "")
+
+        age_label = ""
+        try:
+            pub_dt  = datetime.fromisoformat(pub_str)
+            age_h   = (now - pub_dt).total_seconds() / 3600
+            age_label = f"{age_h:.0f}시간 전"
+
+            # 반복 감지
+            if e_slot == slot and age_h <= 48:
+                repeat_same_slot_48h = True
+            if axes and age_h <= 24:
+                repeat_same_axes_24h = True
+
+        except Exception:
+            age_label = "시점불명"
+
+        lines.append(
+            f"- [{e_slot}] {age_label} | 테마: {theme[:50]} | 제목: {p1_title[:40]}"
+        )
+
+    # 반복 감지에 따른 관점 전환 지시
+    if repeat_same_axes_24h:
+        lines.append(
+            "[⚠ 반복 감지] 24시간 이내에 동일한 하위 관점(theme_sub_axes)이 발행되었습니다.\n"
+            "→ theme_sub_axes 전체를 이전과 다른 관점으로 반드시 교체하여 생성하십시오."
+        )
+        logger.info("[Phase 10] 반복 테마 감지: sub_axes 24h 이내 동일 → 관점 전환 지시 삽입")
+    elif repeat_same_slot_48h:
+        lines.append(
+            "[⚠ 반복 감지] 48시간 이내에 동일 슬롯에서 유사한 테마가 발행되었습니다.\n"
+            "→ 같은 테마라면 theme_sub_axes를 이전과 다른 하위 관점으로 강제 전환하십시오."
+        )
+        logger.info("[Phase 10] 반복 테마 감지: 동일슬롯 48h 이내 → 하위 관점 전환 지시 삽입")
+
+    return "\n".join(lines)
+
+
+def _log_freshness_summary(articles: list, research: list) -> None:
+    """수집 자료의 date_tier 분포를 INFO 로그로 기록합니다 (Phase 10)."""
+    all_items = articles + research
+    counts: dict = {"recent": 0, "extended": 0, "old": 0, "unknown": 0}
+    for item in all_items:
+        tier = item.get("date_tier", "unknown")
+        counts[tier] = counts.get(tier, 0) + 1
+    logger.info(
+        f"[Phase 10] 자료 분류: 7일이내 {counts['recent']}건 | "
+        f"8-30일 {counts['extended']}건 | 제외(old) {counts['old']}건 | "
+        f"날짜불명 {counts['unknown']}건"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SECTION A: 내부 유틸 — API 호출 래퍼
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1293,23 +1515,28 @@ def _filter_irrelevant_facts(materials: dict) -> dict:
     return materials
 
 
-def gemini_analyze(news_text: str, research_text: str, dart_text: str = "") -> dict:
+def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
+                   slot: str = "default", history_context: str = "") -> dict:
     """
     Step 1: Gemini 분석 엔진.
     뉴스·리서치 데이터를 구조화된 JSON 리포트 재료로 변환합니다.
 
     Args:
-        dart_text: format_dart_for_prompt() 결과물. 빈 문자열이면 프롬프트에 공백만 추가.
+        dart_text:        format_dart_for_prompt() 결과물. 빈 문자열이면 프롬프트에 공백만 추가.
+        slot:             발행 슬롯 ("morning"/"evening"/"us_open"/"default") — Phase 10
+        history_context:  최근 발행 이력 텍스트 — Phase 10
 
     반환:
         {"theme", "facts", "market_impact", "counter_interpretations",
          "uncertainties", "writing_notes"}
     """
+    # Phase 10: 슬롯 컨텍스트 + 이력 컨텍스트 append
+    slot_ctx    = _SLOT_ANALYST_CONTEXTS.get(slot, _SLOT_ANALYST_CONTEXTS["default"])
     user_msg = GEMINI_ANALYST_USER.format(
         research_text=research_text,
         news_text=news_text,
         dart_text=dart_text,
-    )
+    ) + slot_ctx + history_context
     raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
     result = _parse_json_response(raw) if raw else None
 
@@ -1332,15 +1559,20 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "") -> d
     return result
 
 
-def gpt_write_analysis(materials: dict, context_text: str) -> str:
+def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default") -> str:
     """
     Step 2a: GPT 작성 엔진 — Post 1 심층 분석.
     Gemini 분석 재료를 HTML 형식의 심층 분석 글로 작성합니다.
 
+    Args:
+        slot: 발행 슬롯 — Phase 10 슬롯별 작성 방향 힌트 삽입
+
     반환: HTML 문자열 (마크다운 없음, 인라인 스타일 포함)
     """
     materials_json = json.dumps(materials, ensure_ascii=False, indent=2)
-    user_msg = GPT_WRITER_ANALYSIS_USER.format(
+    # Phase 10: 슬롯별 작성 방향 힌트를 user 메시지 앞에 prepend
+    slot_hint = _SLOT_POST1_WRITER_HINTS.get(slot, _SLOT_POST1_WRITER_HINTS["default"])
+    user_msg = slot_hint + "\n" + GPT_WRITER_ANALYSIS_USER.format(
         materials_json=materials_json,
         context_text=context_text,
     )
@@ -1354,10 +1586,14 @@ def gpt_write_analysis(materials: dict, context_text: str) -> str:
     return draft
 
 
-def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: str) -> str:
+def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: str,
+                    slot: str = "default") -> str:
     """
     Step 2b: GPT 작성 엔진 — Post 2 종목 리포트.
     분석 재료 + 종목 + 실제 가격 데이터로 종목 리포트 HTML을 작성합니다.
+
+    Args:
+        slot: 발행 슬롯 — Phase 10 슬롯별 Post2 방향 힌트 삽입
 
     반환: HTML 문자열 ({PRICE_PLACEHOLDER} 포함, PICKS JSON 주석 포함)
     """
@@ -1381,7 +1617,9 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         )
     tickers_and_prices = "\n".join(tickers_lines)
 
-    user_msg = GPT_WRITER_PICKS_USER.format(
+    # Phase 10: 슬롯별 Post2 방향 힌트를 user 메시지 앞에 prepend
+    slot_hint = _SLOT_POST2_WRITER_HINTS.get(slot, _SLOT_POST2_WRITER_HINTS["default"])
+    user_msg = slot_hint + "\n" + GPT_WRITER_PICKS_USER.format(
         theme=theme,
         materials_summary=materials_summary,
         tickers_and_prices=tickers_and_prices,
@@ -1509,7 +1747,7 @@ def gemini_select_tickers_v2(theme: str, materials: dict, research_text: str) ->
 # SECTION G: Phase 7 — 공개 API (main.py 연결)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def generate_deep_analysis(news: list, research: list) -> dict:
+def generate_deep_analysis(news: list, research: list, slot: str = "default") -> dict:
     """
     Post 1 — 3단계 심층 경제 분석 생성.
 
@@ -1517,6 +1755,9 @@ def generate_deep_analysis(news: list, research: list) -> dict:
         Step 1 (Gemini): 뉴스+리서치 → 구조화된 JSON 재료
         Step 2 (GPT):    JSON 재료 → HTML 심층 분석 초고
         Step 3 (Gemini): HTML 초고 → 팩트체크 + 필요 시 수정
+
+    Args:
+        slot: 발행 슬롯 ("morning"/"evening"/"us_open"/"default") — Phase 10
 
     반환:
         {"title", "content", "theme", "key_data", "materials", "generated_at"}
@@ -1528,6 +1769,9 @@ def generate_deep_analysis(news: list, research: list) -> dict:
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
 
+    # ── Phase 10: 자료 최신성 분포 로그 ──────────────────────────────────
+    _log_freshness_summary(news, research)
+
     # ── Step 1-DART: 전체 시장 주요사항보고서 스캔 (심층분석용, 14일) ──────
     dart_disclosures = run_dart_disclosure_scan(days=14)
     if dart_disclosures:
@@ -1536,12 +1780,17 @@ def generate_deep_analysis(news: list, research: list) -> dict:
     if dart_text:
         logger.info(f"[DART] 심층분석 공시 데이터 {len(dart_disclosures)}건 → 프롬프트 주입")
 
+    # ── Phase 10: 발행 이력 컨텍스트 생성 ────────────────────────────────
+    history_ctx = _build_history_context(slot)
+    logger.info(f"[Phase 10] 슬롯: {slot} | 이력 컨텍스트 길이: {len(history_ctx)}자")
+
     # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
-    materials = gemini_analyze(news_text, research_text, dart_text=dart_text)
+    materials = gemini_analyze(news_text, research_text, dart_text=dart_text,
+                               slot=slot, history_context=history_ctx)
     theme = materials.get("theme", "글로벌 경제 주요 이슈")
 
     # ── Step 2: GPT 심층 분석 초고 작성 ───────────────────────────────────
-    draft = gpt_write_analysis(materials, context_text)
+    draft = gpt_write_analysis(materials, context_text, slot=slot)
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
@@ -1596,6 +1845,7 @@ def generate_stock_picks_report(
     news: list,
     research: list,
     materials: Optional[dict] = None,
+    slot: str = "default",
 ) -> dict:
     """
     Post 2 — 3단계 종목 리포트 생성.
@@ -1609,6 +1859,9 @@ def generate_stock_picks_report(
         Step 2 (GPT):    종목 + 가격 + 재료 → HTML 종목 리포트
         Step 3 (Gemini): HTML → 팩트체크 + 필요 시 수정
 
+    Args:
+        slot: 발행 슬롯 ("morning"/"evening"/"us_open"/"default") — Phase 10
+
     반환:
         {"title", "content", "picks", "prices", "generated_at"}
     """
@@ -1621,7 +1874,7 @@ def generate_stock_picks_report(
     # ── Step 1: 분석 재료 (재사용 or 재생성) ──────────────────────────────
     if materials is None:
         logger.info("Post2 — materials 없음, Gemini 재분석 실행")
-        materials = gemini_analyze(news_text, research_text)
+        materials = gemini_analyze(news_text, research_text, slot=slot)
         theme = materials.get("theme", theme)
     else:
         logger.info("Post2 — Post1 materials 재사용")
@@ -1667,7 +1920,7 @@ def generate_stock_picks_report(
             logger.info(f"[DART/annual] 사업보고서 섹션 주입: {list(annual_sections.keys())}")
 
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
-    draft = gpt_write_picks(materials, picks, prices, context_text)
+    draft = gpt_write_picks(materials, picks, prices, context_text, slot=slot)
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────

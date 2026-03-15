@@ -203,6 +203,7 @@ def fetch_web(source: dict) -> list:
                     "summary": summary,
                     "url": href,
                     "published": "",
+                    "date_tier": "unknown",   # Phase 10: Web 수집은 날짜 없음 → unknown 명시
                     "collected_at": datetime.now().isoformat(),
                 }
             )
