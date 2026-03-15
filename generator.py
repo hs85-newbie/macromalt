@@ -186,79 +186,39 @@ def _load_publish_history() -> list:
 def save_publish_history(slot: str, post1: dict, post2: Optional[dict]) -> None:
     """파이프라인 완료 후 발행 이력을 publish_history.json에 저장합니다.
     최대 _PUBLISH_HISTORY_MAX 건만 유지합니다 (오래된 것부터 제거).
+    Phase 11: theme_fingerprint / sub_axes_fingerprint / tickers / stock_buckets 추가.
     """
     history = _load_publish_history()
+
+    theme_str  = post1.get("theme", "")
+    sub_axes   = post1.get("materials", {}).get("theme_sub_axes", [])
+    tickers    = [p.get("ticker", "") for p in (post2.get("picks", []) if post2 else [])]
+
+    theme_fp   = _make_theme_fingerprint(theme_str)
+    axes_fp    = _make_axes_fingerprint(sub_axes)
+    buckets    = _make_ticker_buckets(tickers)
+
     entry = {
-        "published_at": datetime.now().isoformat(),
-        "slot":         slot,
-        "theme":        post1.get("theme", ""),
-        "sub_axes":     post1.get("materials", {}).get("theme_sub_axes", []),
-        "post1_title":  post1.get("title", ""),
-        "post2_title":  post2.get("title", "") if post2 else "",
+        "published_at":        datetime.now().isoformat(),
+        "slot":                slot,
+        "theme":               theme_str,
+        "theme_fingerprint":   theme_fp,
+        "sub_axes":            sub_axes,
+        "sub_axes_fingerprint": axes_fp,
+        "post1_title":         post1.get("title", ""),
+        "post2_title":         post2.get("title", "") if post2 else "",
+        "tickers":             tickers,
+        "stock_buckets":       buckets,
     }
     history.append(entry)
     # 최근 N건만 유지
     history = history[-_PUBLISH_HISTORY_MAX:]
     with open(_PUBLISH_HISTORY_PATH, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
-    logger.info(f"[Phase 10] 발행 이력 저장 완료 | 누적 {len(history)}건 | 슬롯: {slot} | 테마: {entry['theme'][:40]}")
-
-
-def _build_history_context(slot: str) -> str:
-    """최근 발행 이력을 Gemini 분석 프롬프트용 텍스트로 변환합니다.
-    같은 테마+슬롯이 반복될 경우 관점 전환 지시를 추가합니다.
-    """
-    history = _load_publish_history()
-    if not history:
-        return ""
-
-    now = datetime.now()
-    lines = [f"\n[최근 발행 이력 — {len(history)}건 | Phase 10 반복 완화 규칙]"]
-
-    repeat_same_slot_48h  = False  # 같은 슬롯 + 48h 이내 동일 테마 감지
-    repeat_same_axes_24h  = False  # 동일 sub_axes[0] + 24h 이내 감지
-
-    for entry in reversed(history):  # 최신 순
-        pub_str  = entry.get("published_at", "")
-        e_slot   = entry.get("slot", "")
-        theme    = entry.get("theme", "")
-        axes     = entry.get("sub_axes", [])
-        p1_title = entry.get("post1_title", "")
-
-        age_label = ""
-        try:
-            pub_dt  = datetime.fromisoformat(pub_str)
-            age_h   = (now - pub_dt).total_seconds() / 3600
-            age_label = f"{age_h:.0f}시간 전"
-
-            # 반복 감지
-            if e_slot == slot and age_h <= 48:
-                repeat_same_slot_48h = True
-            if axes and age_h <= 24:
-                repeat_same_axes_24h = True
-
-        except Exception:
-            age_label = "시점불명"
-
-        lines.append(
-            f"- [{e_slot}] {age_label} | 테마: {theme[:50]} | 제목: {p1_title[:40]}"
-        )
-
-    # 반복 감지에 따른 관점 전환 지시
-    if repeat_same_axes_24h:
-        lines.append(
-            "[⚠ 반복 감지] 24시간 이내에 동일한 하위 관점(theme_sub_axes)이 발행되었습니다.\n"
-            "→ theme_sub_axes 전체를 이전과 다른 관점으로 반드시 교체하여 생성하십시오."
-        )
-        logger.info("[Phase 10] 반복 테마 감지: sub_axes 24h 이내 동일 → 관점 전환 지시 삽입")
-    elif repeat_same_slot_48h:
-        lines.append(
-            "[⚠ 반복 감지] 48시간 이내에 동일 슬롯에서 유사한 테마가 발행되었습니다.\n"
-            "→ 같은 테마라면 theme_sub_axes를 이전과 다른 하위 관점으로 강제 전환하십시오."
-        )
-        logger.info("[Phase 10] 반복 테마 감지: 동일슬롯 48h 이내 → 하위 관점 전환 지시 삽입")
-
-    return "\n".join(lines)
+    logger.info(
+        f"[Phase 11] 이력 저장 | 슬롯: {slot} | theme_fp: {theme_fp} | "
+        f"axes_fp: {axes_fp} | buckets: {buckets} | 테마: {theme_str[:40]}"
+    )
 
 
 def _log_freshness_summary(articles: list, research: list) -> None:
@@ -273,6 +233,269 @@ def _log_freshness_summary(articles: list, research: list) -> None:
         f"8-30일 {counts['extended']}건 | 제외(old) {counts['old']}건 | "
         f"날짜불명 {counts['unknown']}건"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION A-1: Phase 11 — 반복 완화 Fingerprint 엔진
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── A. theme fingerprint ─────────────────────────────────────────────────────
+# macro 카테고리 10개. 복수 매칭 허용 (예: "에너지_유가|지정학_전쟁").
+_THEME_KEYWORD_GROUPS: dict = {
+    "관세_무역":    ["관세", "tariff", "무역전쟁", "무역", "통상", "수출규제", "보호무역", "관세장벽"],
+    "금리_통화":    ["금리", "연준", "fed", "기준금리", "통화정책", "긴축", "완화", "피봇", "인상", "인하", "fomc"],
+    "에너지_유가":  ["유가", "원유", "oil", "에너지", "wti", "brent", "opec", "정유", "석유"],
+    "지정학_전쟁":  ["지정학", "전쟁", "분쟁", "긴장", "중동", "러시아", "우크라이나", "이란", "이스라엘", "북한"],
+    "반도체_기술":  ["반도체", "chip", "ai", "인공지능", "빅테크", "기술주", "엔비디아", "hbm", "파운드리"],
+    "환율_달러":    ["환율", "달러", "원달러", "강달러", "약달러", "외환", "달러인덱스", "dxy"],
+    "인플레_물가":  ["인플레", "물가", "cpi", "pce", "소비자물가", "인플레이션", "디플레"],
+    "고용_노동":    ["고용", "실업", "일자리", "nfp", "비농업", "임금", "고용지표"],
+    "부동산_리츠":  ["부동산", "reit", "리츠", "주택", "모기지"],
+    "중국_신흥":    ["중국", "위안", "yuan", "신흥국", "emerging", "홍콩", "항셍"],
+}
+
+def _make_theme_fingerprint(theme_str: str) -> str:
+    """theme 문자열 → 정규화된 macro category fingerprint 문자열.
+
+    복수 카테고리 매칭 허용. 매칭 없으면 '기타' (감점 없음).
+    예: "중동 지정학 리스크와 국제유가 급등" → "에너지_유가|지정학_전쟁"
+    """
+    if not theme_str:
+        return "기타"
+    t = theme_str.lower()
+    matched = sorted(
+        cat for cat, kws in _THEME_KEYWORD_GROUPS.items()
+        if any(kw in t for kw in kws)
+    )
+    return "|".join(matched) if matched else "기타"
+
+
+# ── B. sub_axes fingerprint ───────────────────────────────────────────────────
+# 11개 axis_id. 각 sub_axes 항목을 axis_id 하나로 매핑.
+_AXES_KEYWORD_GROUPS: dict = {
+    "미국장_마감":    ["미국장 마감", "overnight", "어젯밤", "뉴욕장 마감", "미장 마감"],
+    "한국장_개장":    ["한국장 개장", "코스피 개장", "개장 전", "프리마켓", "장 전"],
+    "한국장_마감":    ["한국장 마감", "코스피 마감", "오늘 한국장", "코스닥 마감"],
+    "미국장_개장":    ["미국장 개장", "오늘 밤 미국장", "뉴욕 개장", "나스닥 선물"],
+    "업종_차별화":    ["업종", "섹터", "차별화", "sector", "업종별"],
+    "금리_채권":      ["금리", "채권", "국채", "yield", "금리인상", "금리인하"],
+    "환율_달러":      ["환율", "달러", "원달러", "달러강세", "달러약세"],
+    "수출_무역":      ["수출", "무역", "관세", "수입", "교역"],
+    "에너지_원자재":  ["유가", "원자재", "에너지", "금값", "원유"],
+    "실적_이벤트":    ["실적", "어닝", "earning", "발표", "이벤트", "어닝시즌"],
+    "거시_시나리오":  ["시나리오", "전망", "outlook", "리스크", "경기침체", "연착륙"],
+}
+
+def _make_axes_fingerprint(axes: list) -> list:
+    """sub_axes 리스트 → axis_id 리스트.
+
+    각 항목을 _AXES_KEYWORD_GROUPS에서 첫 번째 매칭 axis_id로 변환.
+    매칭 없으면 '기타'.
+    """
+    result = []
+    for ax in (axes or []):
+        ax_lower = ax.lower()
+        matched = next(
+            (ax_id for ax_id, kws in _AXES_KEYWORD_GROUPS.items()
+             if any(kw in ax_lower for kw in kws)),
+            "기타"
+        )
+        result.append(matched)
+    return result
+
+
+# ── C. 종목군 fingerprint ─────────────────────────────────────────────────────
+# 티커 코드(숫자 KR 포함) → 버킷 8종. 미매핑은 '기타'.
+_TICKER_BUCKET_MAP: dict = {
+    # 에너지
+    "XLE": "에너지", "XOM": "에너지", "CVX": "에너지", "COP": "에너지",
+    "PSX": "에너지", "VLO": "에너지", "MPC": "에너지",
+    "010950": "에너지",   # S-Oil
+    "096770": "에너지",   # SK이노베이션
+    "078930": "에너지",   # GS
+    # 반도체·기술
+    "NVDA": "반도체_기술", "AMD": "반도체_기술", "INTC": "반도체_기술",
+    "SOXX": "반도체_기술", "SMH": "반도체_기술", "AVGO": "반도체_기술",
+    "QCOM": "반도체_기술", "MU": "반도체_기술", "TSM": "반도체_기술",
+    "005930": "반도체_기술",   # 삼성전자
+    "000660": "반도체_기술",   # SK하이닉스
+    "042700": "반도체_기술",   # 한미반도체
+    "091990": "반도체_기술",   # 셀트리온헬스케어(보조)
+    # 금융
+    "XLF": "금융", "JPM": "금융", "GS": "금융", "BAC": "금융",
+    "MS": "금융", "C": "금융", "BRK-B": "금융",
+    "105560": "금융",   # KB금융
+    "055550": "금융",   # 신한지주
+    "086790": "금융",   # 하나금융
+    # 방산·지정학
+    "LMT": "방산", "RTX": "방산", "NOC": "방산", "GD": "방산", "BA": "방산",
+    "012450": "방산",   # 한화에어로스페이스
+    "047810": "방산",   # 한국항공우주
+    "064350": "방산",   # 현대로템
+    # 빅테크·인터넷
+    "AAPL": "빅테크", "MSFT": "빅테크", "GOOGL": "빅테크", "META": "빅테크",
+    "AMZN": "빅테크", "NFLX": "빅테크",
+    "035420": "빅테크",   # NAVER
+    "035720": "빅테크",   # 카카오
+    # 소비재·유통
+    "XLY": "소비재", "HD": "소비재", "TGT": "소비재", "WMT": "소비재",
+    # 유틸·리츠
+    "XLU": "유틸_리츠", "VNQ": "유틸_리츠", "O": "유틸_리츠",
+    # 지수ETF
+    "SPY": "지수ETF", "QQQ": "지수ETF", "IWM": "지수ETF",
+    "DIA": "지수ETF", "VTI": "지수ETF",
+    "069500": "지수ETF",   # KODEX 200
+    "122630": "지수ETF",   # KODEX 레버리지
+}
+
+def _make_ticker_buckets(tickers: list) -> list:
+    """티커 리스트 → 섹터 버킷 집합 (중복 제거, 정렬).
+
+    미매핑 티커는 '기타'. '.KS'/'.KQ' 접미사는 제거 후 조회.
+    """
+    buckets: set = set()
+    for t in (tickers or []):
+        code = t.split(".")[0].upper()
+        buckets.add(_TICKER_BUCKET_MAP.get(code, "기타"))
+    return sorted(buckets)
+
+
+# ── D/E. 반복 감지 + 회전 지시 생성 (Phase 11 핵심) ──────────────────────────
+
+# 감점 강도 순위 (높을수록 강함)
+_PENALTY_RANK = {"NONE": 0, "MILD": 1, "BUCKET": 2, "STRONG": 3}
+
+def _build_history_context(slot: str) -> str:
+    """최근 발행 이력 → Gemini 분석 프롬프트용 컨텍스트 문자열.
+
+    Phase 11: theme_fingerprint 기반 per-theme 조건부 반복 감지.
+    - D1 (STRONG): 같은 theme_fp + sub_axes_fp 있음 + ≤24h
+                   → "이 theme를 다시 선정하면 다른 축을 쓰라"
+    - D2 (BUCKET): 같은 theme_fp + non-기타 bucket + ≤24h
+                   → "이 theme를 다시 선정하면 다른 섹터를 쓰라"
+    - D3 (MILD):   같은 slot + ≤48h (theme 무관)
+                   → "같은 슬롯에서 반복이므로 관점 최소 2개 교체"
+    규칙은 per-theme으로 축적되고, 가장 강한 규칙 하나만 지시문으로 출력.
+    다른 slot의 항목도 D1/D2 경고 대상이 된다 (이유: 뉴스가 같으면 theme도 같다).
+    """
+    history = _load_publish_history()
+    if not history:
+        return ""
+
+    now = datetime.now()
+    lines = [f"\n[최근 발행 이력 — {len(history)}건 | Phase 11 반복 완화 규칙]"]
+
+    # per-theme 누적: theme_fp → {"worst": str, "axes": list, "buckets": set, "ages": list}
+    theme_penalties: dict = {}
+    mild_slot_hit = False
+
+    for entry in reversed(history):  # 최신 순
+        pub_str   = entry.get("published_at", "")
+        e_slot    = entry.get("slot", "")
+        theme_raw = entry.get("theme", "")
+        p1_title  = entry.get("post1_title", "")
+
+        # fingerprint: 이력에 저장된 값 우선, 없으면 즉석 계산
+        theme_fp  = entry.get("theme_fingerprint") or _make_theme_fingerprint(theme_raw)
+        axes_fp   = entry.get("sub_axes_fingerprint") or _make_axes_fingerprint(
+                        entry.get("sub_axes", []))
+        e_buckets = entry.get("stock_buckets") or _make_ticker_buckets(
+                        entry.get("tickers", []))
+
+        age_h     = None
+        age_label = "시점불명"
+        try:
+            pub_dt    = datetime.fromisoformat(pub_str)
+            age_h     = (now - pub_dt).total_seconds() / 3600
+            age_label = f"{age_h:.0f}시간 전"
+        except Exception:
+            pass
+
+        lines.append(
+            f"- [{e_slot}] {age_label} | theme_fp={theme_fp} | "
+            f"axes={axes_fp} | buckets={e_buckets} | 제목: {p1_title[:35]}"
+        )
+
+        if age_h is None:
+            continue
+
+        # ── D3: MILD — same slot + ≤48h (theme 무관) ─────────────────────
+        if age_h <= 48 and e_slot == slot:
+            mild_slot_hit = True
+
+        if theme_fp == "기타":
+            continue   # 미분류 theme는 D1/D2 감지 제외
+
+        # ── D1/D2: per-theme 조건부 규칙 ─────────────────────────────────
+        if theme_fp not in theme_penalties:
+            theme_penalties[theme_fp] = {
+                "worst": "NONE", "axes": [], "buckets": set(), "ages": []
+            }
+        rec = theme_penalties[theme_fp]
+        rec["ages"].append(age_h)
+
+        if age_h <= 24:
+            # D1: STRONG — sub_axes_fp 있으면 "다른 축 사용" 지시
+            if axes_fp:
+                rec["axes"].extend(axes_fp)
+                if _PENALTY_RANK["STRONG"] > _PENALTY_RANK[rec["worst"]]:
+                    rec["worst"] = "STRONG"
+
+            # D2: BUCKET — non-기타 bucket 있으면 "다른 섹터" 지시
+            non_etc = [b for b in e_buckets if b != "기타"]
+            if non_etc:
+                rec["buckets"].update(non_etc)
+                if _PENALTY_RANK["BUCKET"] > _PENALTY_RANK[rec["worst"]]:
+                    rec["worst"] = "BUCKET"
+
+    # ── 지시문 생성 ───────────────────────────────────────────────────────────
+    instruction_lines = []
+    log_details       = []
+
+    # per-theme STRONG/BUCKET 지시 (theme_fp별)
+    for fp, rec in theme_penalties.items():
+        if rec["worst"] == "STRONG":
+            avoid_axes = sorted(set(rec["axes"]))
+            instruction_lines.append(
+                f"\n[⚠ 반복 감지 STRONG | theme={fp}]\n"
+                f"→ 24h 이내 이 theme 관련 발행이 있었습니다. "
+                f"같은 theme를 다시 선정한다면:\n"
+                f"  - theme_sub_axes 전체를 이전({avoid_axes})과 다른 인과 경로·축으로 교체하십시오.\n"
+                f"  - Post1은 거시 메커니즘·파급 경로 중심, Post2는 종목·트리거·민감도 중심으로 역할을 분리하십시오."
+            )
+            log_details.append(f"STRONG(theme={fp}, axes={avoid_axes})")
+
+        elif rec["worst"] == "BUCKET":
+            hit_bkts  = sorted(rec["buckets"])
+            all_bkts  = sorted(set(_TICKER_BUCKET_MAP.values()) - {"기타"} - set(hit_bkts))
+            alt_sug   = "·".join(all_bkts[:3]) if all_bkts else "다른 섹터"
+            instruction_lines.append(
+                f"\n[⚠ 반복 감지 BUCKET | theme={fp}]\n"
+                f"→ 24h 이내 이 theme에서 종목군({', '.join(hit_bkts)})이 사용되었습니다. "
+                f"같은 theme를 다시 선정한다면:\n"
+                f"  - Post2 종목은 위 버킷을 피하고 대안 섹터({alt_sug})에서 우선 선정하십시오.\n"
+                f"  - 완전 회피가 어렵다면 같은 버킷 내에서도 다른 트리거 논거를 사용하십시오."
+            )
+            log_details.append(f"BUCKET(theme={fp}, buckets={hit_bkts})")
+
+    # MILD: 전역 지시 (theme 무관, slot 기준)
+    if mild_slot_hit:
+        instruction_lines.append(
+            f"\n[⚠ 반복 감지 MILD | slot={slot}]\n"
+            f"→ 48h 이내 동일 슬롯에서 발행이 있었습니다. "
+            f"같은 테마를 선정한다면 theme_sub_axes 중 최소 2개 이상을 이전과 다른 관점으로 교체하십시오."
+        )
+        log_details.append(f"MILD(slot={slot})")
+
+    lines.extend(instruction_lines)
+
+    # 로그
+    if log_details:
+        logger.info(f"[Phase 11] 반복 감지 지시 삽입 | {' / '.join(log_details)}")
+    else:
+        logger.info("[Phase 11] 반복 감지 없음 — 정상 발행")
+
+    return "\n".join(lines)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
