@@ -1095,23 +1095,36 @@ def _check_temporal_sanity(content: str, run_date_str: str = "") -> dict:
 
 
 def _check_numeric_sanity(content: str) -> dict:
-    """Phase 13 Track B: 주요 시장 수치의 합리적 범위를 경량 점검.
+    """Phase 13/14 Track B+D: 주요 시장 수치의 합리적 범위를 경량 점검.
+
+    Phase 14 변경:
+    - _P14_SANITY_RANGES 사용 (Phase 13 범위보다 넓음, 2026+ 레인지 수용)
+    - 2단계 티어: SUSPICIOUS(광역범위 이탈) / HARD_FAIL(자릿수 오류 등 명백한 이상)
+    - FAIL 조건: hard_fail 1건 이상 OR suspicious 2건 이상
 
     Returns:
-        {status, flags, suspicious_count}
+        {status, flags, suspicious_count, hard_fail_count}
     """
     import re as _re
 
     flags = []
+    hard_fail_flags = []
     plain = _re.sub(r"<[^>]+>", " ", content)
 
     def _check_range(label: str, nums_str: list, key: str) -> None:
-        lo, hi = _P13_SANITY_RANGES[key]
+        lo, hi = _P14_SANITY_RANGES[key]
+        hf_lo, hf_hi = _P14_SANITY_HARD_FAIL_RANGES[key]
         for n_str in nums_str:
             try:
                 n = float(n_str.replace(",", ""))
-                if not (lo <= n <= hi):
-                    flags.append(f"SUSPICIOUS_{label}: {n} (합리적 범위 {lo}–{hi})")
+                if not (hf_lo <= n <= hf_hi):
+                    hard_fail_flags.append(
+                        f"HARD_FAIL_{label}: {n} (명백한 이상값 — 범위 {hf_lo}–{hf_hi})"
+                    )
+                elif not (lo <= n <= hi):
+                    flags.append(
+                        f"SUSPICIOUS_{label}: {n} (광역 범위 {lo}–{hi} 이탈)"
+                    )
             except ValueError:
                 pass
 
@@ -1136,30 +1149,36 @@ def _check_numeric_sanity(content: str) -> dict:
         try:
             n = float(n_str.replace(",", ""))
             if 100 < n < 10_000:
-                lo, hi = _P13_SANITY_RANGES["usdkrw"]
-                if not (lo <= n <= hi):
-                    flags.append(f"SUSPICIOUS_USDKRW: {n} (합리적 범위 {lo}–{hi})")
+                hf_lo, hf_hi = _P14_SANITY_HARD_FAIL_RANGES["usdkrw"]
+                lo, hi = _P14_SANITY_RANGES["usdkrw"]
+                if not (hf_lo <= n <= hf_hi):
+                    hard_fail_flags.append(f"HARD_FAIL_USDKRW: {n} (명백한 이상값)")
+                elif not (lo <= n <= hi):
+                    flags.append(f"SUSPICIOUS_USDKRW: {n} (범위 {lo}–{hi} 이탈)")
         except ValueError:
             pass
 
+    all_flags = hard_fail_flags + flags
+    # FAIL 조건 (Phase 14): hard_fail >= 1 OR suspicious >= 2
     status = (
-        "FAIL" if len(flags) >= 2
+        "FAIL" if (len(hard_fail_flags) >= 1 or len(flags) >= 2)
         else "WARN" if flags
         else "PASS"
     )
 
     result = {
         "status":           status,
-        "flags":            flags[:6],
+        "flags":            all_flags[:6],
         "suspicious_count": len(flags),
+        "hard_fail_count":  len(hard_fail_flags),
     }
 
-    if flags:
-        logger.warning(f"[Phase 13] 수치 이상 감지: {len(flags)}건")
-        for f in flags[:5]:
+    if all_flags:
+        logger.warning(f"[Phase 14] 수치 이상 감지: hard_fail={len(hard_fail_flags)}, suspicious={len(flags)}")
+        for f in all_flags[:5]:
             logger.warning(f"  ⚠ {f}")
     else:
-        logger.info("[Phase 13] 수치 합리성: 이슈 없음")
+        logger.info("[Phase 14] 수치 합리성: 이슈 없음")
 
     return result
 
@@ -1280,6 +1299,679 @@ def _check_post_continuity(post1_content: str, post2_content: str) -> dict:
         logger.warning(f"[Phase 13] Post2 도입부 중복 감지 — {status}")
 
     return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION A-4: Phase 14 — 생성 강제 & 소스 정규화
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Track A: Source Normalization 상수 ──────────────────────────────────────
+
+_P14_CONFIRMED_FACT_VERBS: list = [
+    "기록했습니다", "마감했습니다", "달성했습니다", "증가했습니다",
+    "감소했습니다", "기록됐습니다", "집계됐습니다", "나타났습니다",
+    "발표했습니다", "공시했습니다", "확인됐습니다", "기록하며", "마감하며",
+    "달성하며", "기록한", "마감한", "달성한", "기록했다", "마감했다",
+]
+
+_P14_FORECAST_INDICATORS: list = [
+    "예상됩니다", "전망됩니다", "추정됩니다", "보입니다", "파악됩니다",
+    "것으로 예상", "것으로 전망", "것으로 추정", "할 것으로", "될 것으로",
+    "예정입니다", "계획입니다", "목표로", "전망치", "추정치", "가이던스",
+    "예상된다", "전망된다", "추정된다", "것으로 예상된", "것으로 전망된",
+]
+
+
+def _normalize_source_for_generation(materials: dict, run_date_str: str) -> str:
+    """Phase 14 Track A: facts를 CONFIRMED/FORECAST/AMBIGUOUS로 분류해
+    GPT 프롬프트 앞에 주입할 정규화 블록을 생성한다.
+
+    소스 데이터에 포함된 전망 어미가 확정된 과거 사실에 붙어 GPT 출력을
+    오염시키는 문제를 방지한다.
+
+    Returns:
+        GPT user_msg 앞에 prepend할 정규화 블록 텍스트.
+    """
+    from datetime import datetime as _dt
+    import re as _re
+
+    try:
+        run_dt = _dt.strptime(run_date_str[:10], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        run_dt = _dt.now()
+
+    facts = materials.get("facts", [])
+    if not facts:
+        return ""
+
+    confirmed: list = []
+    forecast: list  = []
+    ambiguous: list = []
+
+    for fact in facts:
+        content  = fact.get("content", "")
+        date_str = fact.get("date", "") or ""
+        source   = fact.get("source", "") or ""
+
+        # 날짜 기반 분류
+        is_past = False
+        yr_m = _re.search(r"(20\d{2})", date_str)
+        if yr_m:
+            fact_year = int(yr_m.group(1))
+            if fact_year < run_dt.year:
+                is_past = True
+            elif fact_year == run_dt.year:
+                # 월일 있으면 정밀 비교
+                md_m = _re.search(r"(\d{1,2})[월\-](\d{1,2})", date_str)
+                if md_m:
+                    try:
+                        fact_dt = _dt(run_dt.year, int(md_m.group(1)), int(md_m.group(2)))
+                        is_past = fact_dt <= run_dt
+                    except ValueError:
+                        is_past = True  # 날짜 파싱 실패 → 보수적으로 과거 처리
+                else:
+                    is_past = True  # 연도만 있고 같은 연도 → 과거로 처리
+
+        has_forecast_lang  = any(kw in content for kw in _P14_FORECAST_INDICATORS)
+        has_confirmed_lang = any(kw in content for kw in _P14_CONFIRMED_FACT_VERBS)
+
+        if is_past and has_confirmed_lang and not has_forecast_lang:
+            confirmed.append((content[:110], source))
+        elif has_forecast_lang and not has_confirmed_lang:
+            forecast.append((content[:110], source))
+        elif is_past and not has_forecast_lang:
+            confirmed.append((content[:110], source))
+        else:
+            ambiguous.append((content[:110], source))
+
+    if not confirmed and not forecast and not ambiguous:
+        return ""
+
+    lines = [
+        "\n[Phase 14 — 소스 시점 정규화]",
+        "아래 분류에 따라 문장 언어 톤을 결정하십시오.\n",
+    ]
+
+    if confirmed:
+        lines.append("✅ CONFIRMED 팩트 — 직접 서술 필수 (헤징 어미 금지, 과거 사실 동사 사용):")
+        for c, src in confirmed[:8]:
+            lines.append(f"  • [{src}] {c}")
+
+    if forecast:
+        lines.append("\n⚠ FORECAST 데이터 — [전망] 태그 + 조건부 서술 필수:")
+        for c, src in forecast[:5]:
+            lines.append(f"  • [{src}] {c}")
+
+    if ambiguous:
+        lines.append("\n❓ AMBIGUOUS — [해석] 또는 조건부로만 서술:")
+        for c, src in ambiguous[:4]:
+            lines.append(f"  • [{src}] {c}")
+
+    lines.append("")
+    block = "\n".join(lines)
+    logger.info(
+        f"[Phase 14] 소스 정규화 | CONFIRMED={len(confirmed)}, "
+        f"FORECAST={len(forecast)}, AMBIGUOUS={len(ambiguous)}"
+    )
+    return block
+
+
+def _extract_post1_spine(post1_content: str) -> str:
+    """Phase 14 Track B-4: Post1 최종 콘텐츠에서 분석 뼈대 문장을 추출.
+
+    우선순위:
+        1. <!-- SPINE: ... --> HTML 주석
+        2. 첫 번째 [해석] 문장 (20자 이상)
+        3. 첫 번째 80자 이상 문장 (last resort)
+        4. 빈 문자열
+    """
+    import re as _re
+
+    spine_m = _re.search(r"<!--\s*SPINE:\s*(.+?)\s*-->", post1_content, _re.DOTALL)
+    if spine_m:
+        return spine_m.group(1).strip()[:300]
+
+    plain = _re.sub(r"<[^>]+>", " ", post1_content)
+    interp_m = _re.search(r"\[해석\]\s*([^.!?。]{20,200}[.!?。])", plain)
+    if interp_m:
+        return interp_m.group(1).strip()[:250]
+
+    sentences = [s.strip() for s in _re.split(r"[.。!?！？]\s*", plain) if len(s.strip()) >= 80]
+    if sentences:
+        return sentences[0][:250]
+
+    return ""
+
+
+# ── Track B: Generation Enforcement — Few-shot 대조 예시 ─────────────────────
+
+_P14_FEWSHOT_BAD_GOOD_INTERP: str = """
+[Phase 14 — 해석 품질 BAD→GOOD 대조 예시]
+아래 대조 예시를 기사 작성에 직접 적용하십시오.
+
+❌ BAD [교과서 인과 — 사용 금지]:
+"유가 상승으로 인플레이션 압력이 높아지고 있습니다."
+✅ GOOD [수치 경로 명시]:
+"유가 $95 상승이 수입 물가로 전달되는 규모는 원달러 환율 동반 여부에 달려있다.
+현재 1,450원 환경에서 수입 에너지 비용 증가폭은 달러 환산 유가 상승폭의 약 1.3배다.
+즉, 이번 유가 상승의 물가 충격은 환율 안정 시나리오보다 20-30% 클 수 있다."
+
+❌ BAD [동어 반복]:
+"금리 상승은 밸류에이션 부담으로 작용할 것으로 보입니다."
+✅ GOOD [수치 연결 + 이중 함의]:
+"금리 10bp 추가 상승 시 KOSPI 12MF P/E에 가해지는 이론적 할인율 압박은 -0.2x 수준이다.
+현재 P/E 8.8x 기준 8.6x로 이동하는데, 이 구간은 2022년 저점(8.3x)에 근접한다.
+따라서 금리 상승은 단순 밸류에이션 부담이 아니라 '바닥권 재인식 트리거'를 동시에 내포한다."
+
+❌ BAD [범용 리스크 나열]:
+"변동성 리스크와 불확실성이 여전히 존재합니다."
+✅ GOOD [조건+결과+논지충돌]:
+"IEA가 3분기 원유 수요를 일 100만 배럴 이상 하향할 경우, 유가 상승 모멘텀은 2주 내
+되돌림될 수 있다. 이 시나리오에서 오늘 논지의 전제인 에너지 섹터 이익률 개선이 약화되고,
+반도체 집중도가 지수 상승의 유일한 동력이 된다."
+
+❌ BAD [당연한 결론]:
+"이익 추정치 상향은 투자자들의 관심을 끌고 있습니다."
+✅ GOOD [분포 분석 → 판단 기준 이동]:
+"유니버스 200종목 이익 추정치 +1.2% 상향의 의미는 규모보다 분포에 있다.
+이 상향분의 70% 이상이 반도체 1-2종목에 집중된다면, 지수 전체 이익 개선은 착시이며
+비반도체 종목에서의 개별 접근이 지수 추종보다 더 중요해진다."
+
+❌ BAD [Post2 — 매크로 재진입]:
+"최근 호르무즈 해협 봉쇄 우려가 심화되면서 유가가 급등하고 있습니다."
+✅ GOOD [Post2 — 결론 인용 후 종목 직행]:
+"Post1 결론: 지정학 단기 노이즈 처리 국면에서 이익 모멘텀 종목이 상대 우위.
+이 기준에서 가장 직접 수혜를 받는 종목은 삼성전자다 — 이번 주 이익 추정치 변화가
+이 논지를 직접 확인해준다."
+"""
+
+_P14_ANALYTICAL_SPINE_ENFORCEMENT: str = """
+[Phase 14 — 분석 뼈대 강제]
+기사 작성 시작 전, HTML 첫 줄에 다음 형식의 뼈대 주석을 반드시 삽입하십시오:
+<!-- SPINE: [팩트 X]와 [팩트 Y] 동시 발생 → 투자자는 [Z] 대신 [W]에 주목해야 한다 -->
+
+예시:
+<!-- SPINE: 이익 추정치 상향(+1.2%)과 KOSPI P/E 8.8x 동시 발생 → 밸류에이션 부담론보다 이익 모멘텀 종목 선별이 핵심 -->
+
+이 뼈대가 기사 제목·도입부·핵심 섹션 3개를 모두 관통해야 합니다.
+평행 사실 나열 구조를 피하고 단일 논지로 집중하십시오.
+"""
+
+_P14_HEDGE_DIRECT_PROHIBITION: str = """
+[Phase 14 — 팩트 서술 헤징 직접 금지]
+날짜가 명시된 과거 시장 데이터에는 다음 표현을 절대 사용하지 마십시오:
+  ❌ "KOSPI는 X,XXX.XX pt에 마감할 것으로 예상됩니다" (과거 날짜 + 전망 어미)
+  ❌ "0.48% 하락한 것으로 파악됩니다" (과거 수치 + 헤징 어미)
+  ✅ "KOSPI는 전일 대비 0.48% 하락한 X,XXX.XX pt에 마감했습니다" (직접 서술)
+  ✅ "국고채 금리는 3.649%를 기록했습니다" (직접 서술)
+
+전망/시나리오에만 조건부 언어를 사용하십시오:
+  ✅ "WTI $100 돌파가 2주 이상 유지된다면..." (명시적 조건 포함)
+  ✅ "이익 추정치 추가 상향 시 P/E 재평가 가능성" (조건 명시)
+"""
+
+_P14_POST1_ENFORCEMENT_BLOCK: str = (
+    _P14_ANALYTICAL_SPINE_ENFORCEMENT + "\n"
+    + _P14_FEWSHOT_BAD_GOOD_INTERP + "\n"
+    + _P14_HEDGE_DIRECT_PROHIBITION + "\n"
+)
+
+_P14_POST2_CONTINUATION_TEMPLATE: str = """
+[Phase 14 — Post2 연속성 강제]
+Post1 결론/뼈대:
+{post1_spine}
+
+Post2는 위 결론에서 즉시 출발합니다.
+→ "Post1이 도출한 [위 결론]을 바탕으로, 가장 직접 노출되는 종목은..."
+→ 또는: "[위 결론]의 조건에서, 섹터 선별 기준의 핵심은..."
+
+다시 매크로 배경(지정학/금리/유가 등)을 설명하는 문단을 도입부에 쓰지 마십시오.
+"""
+
+# ── Track C: Rewrite Enforcement Loop 프롬프트 ──────────────────────────────
+
+GEMINI_INTERP_REWRITE_SYSTEM: str = """
+너는 매크로몰트(MacroMalt) 금융 콘텐츠 품질 강화 에디터다.
+입력된 HTML 기사의 [해석] 섹션에서 교과서 인과관계와 범용 일반론을 찾아
+비자명적 해석으로 교체한다.
+
+[재작성 원칙]
+1. 교체 대상: [해석] 레이블 없이 당연한 결론을 서술하거나,
+   [해석] 레이블이 있어도 교과서 인과만 담긴 문장
+2. 교체 기준:
+   - 이 시점·이 데이터 조합에서만 나오는 함의 명시
+   - 상충 신호의 우열 관계 명시 (어느 신호가 더 강한가)
+   - 수치 기반 이차 효과 (직접 효과보다 간접 파급 경로)
+   - 투자자 판단 기준 이동 명시 (Z 대신 W에 주목해야 하는 이유)
+3. 보존 대상: 사실 서술, 숫자, 구체적 조건부 반론, 출처 표기
+4. 분량 보존: 교체 후 원문보다 짧아지지 않도록 한다
+5. 출력 형식: 수정된 HTML 전체를 그대로 출력 (JSON 래핑 없음, 코드블록 없음)
+
+[절대 금지 패턴 — 발견 즉시 교체]
+- "유가 상승 → 인플레이션 압력" 류 직접 인과 ([해석] 레이블 있어도 교체)
+- "금리 상승 → 밸류에이션 부담" 류 직접 인과
+- "지정학 리스크 → 시장 불확실성" 동어 반복
+- "이익 추정치 상향 → 투자자 관심 증가" 당연한 결론
+- "변동성/불확실성이 리스크" 카테고리 나열
+"""
+
+GEMINI_INTERP_REWRITE_USER: str = """
+아래 HTML에서 약한 해석 패턴을 찾아 교체하고, 수정된 HTML 전체를 출력하라.
+
+[Phase 13이 감지한 약한 해석 패턴]
+{weak_patterns}
+
+[수정 대상 HTML]
+{draft}
+"""
+
+# ── Track C Hotfix: Targeted Block-Level Rewrite (Phase 14.1) ────────────────
+# 문제: 기존 전체 기사 재작성은 weak_interp_hits를 실제로 줄이지 못함.
+# 이유: 패턴이 기사 전체에 걸쳐 키워드 쌍을 감지하므로, Gemini가 전체를 재작성해도
+#       다른 섹션에 남은 키워드가 패턴을 계속 유발함.
+# 해결: 패턴 키워드가 실제로 동시 등장하는 HTML 블록만 추출→타겟 재작성→교체.
+
+_P14H_BLOCK_TAGS_RE: str = r"<(p|li|blockquote|h[1-6]|div)[^>]*>.*?</\1>"
+
+GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST1: str = """
+너는 매크로몰트(MacroMalt) 금융 분석 콘텐츠의 해석 품질 개선 에디터다.
+입력되는 각 HTML 블록은 약한 해석 패턴(교과서 인과, 범용 리스크 나열)이 감지된 단락이다.
+각 블록을 다음 기준으로 재작성하라.
+
+[재작성 목표 — Post1 심층분석 맥락]
+1. 교과서 인과 제거: "A 상승 → B 압력" 형태의 단순 직접 연결 제거
+2. 비자명적 해석으로 교체:
+   - 이 시점·이 데이터 조합에서만 성립하는 함의
+   - 상충 신호 간 긴장 해소 (어느 신호가 더 강한지 판단)
+   - 투자자 프레이밍 이동 (Z 대신 W를 보아야 하는 이유)
+   - 2차 효과 경로 (직접 효과보다 간접 파급)
+3. 분석 뼈대(spine) 지지: 제공된 spine 문장과 논지를 강화하는 방향으로 재작성
+4. 팩트 보존: 숫자, 날짜, 출처 표기 변경 금지
+
+[절대 금지 패턴]
+- "유가 상승 → 인플레이션 압력" / "금리 상승 → 밸류에이션 부담"
+- "지정학 리스크 → 불확실성 증가" / "이익 추정치 상향 → 투자자 관심"
+- "변동성이 리스크" / "불확실성이 지속"
+- 기존 약한 패턴과 동일한 키워드 쌍을 다른 방식으로 표현한 문장
+
+[출력 형식]
+블록 번호와 함께 재작성된 HTML 블록만 출력하라.
+형식:
+BLOCK_1:
+<p>재작성된 내용</p>
+BLOCK_2:
+<p>재작성된 내용</p>
+(수정이 필요 없는 블록은 원본 그대로 BLOCK_N: 형식으로 출력하라)
+"""
+
+GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST2: str = """
+너는 매크로몰트(MacroMalt) 금융 분석 콘텐츠의 해석 품질 개선 에디터다.
+입력되는 각 HTML 블록은 약한 해석 패턴(교과서 인과, 범용 리스크 나열)이 감지된 단락이다.
+각 블록을 다음 기준으로 재작성하라.
+
+[재작성 목표 — Post2 종목 리포트 맥락]
+1. 교과서 인과 제거: "반도체 수요 증가 + 기술력 강화 → 실적 개선" 등 당연한 결론 제거
+2. 종목 레벨 비자명적 해석으로 교체:
+   - "왜 이 종목이 이 테제(Post1 spine) 하에서 특히 유리한가"의 구체적 메커니즘
+   - 동종 업종 대비 차별점 (같은 섹터에서 이 종목이 선택된 이유)
+   - 수급/밸류에이션 비대칭 (외국인 매도 후 저PER 진입 기회 등)
+   - 시나리오별 downside 구조 (단순 "리스크 존재" 아닌 조건+크기 명시)
+3. [반대 포인트] 강화: 조건 + 결과 + 메인 픽 테제와의 충돌 3요소 필수
+4. 팩트 보존: 숫자, 날짜, 출처 표기 변경 금지
+
+[절대 금지 패턴]
+- "반도체 수요 증가", "기술력 강화", "실적 개선 기대"만 나열
+- "지정학 리스크 → 원가 부담" 단문 반론
+- "변동성이 리스크" / "불확실성 지속" 카테고리 나열
+- 기존 약한 패턴과 동일한 키워드 쌍을 다른 방식으로 표현한 문장
+
+[출력 형식]
+블록 번호와 함께 재작성된 HTML 블록만 출력하라.
+형식:
+BLOCK_1:
+<p>재작성된 내용</p>
+BLOCK_2:
+<p>재작성된 내용</p>
+(수정이 필요 없는 블록은 원본 그대로 BLOCK_N: 형식으로 출력하라)
+"""
+
+GEMINI_TARGETED_BLOCK_REWRITE_USER: str = """
+아래 HTML 블록들은 약한 해석 패턴이 감지된 타겟 단락들이다.
+각 블록을 시스템 프롬프트 기준으로 재작성하라.
+
+[기사 분석 뼈대 (spine)]
+{spine}
+
+[감지된 약한 패턴]
+{weak_patterns}
+
+[재작성 타겟 블록들]
+{target_blocks}
+"""
+
+
+def _extract_weak_interp_blocks(content: str) -> list:
+    """Phase 14 Hotfix Track A: 약한 해석 패턴 키워드가 동시 등장하는 HTML 블록 추출.
+
+    전략:
+    1. HTML을 블록 단위(p, li, h1-h6)로 분리
+    2. 각 블록 plain text에서 패턴 (kw1, kw2) 쌍이 동시 등장하는 블록 선별
+    3. 동시 등장 없을 경우, [해석]/[전망] 문맥 블록에서 단일 패턴 키워드 포함 블록 보조 선별
+    4. 최대 6개 블록 반환 (Gemini 컨텍스트 절약)
+
+    Returns:
+        list of {html_block, plain_text, matched_patterns, has_cooccurrence, section_hint}
+    """
+    import re as _re
+
+    # 블록 단위 추출
+    block_pattern = _re.compile(
+        r"(<(?:p|li|blockquote|h[1-6])[^>]*>)(.*?)(</(?:p|li|blockquote|h[1-6])>)",
+        _re.DOTALL | _re.IGNORECASE,
+    )
+    blocks = []
+    for m in block_pattern.finditer(content):
+        open_tag, inner, close_tag = m.group(1), m.group(2), m.group(3)
+        plain = _re.sub(r"<[^>]+>", " ", inner).strip()
+        if len(plain) < 20:
+            continue
+        # 섹션 힌트 감지 ([해석], [전망], [반대])
+        section_hint = ""
+        for tag in ["[해석]", "[전망]", "[반대", "[반론"]:
+            if tag in plain or tag in open_tag:
+                section_hint = tag
+                break
+        blocks.append({
+            "html_block": m.group(0),
+            "open_tag": open_tag,
+            "inner": inner,
+            "close_tag": close_tag,
+            "plain_text": plain,
+            "section_hint": section_hint,
+            "start": m.start(),
+            "end": m.end(),
+        })
+
+    # 패턴별 코-오커런스 블록 우선, 섹션 힌트 블록 보조
+    co_blocks = []
+    hint_blocks = []
+    plain_all = _re.sub(r"<[^>]+>", " ", content)
+
+    for blk in blocks:
+        txt = blk["plain_text"]
+        matched = []
+        for (kw1, kw2) in _P13_WEAK_INTERP_PATTERNS:
+            if kw1 in txt and kw2 in txt:
+                matched.append((kw1, kw2))
+        if matched:
+            blk["matched_patterns"] = matched
+            blk["has_cooccurrence"] = True
+            co_blocks.append(blk)
+        elif blk["section_hint"]:
+            # 섹션 내 단일 키워드라도 포함이면 보조 후보
+            single_matched = []
+            for (kw1, kw2) in _P13_WEAK_INTERP_PATTERNS:
+                if kw1 in txt or kw2 in txt:
+                    single_matched.append((kw1, kw2))
+            if single_matched:
+                blk["matched_patterns"] = single_matched
+                blk["has_cooccurrence"] = False
+                hint_blocks.append(blk)
+
+    # 코-오커런스 우선, 이후 섹션 힌트 블록 보충 (최대 6개)
+    result = co_blocks[:4] + hint_blocks[:max(0, 6 - len(co_blocks[:4]))]
+    return result
+
+
+def _rewrite_weak_blocks(
+    targets: list,
+    article_spine: str,
+    post_type: str,
+    label: str,
+) -> dict:
+    """Phase 14 Hotfix Track B: 타겟 블록들을 Gemini로 일괄 재작성.
+
+    Args:
+        targets:       _extract_weak_interp_blocks() 반환값
+        article_spine: Post1 뼈대 문장 (없으면 빈 문자열)
+        post_type:     "Post1" | "Post2"
+        label:         로그 레이블
+
+    Returns:
+        {original_html_block: replacement_html_block} 매핑
+    """
+    if not targets:
+        return {}
+
+    system = (
+        GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST1
+        if "Post1" in post_type
+        else GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST2
+    )
+
+    # 패턴 설명 빌드
+    all_patterns = set()
+    for blk in targets:
+        for p in blk.get("matched_patterns", []):
+            all_patterns.add(p)
+    pattern_desc = "\n".join(
+        f"- '{kw1}' + '{kw2}' 조합 감지" for (kw1, kw2) in all_patterns
+    ) or "- 약한 해석 패턴 감지"
+
+    # 타겟 블록 리스트업
+    block_lines = []
+    for i, blk in enumerate(targets, 1):
+        cooc = "【코-오커런스】" if blk.get("has_cooccurrence") else "【섹션 내 패턴】"
+        block_lines.append(f"BLOCK_{i}: {cooc}\n{blk['html_block']}")
+    target_blocks_str = "\n\n".join(block_lines)
+
+    user_msg = GEMINI_TARGETED_BLOCK_REWRITE_USER.format(
+        spine=article_spine or "(뼈대 미제공)",
+        weak_patterns=pattern_desc,
+        target_blocks=target_blocks_str,
+    )
+
+    raw = _call_gemini(
+        system,
+        user_msg,
+        f"Step2.5-P14H:타겟재작성[{label}]",
+        temperature=0.35,
+    )
+    if not raw:
+        logger.warning(f"[Phase 14H] 타겟 재작성 Gemini 응답 없음 [{label}]")
+        return {}
+
+    # BLOCK_N: 파싱
+    replacements: dict = {}
+    import re as _re
+    block_re = _re.compile(
+        r"BLOCK_(\d+)\s*:?\s*(?:\[.*?\]\s*)?\n?(.*?)(?=BLOCK_\d+\s*:|\Z)",
+        _re.DOTALL,
+    )
+    for m in block_re.finditer(raw):
+        idx = int(m.group(1)) - 1
+        replacement_html = m.group(2).strip()
+        if 0 <= idx < len(targets) and replacement_html:
+            orig = targets[idx]["html_block"]
+            # 길이 안전 가드: 교체본이 원본의 30% 미만이면 스킵
+            if len(replacement_html) >= len(orig) * 0.30:
+                replacements[orig] = replacement_html
+            else:
+                logger.warning(
+                    f"[Phase 14H] BLOCK_{idx+1} 교체본 너무 짧음 "
+                    f"({len(replacement_html)} < {len(orig)*0.3:.0f}) — 스킵"
+                )
+
+    logger.info(
+        f"[Phase 14H] 타겟 재작성 완료 [{label}] | "
+        f"타겟 {len(targets)}개 → 교체 {len(replacements)}개"
+    )
+    return replacements
+
+
+def _apply_block_replacements(content: str, replacements: dict, label: str = "") -> str:
+    """Phase 14 Hotfix Track C: 교체 블록을 원본 HTML에 삽입.
+
+    Args:
+        content:      원본 HTML
+        replacements: {original_html_block: replacement_html_block}
+        label:        로그 레이블
+
+    Returns:
+        교체 후 HTML (교체 실패 블록은 원본 유지)
+    """
+    result = content
+    applied = 0
+    for orig, replacement in replacements.items():
+        if orig in result:
+            result = result.replace(orig, replacement, 1)
+            applied += 1
+        else:
+            logger.warning(
+                f"[Phase 14H] 원본 블록 미탐지 — 교체 스킵 "
+                f"[{label}] (블록 앞 40자: {orig[:40]!r})"
+            )
+    logger.info(f"[Phase 14H] HTML 교체 적용 [{label}]: {applied}/{len(replacements)}개")
+    return result
+
+
+def _enforce_interpretation_rewrite(
+    content: str,
+    weak_interp_hits: int,
+    label: str = "",
+    article_spine: str = "",
+) -> str:
+    """Phase 14 Track C (Hotfix): weak_interpretation FAIL 시 타겟 블록 교체 실행.
+
+    Phase 14.1 변경:
+    - 전체 기사 재작성 → 타겟 블록 단위 교체로 전환
+    - 약한 패턴 키워드가 실제로 동시 등장하는 블록만 Gemini에 전달
+    - 교체 후 re-score로 해소 여부 검증
+
+    Args:
+        content:          Phase 13 진단 후 콘텐츠 (HTML)
+        weak_interp_hits: Phase 13 weak_hits 수 (>= 3 이면 FAIL)
+        label:            로그 레이블 ("Post1" | "Post2" 등)
+        article_spine:    Post1 분석 뼈대 문장 (선택)
+
+    Returns:
+        교체 후 콘텐츠 (실패/스킵 시 원본 반환)
+    """
+    if weak_interp_hits < 3:
+        logger.info(
+            f"[Phase 14] 재작성 패스 스킵 [{label}] — "
+            f"weak_hits={weak_interp_hits} (임계값 3 미만)"
+        )
+        return content
+
+    logger.info(
+        f"[Phase 14] 타겟 재작성 시작 [{label}] — weak_hits={weak_interp_hits}"
+    )
+
+    # ── Step 1: 타겟 블록 추출 ──────────────────────────────────────────────
+    targets = _extract_weak_interp_blocks(content)
+    logger.info(
+        f"[Phase 14H] 타겟 블록 추출 [{label}]: {len(targets)}개 "
+        f"(코-오커런스 {sum(1 for t in targets if t.get('has_cooccurrence'))}개)"
+    )
+
+    if targets:
+        # ── Step 2: 타겟 블록 Gemini 재작성 ──────────────────────────────
+        post_type = "Post1" if "Post1" in label or "1" in label else "Post2"
+        replacements = _rewrite_weak_blocks(targets, article_spine, post_type, label)
+
+        if replacements:
+            # ── Step 3: HTML 교체 적용 ────────────────────────────────────
+            updated = _apply_block_replacements(content, replacements, label)
+
+            # ── Step 4: PICKS 주석 보존 ───────────────────────────────────
+            if "<!-- PICKS:" in content and "<!-- PICKS:" not in updated:
+                picks_match = re.search(r"<!--\s*PICKS:.*?-->", content, re.DOTALL)
+                if picks_match:
+                    updated = updated.rstrip() + "\n" + picks_match.group(0)
+                    logger.info(f"[Phase 14H] PICKS 주석 복원 [{label}]")
+
+            # ── Step 5: re-score 검증 ────────────────────────────────────
+            new_score = _score_interpretation_quality(updated, label=f"{label}-타겟교체후")
+            new_hits = new_score.get("weak_interp_hits", weak_interp_hits)
+            if new_hits < weak_interp_hits:
+                logger.info(
+                    f"[Phase 14H] 타겟 교체 성공 [{label}] — "
+                    f"weak_hits {weak_interp_hits} → {new_hits}"
+                )
+            else:
+                logger.warning(
+                    f"[Phase 14H] 타겟 교체 후 weak_hits 불변 [{label}] — "
+                    f"{weak_interp_hits} → {new_hits} (패턴이 비-해석 섹션에 잔존)"
+                )
+            logger.info(
+                f"[Phase 14H] 교체 완료 [{label}] | "
+                f"원본 {len(content)}자 → 교체 후 {len(updated)}자"
+            )
+            return updated
+        else:
+            logger.warning(
+                f"[Phase 14H] 타겟 블록 재작성 결과 없음 [{label}] — "
+                "전체 기사 재작성 폴백 시도"
+            )
+    else:
+        logger.info(
+            f"[Phase 14H] 타겟 블록 미추출 [{label}] — "
+            "키워드가 다른 섹션에 분산됨, 전체 기사 폴백"
+        )
+
+    # ── Fallback: 전체 기사 재작성 (기존 Phase 14 방식) ─────────────────────
+    logger.info(f"[Phase 14] 전체 기사 재작성 폴백 [{label}]")
+    pattern_lines = []
+    for (kw1, kw2) in _P13_WEAK_INTERP_PATTERNS[:8]:
+        import re as _re
+        plain = _re.sub(r"<[^>]+>", " ", content)
+        if kw1 in plain and kw2 in plain:
+            pattern_lines.append(f"- '{kw1}' + '{kw2}' 조합 (교과서 인과 의심)")
+    pattern_desc = "\n".join(pattern_lines) if pattern_lines else "- 교과서 인과 패턴 다수 감지"
+
+    user_msg = GEMINI_INTERP_REWRITE_USER.format(
+        weak_patterns=pattern_desc,
+        draft=content,
+    )
+    rewritten = _call_gemini(
+        GEMINI_INTERP_REWRITE_SYSTEM,
+        user_msg,
+        f"Step2.5-P14:해석재작성폴백[{label}]",
+        temperature=0.4,
+    )
+
+    if not rewritten or len(rewritten.strip()) < len(content) * 0.70:
+        logger.warning(f"[Phase 14] 폴백 재작성 결과 불충분 [{label}] — 원본 유지")
+        return content
+
+    rewritten = _strip_code_fences(rewritten)
+    if "<!-- PICKS:" in content and "<!-- PICKS:" not in rewritten:
+        picks_match = re.search(r"<!--\s*PICKS:.*?-->", content, re.DOTALL)
+        if picks_match:
+            rewritten = rewritten.rstrip() + "\n" + picks_match.group(0)
+    logger.info(
+        f"[Phase 14] 폴백 재작성 완료 [{label}] | "
+        f"원본 {len(content)}자 → 재작성 {len(rewritten)}자"
+    )
+    return rewritten
+
+
+# ── Track D: Numeric Sanity Recalibration ────────────────────────────────────
+# Phase 14: 2026년 실제 시장 레인지 반영 (KOSPI 5,500+ 수용)
+# Phase 13의 4,500 상한을 상향해 false-positive HOLD 억제
+_P14_SANITY_RANGES: dict = {
+    "kospi":  (1500, 8000),   # 2026+ 5,500+ 레인지 수용
+    "kosdaq": (400,  4000),
+    "usdkrw": (900,  2500),
+}
+
+# 자릿수 오류 등 명백한 비정상값만 HARD_FAIL
+_P14_SANITY_HARD_FAIL_RANGES: dict = {
+    "kospi":  (100,  50000),
+    "kosdaq": (50,   20000),
+    "usdkrw": (100,  5000),
+}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2581,10 +3273,24 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
     # Phase 10: 슬롯별 작성 방향 힌트를 user 메시지 앞에 prepend
     # Phase 12: 증거 밀도 & 구조 규칙을 슬롯 힌트 앞에 prepend
     # Phase 13: 해석 지성 규칙을 P12 규칙 앞에 prepend
+    # Phase 14: 생성 강제(few-shot+spine+hedge금지) + 소스 정규화를 P13 앞에 prepend
     slot_hint = _SLOT_POST1_WRITER_HINTS.get(slot, _SLOT_POST1_WRITER_HINTS["default"])
-    user_msg = _P13_POST1_INTELLIGENCE_RULES + _P12_POST1_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_ANALYSIS_USER.format(
-        materials_json=materials_json,
-        context_text=context_text,
+
+    # Phase 14 Track A: 소스 시점 정규화 블록
+    run_date_str_now = datetime.now().strftime("%Y-%m-%d")
+    source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
+
+    user_msg = (
+        _P14_POST1_ENFORCEMENT_BLOCK        # Phase 14: few-shot + spine + hedge 금지
+        + source_norm_block                 # Phase 14 Track A: 소스 정규화
+        + _P13_POST1_INTELLIGENCE_RULES     # Phase 13: 비자명성 + 헤징 + 반론 규격
+        + _P12_POST1_EVIDENCE_RULES         # Phase 12: 증거 밀도 규칙
+        + slot_hint                         # Phase 10: 슬롯 힌트
+        + "\n"
+        + GPT_WRITER_ANALYSIS_USER.format(
+            materials_json=materials_json,
+            context_text=context_text,
+        )
     )
     draft = _call_gpt(
         GPT_WRITER_ANALYSIS_SYSTEM,
@@ -2597,13 +3303,14 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
 
 
 def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: str,
-                    slot: str = "default") -> str:
+                    slot: str = "default", post1_spine: str = "") -> str:
     """
     Step 2b: GPT 작성 엔진 — Post 2 종목 리포트.
     분석 재료 + 종목 + 실제 가격 데이터로 종목 리포트 HTML을 작성합니다.
 
     Args:
-        slot: 발행 슬롯 — Phase 10 슬롯별 Post2 방향 힌트 삽입
+        slot:        발행 슬롯 — Phase 10 슬롯별 Post2 방향 힌트 삽입
+        post1_spine: Phase 14 Track B-4 — Post1 분석 뼈대/결론 (Post2 연속성 강제용)
 
     반환: HTML 문자열 ({PRICE_PLACEHOLDER} 포함, PICKS JSON 주석 포함)
     """
@@ -2630,12 +3337,34 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
     # Phase 10: 슬롯별 Post2 방향 힌트를 user 메시지 앞에 prepend
     # Phase 12: 증거 밀도 & 구조 규칙을 슬롯 힌트 앞에 prepend
     # Phase 13: 해석 지성 + Post2 연속성 규칙을 P12 규칙 앞에 prepend
+    # Phase 14: 연속성 강제(Post1 spine) + few-shot + hedge 금지를 P13 앞에 prepend
     slot_hint = _SLOT_POST2_WRITER_HINTS.get(slot, _SLOT_POST2_WRITER_HINTS["default"])
-    user_msg = _P13_POST2_INTELLIGENCE_RULES + _P12_POST2_EVIDENCE_RULES + slot_hint + "\n" + GPT_WRITER_PICKS_USER.format(
-        theme=theme,
-        materials_summary=materials_summary,
-        tickers_and_prices=tickers_and_prices,
-        context_text=context_text,
+
+    # Phase 14 Track B-4: Post1 뼈대/결론 주입 (연속성 강제)
+    continuation_block = ""
+    if post1_spine:
+        continuation_block = _P14_POST2_CONTINUATION_TEMPLATE.format(
+            post1_spine=post1_spine
+        )
+
+    # Phase 14 Track A: 소스 정규화
+    run_date_str_now = datetime.now().strftime("%Y-%m-%d")
+    source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
+
+    user_msg = (
+        continuation_block                  # Phase 14: Post1 결론 + 연속성 강제
+        + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
+        + source_norm_block                 # Phase 14 Track A: 소스 정규화
+        + _P13_POST2_INTELLIGENCE_RULES     # Phase 13: Post2 지성 규칙
+        + _P12_POST2_EVIDENCE_RULES         # Phase 12: 증거 밀도 규칙
+        + slot_hint                         # Phase 10: 슬롯 힌트
+        + "\n"
+        + GPT_WRITER_PICKS_USER.format(
+            theme=theme,
+            materials_summary=materials_summary,
+            tickers_and_prices=tickers_and_prices,
+            context_text=context_text,
+        )
     )
     draft = _call_gpt(
         GPT_WRITER_PICKS_SYSTEM,
@@ -2844,12 +3573,31 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     p13_closure  = _check_verifier_closure(
         verify_result.get("issues", []), draft, final_content
     )
+
+    # ── Phase 14 Track C (Hotfix): 약한 해석 FAIL 시 타겟 블록 교체 ────────
+    weak_hits = p13_interp.get("weak_interp_hits", 0)
+    # spine은 이 시점에 아직 추출 전이므로 SPINE 주석에서 직접 추출
+    _pre_spine = _extract_post1_spine(final_content)
+    final_content = _enforce_interpretation_rewrite(
+        final_content, weak_hits, label="Post1", article_spine=_pre_spine
+    )
+    # 재작성 후 품질 재진단 (타겟 교체 내부에서도 re-score하지만 최종 p13_interp 갱신)
+    if weak_hits >= 3:
+        p13_interp = _score_interpretation_quality(final_content, label="Post1-재작성후")
+
     p13_scores: dict = {
         "interpretation": p13_interp,
         "temporal":       p13_temporal,
         "numeric":        p13_numeric,
         "closure":        p13_closure,
     }
+
+    # ── Phase 14 Track B-4: Post1 분석 뼈대 추출 (Post2 연속성 강제용) ───
+    post1_spine = _extract_post1_spine(final_content)
+    if post1_spine:
+        logger.info(f"[Phase 14] Post1 뼈대 추출: {post1_spine[:80]}…")
+    else:
+        logger.info("[Phase 14] Post1 뼈대 미탐지 — Post2 연속성 규칙만 적용")
 
     # 제목 구성 (h1 태그에서 추출, 없으면 직접 생성)
     h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", final_content, re.DOTALL)
@@ -2869,8 +3617,9 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         "theme":          theme,
         "key_data":       key_data,
         "materials":      materials,      # Post 2에 재사용
+        "post1_spine":    post1_spine,    # Phase 14: Post2 연속성 강제용
         "quality_scores": quality_scores, # Phase 12: 품질 진단 결과
-        "p13_scores":     p13_scores,     # Phase 13: 해석 지성 + 신뢰성 진단
+        "p13_scores":     p13_scores,     # Phase 13/14: 해석 지성 + 신뢰성 진단
         "generated_at":   datetime.now().isoformat(),
     }
 
@@ -2956,8 +3705,14 @@ def generate_stock_picks_report(
             context_text = context_text + "\n\n" + "\n\n".join(lines)
             logger.info(f"[DART/annual] 사업보고서 섹션 주입: {list(annual_sections.keys())}")
 
+    # ── Phase 14 Track B-4: Post1 뼈대 추출 (연속성 강제용) ───────────────
+    post1_spine = _extract_post1_spine(post1_content)
+    if post1_spine:
+        logger.info(f"[Phase 14] Post2용 Post1 뼈대: {post1_spine[:80]}…")
+
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
-    draft = gpt_write_picks(materials, picks, prices, context_text, slot=slot)
+    draft = gpt_write_picks(materials, picks, prices, context_text, slot=slot,
+                            post1_spine=post1_spine)  # Phase 14: 뼈대 주입
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
@@ -3004,14 +3759,24 @@ def generate_stock_picks_report(
     quality_scores = _score_post_quality(final_content, label="Post2")
 
     # ── Phase 13: 해석 품질 + 시간/수치 신뢰성 + Post2 연속성 진단 ─────────
-    _run_date_str   = datetime.now().strftime("%Y-%m-%d")
-    p13_interp      = _score_interpretation_quality(final_content, label="Post2")
-    p13_temporal    = _check_temporal_sanity(final_content, _run_date_str)
-    p13_numeric     = _check_numeric_sanity(final_content)
-    p13_closure     = _check_verifier_closure(
+    _run_date_str  = datetime.now().strftime("%Y-%m-%d")
+    p13_interp     = _score_interpretation_quality(final_content, label="Post2")
+    p13_temporal   = _check_temporal_sanity(final_content, _run_date_str)
+    p13_numeric    = _check_numeric_sanity(final_content)
+    p13_closure    = _check_verifier_closure(
         verify_result.get("issues", []), draft, raw_content
     )
-    p13_continuity  = _check_post_continuity(post1_content, final_content)
+    p13_continuity = _check_post_continuity(post1_content, final_content)
+
+    # ── Phase 14 Track C (Hotfix): 약한 해석 FAIL 시 타겟 블록 교체 ────────
+    p2_weak_hits = p13_interp.get("weak_interp_hits", 0)
+    final_content = _enforce_interpretation_rewrite(
+        final_content, p2_weak_hits, label="Post2",
+        article_spine=post1_spine,  # Post2는 Post1 뼈대를 spine으로 전달
+    )
+    if p2_weak_hits >= 3:
+        p13_interp = _score_interpretation_quality(final_content, label="Post2-재작성후")
+
     p13_scores: dict = {
         "interpretation": p13_interp,
         "temporal":       p13_temporal,
