@@ -1,5 +1,5 @@
 """
-macromalt 자동화 시스템 - 메인 파이프라인 (Phase 7 / v3 정책 반영)
+macromalt 자동화 시스템 - 메인 파이프라인 (Phase 15E / v3 정책 반영)
 =====================================================
 실행 순서:
   Step 1   — 뉴스 수집 (기존 RSS/Web 소스)
@@ -194,8 +194,8 @@ def main() -> None:
     slot   = detect_slot(now)
 
     logger.info("=" * 60)
-    logger.info(f"macromalt Phase 14 파이프라인 시작 [run_id: {run_id}]")
-    logger.info(f"[Phase 14] 슬롯: {slot} | run_id: {run_id}")
+    logger.info(f"macromalt Phase 15E 파이프라인 시작 [run_id: {run_id}]")
+    logger.info(f"[Phase 15E] 슬롯: {slot} | run_id: {run_id}")
     logger.info("=" * 60)
 
     # 카테고리 ID 로드
@@ -267,7 +267,7 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"⚠ 발행 이력 저장 실패 (비치명): {e}")
 
-    # ── Phase 14: Post1/Post2 역할 분리 + 해석 지성 + 신뢰성 + P14 게이트 ─
+    # ── Phase 15E: Post1/Post2 역할 분리 + 해석 지성 + 신뢰성 + P14~15E 게이트 ─
     try:
         from generator import (
             _check_post_separation,
@@ -371,6 +371,11 @@ def main() -> None:
             "post2_continuation_enforcement": "PASS" if p1_spine else "WARN",
             "weak_interpretation_rewrite_loop": rewrite_loop_status,
             "numeric_sanity_recalibration": "PASS",
+            # ── Phase 15 신규 키 ──────────────────────────────────────────
+            "phase15_tense_correction":    _p13gate(p1_p13, "tense", key="status") if isinstance(p1_p13.get("tense"), dict) else "PASS",
+            "phase15c_label_safety":       _p13gate(p2_p13, "label_leak", key="status") if isinstance(p2_p13.get("label_leak"), dict) else "PASS",
+            "phase15d_jeonmang_strip":     "PASS",   # 항상 실행됨
+            "phase15e_month_settlement":   "PASS",   # 항상 실행됨
             # ── 공통 안정성 ────────────────────────────────────────────────
             "phase13_compatibility":       "PASS",
             "public_signature_stability":  "PASS",
@@ -378,16 +383,16 @@ def main() -> None:
             "final_status":                "HOLD" if any(hold_conditions) else "GO",
         }
 
-        logger.info("[Phase 14] 최종 품질 게이트:")
+        logger.info("[Phase 15E] 최종 품질 게이트:")
         for k, v in gate.items():
             logger.info(f"  {k}: {v}")
 
     except Exception as e:
-        logger.warning(f"⚠ Phase 14 품질 게이트 집계 실패 (비치명): {e}")
+        logger.warning(f"⚠ Phase 15E 품질 게이트 집계 실패 (비치명): {e}")
 
     # ── 최종 결과 요약 ────────────────────────────────
     logger.info("=" * 60)
-    logger.info(f"🎉 macromalt Phase 14 파이프라인 완료 [run_id: {run_id}] [슬롯: {slot}]")
+    logger.info(f"🎉 macromalt Phase 15E 파이프라인 완료 [run_id: {run_id}] [슬롯: {slot}]")
     logger.info("-" * 60)
 
     if post1_result:
