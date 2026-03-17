@@ -887,9 +887,13 @@ Post1의 매크로/테마 설정을 다시 설명하지 마십시오.
 - "최근 시장이 주목하는..." 류의 매크로 재진입
 
 ✅ 허용:
-- "Post1 분석에서 [X]라는 결론이 도출되었다. 이 조건에서 직접 수혜/피해를 받는 종목은..."
+- "앞서 살펴본 흐름을 종목으로 옮기면, [X] 조건에서 직접 노출되는 종목은..."
+- "오늘의 핵심 논지인 [X]를 바탕으로, 가장 직접 영향받는 종목은..."
 - 종목 선정 기준과 그 기준이 이번 테마에서 갖는 특수성
-- Post1 핵심 수치 1개 인용 후 바로 종목 분석 진입"""
+- 심층분석 핵심 수치 1개 인용 후 바로 종목 분석 진입
+
+★ Phase 15C 추가 금지: 독자 대상 문장에서 "Post1", "Post2" 등 파이프라인 내부 용어 절대 사용 금지.
+  구독자는 이 용어를 알지 못합니다. 자연스러운 편집 연결 표현을 사용하십시오."""
 
 # ── Track A: Gemini Step1 뼈대 협력 힌트 ─────────────────────────────────
 _P13_GEMINI_SPINE_HINT: str = """
@@ -1480,9 +1484,12 @@ _P14_FEWSHOT_BAD_GOOD_INTERP: str = """
 ❌ BAD [Post2 — 매크로 재진입]:
 "최근 호르무즈 해협 봉쇄 우려가 심화되면서 유가가 급등하고 있습니다."
 ✅ GOOD [Post2 — 결론 인용 후 종목 직행]:
-"Post1 결론: 지정학 단기 노이즈 처리 국면에서 이익 모멘텀 종목이 상대 우위.
-이 기준에서 가장 직접 수혜를 받는 종목은 삼성전자다 — 이번 주 이익 추정치 변화가
+"지정학 단기 노이즈 처리 국면에서 이익 모멘텀 종목이 상대 우위라는 오늘의 논지에서,
+가장 직접 노출되는 종목은 삼성전자다 — 이번 주 이익 추정치 변화가
 이 논지를 직접 확인해준다."
+
+★ Phase 15C 금지: ❌ "Post1 결론:", "Post1에서", "Post2에서" 등 파이프라인 용어를
+  독자 대상 문장에 사용하지 말 것. 내부 용어는 편집 흐름 표현으로 대체할 것.
 """
 
 _P14_ANALYTICAL_SPINE_ENFORCEMENT: str = """
@@ -1696,6 +1703,56 @@ _P15B_CONNECTIVE_ENDING_MAP: dict = {
     "되어": "됐다",     # 전망되어  → 집계됐다  (자연스러운 단문 종결)
 }
 
+# ── Phase 15C: Step3 완료 연도 컨텍스트 주입 + Post2 내부 레이블 제거 ──────────
+# 근본 원인: Gemini Step3가 2024/2025를 현재 진행 중인 연도로 오인 → [전망] 강요
+# Secondary: Post2 독자 문장에 "Post1의 결론에 따르면" 같은 파이프라인 용어 노출
+
+_P15C_STEP3_TEMPORAL_GROUNDING: str = """
+[Phase 15C — Step3 발행 기준 연도 컨텍스트 ★ 최우선 적용]
+
+이 콘텐츠의 발행 기준 연도는 2026년입니다.
+
+완료 연도 분류 (2026년 발행 기준):
+  - 2024년 = 완전히 종료된 회계 연도 → 연간 실적은 확정 사실
+  - 2025년 = 완전히 종료된 회계 연도 → 연간 실적은 확정 사실
+  - 2026년 = 현재 진행 중인 연도 → 전망·추정 서술 허용
+
+★ Step3 절대 금지 행동:
+  ❌ 2024년 또는 2025년을 "현재 진행 중인 연도"로 판단하는 것 — 이는 틀린 판단
+  ❌ 2024년/2025년 확정 실적 문장에 [전망] 태그를 추가하거나 강요하는 것
+  ❌ 2024년/2025년 확정 실적 문장을 조건부·전망 어미로 재작성하는 것
+  ❌ "2024년은 현재 진행 중인 연도이므로 확정 표현 불가" — 이 판단은 오류
+  ❌ 과거 완료 사실 문장("기록했다", "달성했다", "집계됐다")을 단정적이라는 이유로 수정하는 것
+
+★ Step3 명시적 허용:
+  ✅ "SK하이닉스는 2024년 매출 66조원을 기록했다" — 올바른 확정 사실 서술, 수정 불필요
+  ✅ "삼성전자는 2025년 영업이익 35조원을 달성했다" — 올바른 확정 사실 서술, 수정 불필요
+  ✅ 2024년/2025년 연간 실적이 과거형으로 서술된 문장은 [전망] 판단 대상이 아님
+  ✅ 진짜 [전망] 대상: 2026년 이후 미래 수치, 아직 발표되지 않은 전망치·가이던스
+
+"""
+
+# Post2 내부 파이프라인 용어 독자 노출 방지 (Track C)
+_P15C_POST2_LABEL_BAN: str = """
+[Phase 15C — Post2 내부 파이프라인 용어 독자 노출 금지]
+
+★ 절대 금지 — 독자 대상 문장에서 파이프라인 내부 용어 사용 금지:
+  ❌ "Post1의 결론에 따르면..."
+  ❌ "Post1에서 도출된 결론은..."
+  ❌ "Post1이 분석한..." / "Post1이 도출한..."
+  ❌ "Post2 기준으로..." / "이 Post에서..."
+
+★ 허용 — 자연스러운 독자용 연결 표현:
+  ✅ "앞서 살펴본 매크로 흐름을 종목 관점에서 보면..."
+  ✅ "[심층분석]에서 도출된 결론은..."
+  ✅ "이 흐름을 개별 종목에 적용하면..."
+  ✅ "앞서 확인한 시장 구조에서 가장 직접 영향받는 종목은..."
+  ✅ "오늘의 핵심 논지를 종목으로 옮기면..."
+
+구독자는 "Post1", "Post2"라는 파이프라인 용어를 알지 못합니다.
+자연스러운 편집 흐름으로 연결하고, 내부 워크플로우 언어는 절대 노출하지 마십시오.
+"""
+
 # C1: 생성 단계 주입 블록 (GPT 프롬프트에 prepend)
 _P15_TEMPORAL_TENSE_ENFORCEMENT: str = """
 [Phase 15 — 완료 연도 기업 실적 시제 강제]
@@ -1740,14 +1797,18 @@ _P14_POST1_ENFORCEMENT_BLOCK = (
 
 _P14_POST2_CONTINUATION_TEMPLATE: str = """
 [Phase 14 — Post2 연속성 강제]
-Post1 결론/뼈대:
+심층분석 결론/뼈대:
 {post1_spine}
 
 Post2는 위 결론에서 즉시 출발합니다.
-→ "Post1이 도출한 [위 결론]을 바탕으로, 가장 직접 노출되는 종목은..."
+→ "앞서 도출된 결론인 [위 결론]을 바탕으로, 가장 직접 노출되는 종목은..."
 → 또는: "[위 결론]의 조건에서, 섹터 선별 기준의 핵심은..."
 
 다시 매크로 배경(지정학/금리/유가 등)을 설명하는 문단을 도입부에 쓰지 마십시오.
+
+★ Phase 15C 금지: 독자 대상 문장에서 "Post1", "Post2" 등 파이프라인 내부 용어 절대 사용 금지.
+  예시 ❌: "Post1이 도출한 결론에 따르면..."
+  예시 ✅: "앞서 살펴본 분석 결론을 바탕으로..." / "오늘의 핵심 논지를 종목으로 옮기면..."
 """
 
 # ── Track C: Rewrite Enforcement Loop 프롬프트 ──────────────────────────────
@@ -2242,6 +2303,69 @@ def _enforce_tense_correction(
         )
 
     return updated, correction_log
+
+
+# ── Phase 15C Track D: Internal Pipeline Label Leakage Detection ──────────────
+
+# 독자 대상 문장에 노출되어서는 안 되는 내부 파이프라인 용어
+_P15C_INTERNAL_LABEL_TERMS: list = [
+    "Post1의 결론",
+    "Post1에서 도출",
+    "Post1이 도출",
+    "Post1 분석에서",
+    "Post1 결론",
+    "Post2 기준",
+    "Post1에서",
+    "Post2에서",
+]
+
+
+def _detect_internal_label_leakage(content: str, label: str = "") -> dict:
+    """Phase 15C Track D: Post2 독자 대상 콘텐츠에서 파이프라인 내부 용어 노출 탐지.
+
+    D1: 탐지 대상 — "Post1", "Post2" 등 파이프라인 내부 용어
+    D2: HTML 태그를 제거한 plain text에서 탐지
+    D3: 탐지 시 FAIL, 미탐지 시 PASS
+
+    Returns:
+        {
+          "violations":      list — 탐지된 용어 및 문맥,
+          "violation_count": int,
+          "status":          str — "FAIL" | "PASS",
+        }
+    """
+    import re as _re_label
+
+    plain = _re_label.sub(r"<[^>]+>", " ", content)
+    sentences = _re_label.split(r"(?<=[.!?。！？])\s+", plain)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+
+    violations: list = []
+    for sent in sentences:
+        for term in _P15C_INTERNAL_LABEL_TERMS:
+            if term in sent:
+                record = {"term": term, "sentence": sent[:150]}
+                if record not in violations:
+                    violations.append(record)
+                break  # 한 문장 중복 등록 방지
+
+    violation_count = len(violations)
+    status = "FAIL" if violation_count >= 1 else "PASS"
+
+    if violations:
+        logger.warning(
+            f"[Phase 15C] 내부 파이프라인 레이블 노출 {violation_count}건 탐지 [{label}]"
+        )
+        for v in violations[:3]:
+            logger.warning(f"  ⚠ [{v['term']}] → {v['sentence'][:80]}")
+    else:
+        logger.info(f"[Phase 15C] 내부 레이블 노출 없음 [{label}]")
+
+    return {
+        "violations":      violations,
+        "violation_count": violation_count,
+        "status":          status,
+    }
 
 
 def _extract_weak_interp_blocks(content: str) -> list:
@@ -3778,6 +3902,27 @@ GEMINI_REVISER_USER = """
 {draft}
 """
 
+# ── Phase 15C: Step3 완료 연도 컨텍스트 주입 ──────────────────────────────────
+# 근본 원인: Gemini Step3가 2024/2025를 현재 진행 연도로 오인 → [전망] 태그 강요
+# 해결: VERIFIER/REVISER 프롬프트 앞에 발행 기준 연도 컨텍스트를 명시적으로 주입
+GEMINI_VERIFIER_SYSTEM = _P15C_STEP3_TEMPORAL_GROUNDING + GEMINI_VERIFIER_SYSTEM
+
+# REVISER에는 추가로 완료 연도 [전망] 추가 절대 금지 규칙을 삽입
+_P15C_REVISER_COMPLETED_YEAR_GUARD: str = """
+[Phase 15C — 완료 연도 [전망] 태그 추가 절대 금지]
+2024년 또는 2025년 연간 실적·수치를 서술한 문장에 대해:
+  ❌ [전망] 태그를 새로 추가하는 것은 금지됩니다
+  ❌ 확정 어미("기록했다", "달성했다", "집계됐다", "기록됐다")를 전망 어미로 변환하는 것은 금지됩니다
+  ❌ "단정적 표현"이라는 이유로 2024/2025 확정 실적 문장을 수정하는 것은 금지됩니다
+  ✅ 이미 올바르게 과거형으로 서술된 완료 연도 실적 문장은 원문 그대로 보존하십시오
+
+"""
+GEMINI_REVISER_SYSTEM = (
+    _P15C_STEP3_TEMPORAL_GROUNDING
+    + _P15C_REVISER_COMPLETED_YEAR_GUARD
+    + GEMINI_REVISER_SYSTEM
+)
+
 
 # ─── Post 2 전용: Gemini 종목 선정 프롬프트 ─────────────────────────────────
 
@@ -4007,7 +4152,8 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
 
     user_msg = (
-        continuation_block                  # Phase 14: Post1 결론 + 연속성 강제
+        _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단 (최우선)
+        + continuation_block                # Phase 14: Post1 결론 + 연속성 강제
         + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
         + source_norm_block                 # Phase 14 Track A: 소스 정규화
         + _P13_POST2_INTELLIGENCE_RULES     # Phase 13: Post2 지성 규칙
@@ -4476,6 +4622,9 @@ def generate_stock_picks_report(
     else:
         _p15_log_p2 = []
 
+    # ── Phase 15C Track D: 내부 파이프라인 레이블 노출 탐지 ──────────────────
+    p15c_label_diag = _detect_internal_label_leakage(final_content, label="Post2")
+
     p13_scores: dict = {
         "interpretation": p13_interp,
         "temporal":       p13_temporal,
@@ -4483,6 +4632,7 @@ def generate_stock_picks_report(
         "closure":        p13_closure,
         "continuity":     p13_continuity,
         "tense":          p15_tense_diag_p2,   # Phase 15: 완료 연도 시제 진단
+        "label_leak":     p15c_label_diag,      # Phase 15C: 내부 레이블 노출 진단
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
