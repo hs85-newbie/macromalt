@@ -2679,6 +2679,336 @@ def _enforce_current_year_month_settlement(
     return updated, [settlement_log]
 
 
+# ── Phase 16: Temporal State Normalization — SSOT Layer ───────────────────────
+# 근본 원인: Phase 15A~15E의 패턴 패치 반복 — GPT, Gemini Step3, 후처리가 각자 시간/시제를
+#   독립적으로 재해석 → 새로운 표면 형태가 나올 때마다 패치 추가 필요
+# 해결: 런타임에 단일 시제 상태 SSOT를 구축하고 모든 하위 레이어(GPT 생성, Gemini Step3,
+#   후처리 교정)에 주입하여 시제 상태를 중앙 집중 제어
+
+_P16_TEMPORAL_STATES: dict = {
+    "ACTUAL_SETTLED": {
+        "description": "확정 완료된 실적 (완전히 종료된 회계연도 / 보고된 기간)",
+        "allow_forecast_tag": False,
+        "require_past_factual": True,
+    },
+    "ACTUAL_PRELIMINARY": {
+        "description": "잠정 발표된 실적 (잠정치, provisional)",
+        "allow_forecast_tag": False,
+        "require_past_factual": False,
+        "allow_provisional_framing": True,
+    },
+    "CONSENSUS_REFERENCE": {
+        "description": "시장 컨센서스 / 예상치 (애널리스트 전망 참조용)",
+        "allow_forecast_tag": True,
+        "require_past_factual": False,
+        "note": "확정 결과와 별도 레이어로 유지",
+    },
+    "COMPANY_GUIDANCE": {
+        "description": "회사 가이던스 / 경영 목표",
+        "allow_forecast_tag": True,
+        "require_past_factual": False,
+        "note": "달성 확정치로 재작성 금지",
+    },
+    "FORECAST": {
+        "description": "전망 / 추정 / 미래 기간 예측",
+        "allow_forecast_tag": True,
+        "require_past_factual": False,
+    },
+    "AMBIGUOUS_TEMPORAL_STATE": {
+        "description": "시제 불명확 — 맥락 추가 검토 필요",
+        "allow_forecast_tag": None,
+        "require_past_factual": None,
+        "note": "WARN 로그 대상",
+    },
+}
+
+# 잠정치 마커 (ACTUAL_PRELIMINARY 판별용)
+_P16_PRELIMINARY_MARKERS: list = [
+    "잠정", "잠정치", "잠정 집계", "provisional", "preliminary",
+    "잠정 기준", "예비", "잠정 발표",
+]
+
+# 컨센서스 마커 (CONSENSUS_REFERENCE 판별용)
+_P16_CONSENSUS_MARKERS: list = [
+    "컨센서스", "시장 전망", "시장 예상", "애널리스트", "전망치",
+    "예상치", "consensus", "analyst estimate", "market expectation",
+    "시장이 예상", "증권사 추정", "전망 평균",
+]
+
+# 회사 가이던스 마커 (COMPANY_GUIDANCE 판별용)
+_P16_GUIDANCE_MARKERS: list = [
+    "가이던스", "경영 목표", "회사 목표", "guidance", "management target",
+    "목표치", "연간 목표", "목표 매출", "목표 영업이익",
+    "회사 측 전망", "자사 가이던스",
+]
+
+# 순수 미래 동사 — 이 동사가 있으면 [전망] 보존 (Phase 15F 예외 처리용)
+_P16_PURE_FUTURE_VERBS: list = [
+    "될 것", "할 것", "예상된다", "전망된다", "예상됩니다", "전망됩니다",
+    "될 전망", "증가할", "확대될", "개선될", "상승할", "하락할",
+    "기대된다", "기대됩니다", "예정이다", "예정입니다",
+]
+
+
+def _build_temporal_ssot(run_year: int, run_month: int) -> dict:
+    """Phase 16: 런타임 시제 상태 SSOT를 구축한다.
+
+    run_year, run_month 기준으로 각 시간 범위의 시제 상태를 정규화하여 반환한다.
+    반환된 dict는 GPT 생성 블록, Gemini Step3 블록, 후처리 교정에서 공유 SSOT로 사용된다.
+
+    Returns:
+        {
+            "run_year": int,
+            "run_month": int,
+            "completed_years": list[int],           완전히 종료된 연도
+            "current_year": int,                    현재 진행 중인 연도
+            "completed_months_this_year": list[int], 현재 연도의 완료된 월
+            "open_month": int,                      현재 열려있는 월
+            "year_states": dict,                    연도별 SSOT 상태
+            "period_rules": dict,                   기간별 언어 규칙 요약
+            "states": dict,                         상태 정의 참조
+        }
+    """
+    completed_years = [run_year - 1, run_year - 2]
+    completed_months_this_year = list(range(1, run_month))  # run_month는 아직 열린 상태
+
+    year_states: dict = {}
+    for yr in completed_years:
+        year_states[yr] = "ACTUAL_SETTLED"
+    year_states[run_year] = "CURRENT_OPEN"
+
+    period_rules: dict = {
+        "completed_year": {
+            "status": "ACTUAL_SETTLED",
+            "allow_forecast_tag": False,
+            "require_past_factual": True,
+            "example": f"{run_year - 1}년 연간 실적 → 확정 사실 → [전망] 금지",
+        },
+        "current_year_past_month": {
+            "status": "ACTUAL_SETTLED",
+            "allow_forecast_tag": False,
+            "require_past_factual": True,
+            "example": (
+                f"{run_year}년 1~{run_month - 1}월 보고된 수치 → 완료 사실 → [전망] 금지"
+                if run_month > 1 else f"{run_year}년 — 아직 1월 시작"
+            ),
+        },
+        "current_month": {
+            "status": "AMBIGUOUS_TEMPORAL_STATE",
+            "allow_forecast_tag": None,
+            "note": f"{run_year}년 {run_month}월 — 진행 중, 맥락 판단 필요",
+        },
+        "future_period": {
+            "status": "FORECAST",
+            "allow_forecast_tag": True,
+            "example": "미래 분기/연도 → [전망] 허용",
+        },
+        "preliminary": {
+            "status": "ACTUAL_PRELIMINARY",
+            "allow_forecast_tag": False,
+            "note": "잠정치 — 조건부 표현 허용, 미래 전망으로 재해석 금지",
+        },
+        "consensus": {
+            "status": "CONSENSUS_REFERENCE",
+            "allow_forecast_tag": True,
+            "note": "시장 컨센서스 — 확정 실적과 별도 레이어 유지",
+        },
+        "guidance": {
+            "status": "COMPANY_GUIDANCE",
+            "allow_forecast_tag": True,
+            "note": "가이던스 — 달성 확정치로 재작성 금지",
+        },
+    }
+
+    return {
+        "run_year": run_year,
+        "run_month": run_month,
+        "completed_years": completed_years,
+        "current_year": run_year,
+        "completed_months_this_year": completed_months_this_year,
+        "open_month": run_month,
+        "year_states": year_states,
+        "period_rules": period_rules,
+        "states": _P16_TEMPORAL_STATES,
+    }
+
+
+def _build_p16_generation_block(ssot: dict) -> str:
+    """Phase 16: GPT 생성 단계에 주입할 시제 SSOT 컨텍스트 블록을 구축한다.
+
+    context_text 앞에 prepend되어 GPT가 시간/시제를 독립 재해석하지 않도록 한다.
+    """
+    run_year = ssot["run_year"]
+    run_month = ssot["run_month"]
+    completed_years = ssot["completed_years"]
+    completed_months = ssot["completed_months_this_year"]
+
+    completed_years_str = ", ".join(f"{yr}년" for yr in sorted(completed_years, reverse=True))
+    completed_months_str = (
+        ", ".join(f"{m}월" for m in completed_months)
+        if completed_months else "없음 (1월 기준)"
+    )
+
+    lines = [
+        "[Phase 16 — 시제 상태 SSOT ★ GPT 생성 최우선 적용]",
+        "",
+        f"현재 발행 기준: {run_year}년 {run_month}월",
+        "",
+        f"■ 확정 완료 연도 (ACTUAL_SETTLED) — [전망] 절대 금지, 과거 확정 표현 필수:",
+        f"  {completed_years_str} 의 연간 실적·수치는 모두 확정된 사실입니다.",
+        "",
+        f"■ 현재 연도({run_year}년) 완료 월 (ACTUAL_SETTLED) — [전망] 금지:",
+        f"  {run_year}년 {completed_months_str} 의 보고된 수치는 완료 사실입니다.",
+        "",
+        f"■ 현재 진행 월 ({run_year}년 {run_month}월) — 보고된 수치는 사실, 미보고 예측은 [전망]",
+        "",
+        "■ 잠정치 (ACTUAL_PRELIMINARY): '잠정' 표기 수치 — 조건부 표현 허용, 미래 전망 재해석 금지",
+        "■ 컨센서스 (CONSENSUS_REFERENCE): 애널리스트 예상치 — 확정 실적과 혼동 금지",
+        "■ 가이던스 (COMPANY_GUIDANCE): 회사 목표/가이던스 — 달성 완료로 표현 금지",
+        "■ 전망 (FORECAST): 미래 기간 수치만 [전망] 태그 허용",
+        "",
+        "★ 절대 금지:",
+        f"  ❌ {completed_years_str} 확정 실적에 [전망] 태그 부착",
+        f"  ❌ {run_year}년 {completed_months_str} 완료 월 수치에 [전망] 태그 부착",
+        "  ❌ 확정 어미를 전망 어미로 변환",
+        "  ❌ 잠정치를 달성 확정치로 업그레이드",
+        "  ❌ 컨센서스를 직접 실적으로 표현",
+        "",
+    ]
+
+    return "\n".join(lines) + "\n\n"
+
+
+def _build_p16_step3_block(ssot: dict) -> str:
+    """Phase 16: Gemini Step3 시스템 프롬프트에 주입할 시제 SSOT 블록을 구축한다.
+
+    기존 _P15C_STEP3_TEMPORAL_GROUNDING (정적 하드코딩)을 대체한다.
+    run_year / run_month 기반 동적 생성으로 연도 고정 문제를 해결한다.
+    """
+    run_year = ssot["run_year"]
+    run_month = ssot["run_month"]
+    completed_years = ssot["completed_years"]
+    completed_months = ssot["completed_months_this_year"]
+
+    completed_years_str = " / ".join(f"{yr}년" for yr in sorted(completed_years, reverse=True))
+    completed_months_str = (
+        ", ".join(f"{m}월" for m in completed_months)
+        if completed_months else "없음 (1월 기준)"
+    )
+
+    lines = [
+        "[Phase 16 — Step3 발행 기준 시제 SSOT ★ 최우선 적용]",
+        "",
+        f"이 콘텐츠의 발행 기준: {run_year}년 {run_month}월",
+        "",
+        f"완료 기간 분류 ({run_year}년 {run_month}월 발행 기준):",
+        f"  ■ {completed_years_str} = 완전히 종료된 회계연도 → 연간 실적은 ACTUAL_SETTLED",
+        f"  ■ {run_year}년 {completed_months_str} = 완료된 월 → 보고 수치는 ACTUAL_SETTLED",
+        f"  ■ {run_year}년 {run_month}월 이후 기간 = 아직 열린 기간 → 전망 표현 허용",
+        "",
+        "SSOT 시제 상태별 Step3 행동 규칙:",
+        "  ACTUAL_SETTLED      → [전망] 금지 / 확정 어미 보존 / 전망 어미 변환 금지",
+        "  ACTUAL_PRELIMINARY  → 잠정 표현 허용 / 확정 표현으로 업그레이드 금지",
+        "  CONSENSUS_REFERENCE → 컨센서스임을 명시 / 실적과 혼동 금지",
+        "  COMPANY_GUIDANCE    → 가이던스임을 유지 / 달성 확정치로 재작성 금지",
+        "  FORECAST            → [전망] 태그 및 조건부 어미 허용",
+        "  AMBIGUOUS           → 현 콘텐츠 맥락 기준 판단, WARN 수준 처리",
+        "",
+        "★ Step3 절대 금지 행동:",
+        f"  ❌ {completed_years_str} 확정 실적 문장에 [전망] 태그 추가",
+        f"  ❌ {run_year}년 {completed_months_str} 완료 월 수치를 전망으로 재해석",
+        "  ❌ 확정 어미(기록했다/달성했다/집계됐다/기록됐다)를 전망 어미로 변환",
+        "  ❌ '단정적 표현'이라는 이유로 ACTUAL_SETTLED 문장 수정",
+        "  ❌ 잠정치를 완전 확정치처럼 표현",
+        "  ❌ 컨센서스를 직접 실적으로 기술",
+        "",
+        "★ Step3 허용 행동:",
+        "  ✅ 이미 올바르게 과거형으로 서술된 ACTUAL_SETTLED 문장 원문 보존",
+        "  ✅ 미래 기간 전망 문장에 [전망] 유지 / 추가",
+        "  ✅ 잠정치 문장에 '잠정' 표기 유지",
+        "  ✅ 가이던스 문장에 조건부 표현 유지",
+        "",
+    ]
+
+    return "\n".join(lines)
+
+
+def _strip_current_year_past_month_jeonmang(
+    content: str, ssot: dict, label: str = "Post"
+) -> tuple:
+    """Phase 15F (Phase 16 통합): 현재 연도 과거 월 + [전망] 태그 조합을 동사형 독립적으로 제거.
+
+    Phase 15D/15E가 동사 마커 기반으로 교정하는 것과 달리,
+    이 함수는 '현재 연도 + 완료된 월' 기간 표현에 [전망]이 붙은 경우
+    동사형에 관계없이 [전망]을 제거한다.
+
+    단, 순수 미래형 동사(_P16_PURE_FUTURE_VERBS)가 뒤따를 경우 제거하지 않는다.
+
+    Args:
+        content: 처리할 HTML 문자열
+        ssot: _build_temporal_ssot()가 반환한 SSOT dict
+        label: 로그 레이블 (Post1 / Post2)
+
+    Returns:
+        (updated_content: str, strip_log: list[dict])
+    """
+    import re as _re
+
+    run_year = ssot["run_year"]
+    completed_months = ssot["completed_months_this_year"]
+
+    if not completed_months:
+        logger.info(f"[Phase 15F] {label}: 완료 월 없음 (1월 기준) — 처리 스킵")
+        return content, []
+
+    strip_log = []
+    updated = content
+
+    month_pattern_parts = "|".join(str(m) for m in completed_months)
+    pattern_str = (
+        r'\[전망\]'
+        r'(?P<gap>[^\S\r\n]{0,5})'
+        r'(?P<year_month>'
+        + str(run_year) + r'년\s*(?:' + month_pattern_parts + r')월'
+        + r')'
+    )
+
+    # 먼저 제거 대상 목록 수집
+    matches_to_strip = []
+    for m in _re.finditer(pattern_str, updated):
+        start = m.start()
+        end = m.end()
+        lookahead_window = updated[end:end + 60]
+        has_future_verb = any(fv in lookahead_window for fv in _P16_PURE_FUTURE_VERBS)
+        if has_future_verb:
+            logger.debug(
+                f"[Phase 15F] {label}: 미래 동사 감지 → [전망] 보존 | "
+                f"{updated[start:end + 30][:60]}"
+            )
+            continue
+        preview = updated[max(0, start - 20):end + 40]
+        strip_log.append({
+            "pattern": m.group(),
+            "year_month": m.group("year_month"),
+            "preview": preview,
+        })
+        matches_to_strip.append((m.start(), m.end(), m.group("year_month")))
+
+    if matches_to_strip:
+        # 역방향 치환 (인덱스 보존)
+        for start, end, year_month in reversed(matches_to_strip):
+            updated = updated[:start] + year_month + updated[end:]
+        logger.warning(
+            f"[Phase 15F] {label}: 현재 연도 과거 월 [전망] 제거 {len(matches_to_strip)}건"
+        )
+        for entry in strip_log[:3]:
+            logger.warning(f"  ✂ P15F → {entry['preview'][:80]}")
+    else:
+        logger.info(f"[Phase 15F] {label}: 현재 연도 과거 월 [전망] 위반 없음")
+
+    return updated, strip_log
+
+
 def _extract_weak_interp_blocks(content: str) -> list:
     """Phase 14 Hotfix Track A: 약한 해석 패턴 키워드가 동시 등장하는 HTML 블록 추출.
 
@@ -4213,23 +4543,29 @@ GEMINI_REVISER_USER = """
 {draft}
 """
 
-# ── Phase 15C: Step3 완료 연도 컨텍스트 주입 ──────────────────────────────────
-# 근본 원인: Gemini Step3가 2024/2025를 현재 진행 연도로 오인 → [전망] 태그 강요
-# 해결: VERIFIER/REVISER 프롬프트 앞에 발행 기준 연도 컨텍스트를 명시적으로 주입
-GEMINI_VERIFIER_SYSTEM = _P15C_STEP3_TEMPORAL_GROUNDING + GEMINI_VERIFIER_SYSTEM
+# ── Phase 16: Step3 시제 SSOT 블록 (모듈 로드 시 생성 → Phase 15C 정적 블록 대체) ──
+# Phase 15C의 하드코딩 2026 고정 방식을 Phase 16 동적 SSOT로 교체
+# _build_temporal_ssot / _build_p16_step3_block 은 위 Phase 16 섹션에 정의됨
+_p16_module_ssot: dict = _build_temporal_ssot(
+    run_year=int(datetime.now().strftime("%Y")),
+    run_month=int(datetime.now().strftime("%m")),
+)
+_P16_STEP3_BLOCK: str = _build_p16_step3_block(_p16_module_ssot)
 
-# REVISER에는 추가로 완료 연도 [전망] 추가 절대 금지 규칙을 삽입
+GEMINI_VERIFIER_SYSTEM = _P16_STEP3_BLOCK + GEMINI_VERIFIER_SYSTEM
+
+# REVISER에는 추가로 완료 연도 [전망] 추가 절대 금지 규칙을 삽입 (Phase 15C 호환 유지)
 _P15C_REVISER_COMPLETED_YEAR_GUARD: str = """
-[Phase 15C — 완료 연도 [전망] 태그 추가 절대 금지]
-2024년 또는 2025년 연간 실적·수치를 서술한 문장에 대해:
+[Phase 15C/16 — 완료 연도 [전망] 태그 추가 절대 금지]
+ACTUAL_SETTLED 상태(완전히 종료된 회계연도 및 현재 연도 완료 월)에 해당하는 실적·수치 문장에 대해:
   ❌ [전망] 태그를 새로 추가하는 것은 금지됩니다
   ❌ 확정 어미("기록했다", "달성했다", "집계됐다", "기록됐다")를 전망 어미로 변환하는 것은 금지됩니다
-  ❌ "단정적 표현"이라는 이유로 2024/2025 확정 실적 문장을 수정하는 것은 금지됩니다
+  ❌ "단정적 표현"이라는 이유로 ACTUAL_SETTLED 확정 실적 문장을 수정하는 것은 금지됩니다
   ✅ 이미 올바르게 과거형으로 서술된 완료 연도 실적 문장은 원문 그대로 보존하십시오
 
 """
 GEMINI_REVISER_SYSTEM = (
-    _P15C_STEP3_TEMPORAL_GROUNDING
+    _P16_STEP3_BLOCK
     + _P15C_REVISER_COMPLETED_YEAR_GUARD
     + GEMINI_REVISER_SYSTEM
 )
@@ -4622,6 +4958,17 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
 
+    # ── Phase 16: 시제 SSOT 구축 + GPT 생성 컨텍스트에 주입 ───────────────
+    _p16_run_year  = int(datetime.now().strftime("%Y"))
+    _p16_run_month = int(datetime.now().strftime("%m"))
+    _p16_ssot      = _build_temporal_ssot(_p16_run_year, _p16_run_month)
+    _p16_gen_block = _build_p16_generation_block(_p16_ssot)
+    context_text   = _p16_gen_block + context_text
+    logger.info(
+        f"[Phase 16] Post1 시제 SSOT 주입: 완료 연도={_p16_ssot['completed_years']}, "
+        f"완료 월={_p16_ssot['completed_months_this_year']}"
+    )
+
     # ── Phase 10: 자료 최신성 분포 로그 ──────────────────────────────────
     _log_freshness_summary(news, research)
 
@@ -4728,6 +5075,11 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         final_content, run_year=_run_year_int, label="Post1"
     )
 
+    # ── Phase 15F (Phase 16 통합): 현재 연도 과거 월 [전망] 동사형 독립 제거 ──
+    final_content, _p15f_log = _strip_current_year_past_month_jeonmang(
+        final_content, ssot=_p16_ssot, label="Post1"
+    )
+
     p13_scores: dict = {
         "interpretation":   p13_interp,
         "temporal":         p13_temporal,
@@ -4736,6 +5088,10 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         "tense":            p15_tense_diag,   # Phase 15: 완료 연도 시제 진단
         "jeonmang_strip":   {"stripped_count": len(_p15d_log), "log": _p15d_log},  # Phase 15D
         "month_settlement": _p15e_log,         # Phase 15E: 현재 연도 과거 월 교정
+        "p15f_strip":       {"stripped_count": len(_p15f_log), "log": _p15f_log},  # Phase 15F/16
+        "p16_ssot_run":     {"run_year": _p16_ssot["run_year"], "run_month": _p16_ssot["run_month"],
+                             "completed_years": _p16_ssot["completed_years"],
+                             "completed_months": _p16_ssot["completed_months_this_year"]},
     }
 
     # ── Phase 14 Track B-4: Post1 분석 뼈대 추출 (Post2 연속성 강제용) ───
@@ -4802,6 +5158,17 @@ def generate_stock_picks_report(
     news_text     = format_articles_for_prompt(news)
     research_text = format_research_for_prompt(research)
     context_text  = f"{research_text}\n\n{RESEARCH_NEWS_SEPARATOR}\n\n{news_text}"
+
+    # ── Phase 16: 시제 SSOT 구축 + GPT 생성 컨텍스트에 주입 ───────────────
+    _p2_p16_run_year  = int(datetime.now().strftime("%Y"))
+    _p2_p16_run_month = int(datetime.now().strftime("%m"))
+    _p2_p16_ssot      = _build_temporal_ssot(_p2_p16_run_year, _p2_p16_run_month)
+    _p2_p16_gen_block = _build_p16_generation_block(_p2_p16_ssot)
+    context_text      = _p2_p16_gen_block + context_text
+    logger.info(
+        f"[Phase 16] Post2 시제 SSOT 주입: 완료 연도={_p2_p16_ssot['completed_years']}, "
+        f"완료 월={_p2_p16_ssot['completed_months_this_year']}"
+    )
 
     # ── Step 1: 분석 재료 (재사용 or 재생성) ──────────────────────────────
     if materials is None:
@@ -4958,6 +5325,11 @@ def generate_stock_picks_report(
         final_content, run_year=_p2_run_year_int, label="Post2"
     )
 
+    # ── Phase 15F (Phase 16 통합): 현재 연도 과거 월 [전망] 동사형 독립 제거 ──
+    final_content, _p15f_log_p2 = _strip_current_year_past_month_jeonmang(
+        final_content, ssot=_p2_p16_ssot, label="Post2"
+    )
+
     p13_scores: dict = {
         "interpretation":   p13_interp,
         "temporal":         p13_temporal,
@@ -4968,6 +5340,10 @@ def generate_stock_picks_report(
         "label_leak":       p15c_label_diag,      # Phase 15C: 내부 레이블 노출 진단
         "jeonmang_strip":   {"stripped_count": len(_p15d_log_p2), "log": _p15d_log_p2},  # Phase 15D
         "month_settlement": _p15e_log_p2,          # Phase 15E: 현재 연도 과거 월 교정
+        "p15f_strip":       {"stripped_count": len(_p15f_log_p2), "log": _p15f_log_p2},  # Phase 15F/16
+        "p16_ssot_run":     {"run_year": _p2_p16_ssot["run_year"], "run_month": _p2_p16_ssot["run_month"],
+                             "completed_years": _p2_p16_ssot["completed_years"],
+                             "completed_months": _p2_p16_ssot["completed_months_this_year"]},
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
