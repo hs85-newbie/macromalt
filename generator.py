@@ -1510,10 +1510,201 @@ _P14_HEDGE_DIRECT_PROHIBITION: str = """
   ✅ "이익 추정치 추가 상향 시 P/E 재평가 가능성" (조건 명시)
 """
 
+# ── Track A (Phase 14I): Interpretation Hedge Clamp ──────────────────────────
+# 실출력 검증: [해석] 문장 74%가 "파악됩니다/보입니다" 어미로 끝남.
+# 팩트 서술 금지(Phase 14)와 별개로, [해석] 레이블 분석 문장 전용 어미 차단.
+
+_P14I_INTERP_HEDGE_ENDINGS: list = [
+    "파악됩니다",
+    "보입니다",
+    "것으로 보입니다",
+    "것으로 파악됩니다",
+    "작용하는 것으로 보입니다",
+    "시사하는 것으로 보입니다",
+    "판단됩니다",
+    "것으로 판단됩니다",
+    "보여집니다",
+    "여겨집니다",
+]
+
+_P14I_INTERP_HEDGE_CLAMP: str = """
+[Phase 14I — [해석] 문장 헤징 어미 강제 차단]
+
+[해석] 레이블이 붙은 분석 판단 문장에서 아래 어미를 기본 결말로 사용하는 것을 금지합니다:
+  ❌ "파악됩니다"              — [해석] 결말 사용 금지
+  ❌ "보입니다"               — [해석] 결말 사용 금지
+  ❌ "것으로 보입니다"          — [해석] 결말 사용 금지
+  ❌ "것으로 파악됩니다"        — [해석] 결말 사용 금지
+  ❌ "작용하는 것으로 보입니다"  — [해석] 결말 사용 금지
+  ❌ "시사하는 것으로 보입니다"  — [해석] 결말 사용 금지
+  ❌ "판단됩니다"              — 분석 주장 단독 결말 사용 금지
+
+금지 예:
+  ❌ [해석] 이는 시장 불안 심리가 반영된 결과로 파악됩니다.
+  ❌ [해석] 이는 투자 심리를 개선하는 요인으로 작용하는 것으로 보입니다.
+  ❌ [해석] 이는 성장성 기대가 이어지는 것으로 보입니다.
+
+허용 대안 (아래 형식 중 하나를 사용하십시오):
+  ✅ "핵심은 [구체적 판단]에 있다."
+  ✅ "이는 [A] 대신 [B]에 주목해야 함을 의미한다."
+  ✅ "이번 흐름은 [X]가 아니라 [Y]에 가깝다."
+  ✅ "이 구도는 [투자자 행동 기준]을 바꾼다."
+  ✅ "[조건] 하에서, [구체 결과]가 [일반 예상]보다 빠르게 나타날 수 있다."
+
+[해석] 문장은 면책 선언이 아닙니다. 분석적 판단을 직접 서술합니다.
+"""
+
 _P14_POST1_ENFORCEMENT_BLOCK: str = (
     _P14_ANALYTICAL_SPINE_ENFORCEMENT + "\n"
     + _P14_FEWSHOT_BAD_GOOD_INTERP + "\n"
     + _P14_HEDGE_DIRECT_PROHIBITION + "\n"
+    + _P14I_INTERP_HEDGE_CLAMP + "\n"   # Phase 14I: [해석] 헤징 어미 차단
+    # Phase 15 block injected below after constant definition
+)
+
+# ── Phase 15: Temporal Tense Enforcement ─────────────────────────────────────
+# 발행일 기준 완료 연도(2024, 2025 등)의 기업 실적이 "예상/전망/추정"으로
+# 서술되는 문제를 생성 단계(Track C) + 발행 전 교정(Track E) 두 단계에서 차단.
+
+# A1/D1: 완료 연도 + 전망 어미 탐지 대상 동사·구문
+_P15_COMPLETED_YEAR_FORECAST_VERBS: list = [
+    "예상됩니다",
+    "전망됩니다",
+    "예상된다",
+    "전망된다",
+    "기록할 것으로",
+    "달성할 것으로",
+    "기록할 전망",
+    "달성할 전망",
+    "것으로 예상",
+    "것으로 전망",
+    "것으로 기대",
+    "것으로 추정됩니다",
+    "것으로 추정된다",
+    "추정됩니다",
+    "기대됩니다",
+    "보일 전망",
+    "늘어날 전망",
+    "감소할 전망",
+]
+
+# E1: 완료 연도 전망 어미 → 확정 사실 어미 교체 맵
+_P15_TENSE_CORRECTION_MAP: list = [
+    # ── Phase 15A: 복합 패턴 최우선 (어간+어미 동시 교체) ──────────────────────
+    # 기록할 + 것으로 + [추정/예상/전망/기대] 동시 교체
+    ("기록할 것으로 추정됩니다",       "기록한 것으로 집계됐습니다"),
+    ("기록할 것으로 추정된다",         "기록한 것으로 집계됐다"),
+    ("달성할 것으로 추정됩니다",       "달성한 것으로 집계됐습니다"),
+    ("달성할 것으로 추정된다",         "달성한 것으로 집계됐다"),
+    ("증가할 것으로 추정됩니다",       "증가한 것으로 집계됐습니다"),
+    ("증가할 것으로 추정된다",         "증가한 것으로 집계됐다"),
+    ("감소할 것으로 추정됩니다",       "감소한 것으로 집계됐습니다"),
+    ("감소할 것으로 추정된다",         "감소한 것으로 집계됐다"),
+    ("올릴 것으로 추정됩니다",         "올린 것으로 집계됐습니다"),
+    ("올릴 것으로 추정된다",           "올린 것으로 집계됐다"),
+    ("확대할 것으로 추정됩니다",       "확대한 것으로 집계됐습니다"),
+    ("확대할 것으로 추정된다",         "확대한 것으로 집계됐다"),
+    ("기록할 것으로 기대됩니다",       "기록한 것으로 확인됐습니다"),
+    ("기록할 것으로 기대된다",         "기록한 것으로 확인됐다"),
+    ("달성할 것으로 기대됩니다",       "달성한 것으로 확인됐습니다"),
+    ("달성할 것으로 기대된다",         "달성한 것으로 확인됐다"),
+    ("증가할 것으로 기대됩니다",       "증가한 것으로 확인됐습니다"),
+    ("감소할 것으로 기대됩니다",       "감소한 것으로 확인됐습니다"),
+    ("기록할 것으로 관측됩니다",       "기록한 것으로 집계됐습니다"),
+    ("기록할 것으로 관측된다",         "기록한 것으로 집계됐다"),
+    ("달성할 것으로 관측됩니다",       "달성한 것으로 집계됐습니다"),
+    # ── Phase 15 기존 패턴 (어간+어미 일체형) ──────────────────────────────────
+    # (탐지 패턴, 교체 문자열) — 순서 중요 (긴 패턴 우선)
+    ("기록할 것으로 예상됩니다",      "기록했습니다"),
+    ("달성할 것으로 예상됩니다",      "달성했습니다"),
+    ("기록할 것으로 예상된다",        "기록했다"),
+    ("달성할 것으로 예상된다",        "달성했다"),
+    ("기록할 것으로 전망됩니다",      "기록했습니다"),
+    ("달성할 것으로 전망됩니다",      "달성했습니다"),
+    ("기록할 것으로 전망된다",        "기록했다"),
+    ("달성할 것으로 전망된다",        "달성했다"),
+    ("기록할 전망입니다",             "기록했습니다"),
+    ("기록할 전망이다",               "기록했다"),
+    ("달성할 전망입니다",             "달성했습니다"),
+    ("달성할 전망이다",               "달성했다"),
+    ("것으로 예상됩니다",             "것으로 집계됐습니다"),
+    ("것으로 예상된다",               "것으로 집계됐다"),
+    ("것으로 전망됩니다",             "것으로 나타났습니다"),
+    ("것으로 전망된다",               "것으로 나타났다"),
+    ("것으로 기대됩니다",             "것으로 확인됐습니다"),
+    ("것으로 기대된다",               "것으로 확인됐다"),
+    ("것으로 추정됩니다",             "것으로 집계됐습니다"),
+    ("것으로 추정된다",               "것으로 집계됐다"),
+    ("전망됩니다",                    "기록됐습니다"),
+    ("전망된다",                      "기록됐다"),
+    ("예상됩니다",                    "기록됐습니다"),
+    ("예상된다",                      "기록됐다"),
+    ("추정됩니다",                    "집계됐습니다"),
+    ("추정된다",                      "집계됐다"),
+    ("기대됩니다",                    "확인됐습니다"),
+    ("기대된다",                      "확인됐다"),
+]
+
+# A1: 잠정치 / 컨센서스 / 가이던스 마커 (예외 처리용)
+_P15_PRELIMINARY_MARKERS: list  = ["잠정", "preliminary", "속보치", "잠정치"]
+_P15_CONSENSUS_MARKERS: list    = ["컨센서스", "시장 기대", "시장 예상", "consensus"]
+_P15_GUIDANCE_MARKERS: list     = ["가이던스", "guidance", "목표치", "가이드"]
+
+# ── Phase 15A: Compound Tense Regex Engine ────────────────────────────────────
+# 어간 + 할 것으로 + [추정/예상/전망/기대/관측] + [됩니다/된다] 패턴을 한 번에 교체.
+# 어간을 그대로 재사용하여 "기록할 것으로 추정됩니다" → "기록한 것으로 집계됐습니다"
+import re as _re_p15a
+_P15A_COMPOUND_RE_FORMAL: "_re_p15a.Pattern" = _re_p15a.compile(
+    r"([가-힣]+)할(\s+것으로\s+)(추정|예상|전망|기대|관측)됩니다"
+)
+_P15A_COMPOUND_RE_INFORMAL: "_re_p15a.Pattern" = _re_p15a.compile(
+    r"([가-힣]+)할(\s+것으로\s+)(추정|예상|전망|기대|관측)된다"
+)
+# 교정 후 잔여 미래형 어간 검사용
+_P15A_FUTURE_STEM_RE: "_re_p15a.Pattern" = _re_p15a.compile(
+    r"[가-힣]+할\s+것으로"
+)
+
+# C1: 생성 단계 주입 블록 (GPT 프롬프트에 prepend)
+_P15_TEMPORAL_TENSE_ENFORCEMENT: str = """
+[Phase 15 — 완료 연도 기업 실적 시제 강제]
+
+기사 발행일 기준 이미 완료된 연도(2024년, 2025년)의 기업·시장 실적 수치는
+확정 사실로 서술해야 합니다. 아래 규칙을 반드시 준수하십시오.
+
+★ 완료 연도 구분 기준 (2026년 기준):
+  - 2024년 = 완전히 완료된 회계 연도 → 확정/잠정 실적으로 서술
+  - 2025년 = 완전히 완료된 회계 연도 → 확정/잠정 실적으로 서술
+  - 2026년 = 아직 진행 중 → 전망·추정 서술 허용
+
+❌ 금지 — 완료 연도 + 전망 어미:
+  ❌ "SK하이닉스 2024년 매출은 66조원을 기록할 것으로 예상된다."
+  ❌ "삼성전자 2025년 영업이익은 35조원에 달할 전망이다."
+  ❌ "2024년 연간 실적은 사상 최대를 기록할 것으로 추정됩니다."
+
+✅ 허용 — 완료 연도 + 확정 사실 어미:
+  ✅ "SK하이닉스는 2024년 매출 66조원을 기록했다."
+  ✅ "삼성전자는 2025년 영업이익 35조원을 달성했다."
+  ✅ "2024년 연간 실적은 사상 최대를 기록한 것으로 집계됐다."
+
+✅ 예외 — 컨센서스·가이던스·잠정치 언급 시 명확히 구분:
+  ✅ "당시 시장 컨센서스는 매출 65조원을 예상했으나, 실제로는 66조원을 달성했다."
+  ✅ "잠정치 기준 영업이익은 23조원으로 집계됐다." (잠정치임을 명시)
+  ✅ "회사 가이던스는 2026년 매출 70조원 달성을 목표로 한다." (미래 연도 가이던스)
+
+시제 분류:
+  COMPLETED_PERIOD_ACTUAL:              직접 과거 사실 서술 (기록했다, 달성했다)
+  COMPLETED_PERIOD_PRELIMINARY:         잠정치 명시 후 사실 서술 (잠정 집계됐다)
+  COMPLETED_PERIOD_CONSENSUS_REFERENCE: 사실과 기대를 분리 서술
+  CURRENT_YEAR_FORECAST (2026):         전망 어미 허용
+  FUTURE_YEAR_FORECAST (2027+):         전망 어미 허용
+  COMPANY_GUIDANCE:                     미래 목표 서술 허용 (가이던스임을 명시)
+"""
+
+# Phase 15 주입: _P14_POST1_ENFORCEMENT_BLOCK에 추가
+_P14_POST1_ENFORCEMENT_BLOCK = (
+    _P14_POST1_ENFORCEMENT_BLOCK
+    + _P15_TEMPORAL_TENSE_ENFORCEMENT + "\n"  # Phase 15: 완료 연도 시제 강제
 )
 
 _P14_POST2_CONTINUATION_TEMPLATE: str = """
@@ -1575,7 +1766,7 @@ _P14H_BLOCK_TAGS_RE: str = r"<(p|li|blockquote|h[1-6]|div)[^>]*>.*?</\1>"
 
 GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST1: str = """
 너는 매크로몰트(MacroMalt) 금융 분석 콘텐츠의 해석 품질 개선 에디터다.
-입력되는 각 HTML 블록은 약한 해석 패턴(교과서 인과, 범용 리스크 나열)이 감지된 단락이다.
+입력되는 각 HTML 블록은 약한 해석 패턴(교과서 인과, 범용 리스크 나열, 헤징 어미 과잉)이 감지된 단락이다.
 각 블록을 다음 기준으로 재작성하라.
 
 [재작성 목표 — Post1 심층분석 맥락]
@@ -1587,6 +1778,17 @@ GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST1: str = """
    - 2차 효과 경로 (직접 효과보다 간접 파급)
 3. 분석 뼈대(spine) 지지: 제공된 spine 문장과 논지를 강화하는 방향으로 재작성
 4. 팩트 보존: 숫자, 날짜, 출처 표기 변경 금지
+
+[Phase 14I — [해석] 헤징 어미 차단]
+[해석] 레이블이 붙은 문장의 결말에서 아래 어미를 사용하지 마라:
+  ❌ "파악됩니다" / "보입니다" / "것으로 보입니다" / "것으로 파악됩니다"
+  ❌ "작용하는 것으로 보입니다" / "시사하는 것으로 보입니다" / "판단됩니다"
+금지 예: "이는 투자 심리를 개선하는 요인으로 작용하는 것으로 보입니다."
+허용 대안:
+  ✅ "핵심은 [판단]에 있다."
+  ✅ "이는 [A] 대신 [B]에 주목해야 함을 의미한다."
+  ✅ "이번 흐름은 [X]가 아니라 [Y]에 가깝다."
+  ✅ "이 구도는 [투자 기준]을 바꾼다."
 
 [절대 금지 패턴]
 - "유가 상승 → 인플레이션 압력" / "금리 상승 → 밸류에이션 부담"
@@ -1606,7 +1808,7 @@ BLOCK_2:
 
 GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST2: str = """
 너는 매크로몰트(MacroMalt) 금융 분석 콘텐츠의 해석 품질 개선 에디터다.
-입력되는 각 HTML 블록은 약한 해석 패턴(교과서 인과, 범용 리스크 나열)이 감지된 단락이다.
+입력되는 각 HTML 블록은 약한 해석 패턴(교과서 인과, 범용 리스크 나열, 헤징 어미 과잉)이 감지된 단락이다.
 각 블록을 다음 기준으로 재작성하라.
 
 [재작성 목표 — Post2 종목 리포트 맥락]
@@ -1618,6 +1820,17 @@ GEMINI_TARGETED_BLOCK_REWRITE_SYSTEM_POST2: str = """
    - 시나리오별 downside 구조 (단순 "리스크 존재" 아닌 조건+크기 명시)
 3. [반대 포인트] 강화: 조건 + 결과 + 메인 픽 테제와의 충돌 3요소 필수
 4. 팩트 보존: 숫자, 날짜, 출처 표기 변경 금지
+
+[Phase 14I — [해석] 헤징 어미 차단]
+[해석] 레이블이 붙은 문장의 결말에서 아래 어미를 사용하지 마라:
+  ❌ "파악됩니다" / "보입니다" / "것으로 보입니다" / "것으로 파악됩니다"
+  ❌ "작용하는 것으로 보입니다" / "시사하는 것으로 보입니다" / "판단됩니다"
+금지 예: "이는 회사의 신사업 모멘텀이 실적으로 연결되고 있는 것으로 보입니다."
+허용 대안:
+  ✅ "핵심은 [판단]에 있다."
+  ✅ "이는 [A] 대신 [B]에 주목해야 함을 의미한다."
+  ✅ "이번 흐름은 [X]가 아니라 [Y]에 가깝다."
+  ✅ "[조건] 하에서, [구체 결과]가 [일반 예상]보다 빠르게 나타날 수 있다."
 
 [절대 금지 패턴]
 - "반도체 수요 증가", "기술력 강화", "실적 개선 기대"만 나열
@@ -1648,6 +1861,348 @@ GEMINI_TARGETED_BLOCK_REWRITE_USER: str = """
 [재작성 타겟 블록들]
 {target_blocks}
 """
+
+
+# ── Track D (Phase 14I): Hedge Density Diagnostics ───────────────────────────
+
+def _detect_interp_hedge_density(content: str) -> dict:
+    """Phase 14I Track D: [해석] 레이블 블록에서 헤징 어미 포화도 측정.
+
+    [해석] 태그가 포함된 문장을 추출하고, 그 중 _P14I_INTERP_HEDGE_ENDINGS 어미로
+    끝나는 비율을 계산한다. 재작성 전/후 비교에 사용.
+
+    Returns:
+        {
+          "interp_total":   int   — [해석] 포함 문장 수,
+          "interp_hedged":  int   — 헤징 어미로 끝나는 [해석] 문장 수,
+          "hedge_ratio":    float — interp_hedged / max(interp_total, 1),
+          "status":         str   — "FAIL"(>0.5) | "WARN"(>0.25) | "PASS",
+          "bad_lines":      list  — 헤징 어미 탐지 문장 샘플 (최대 5개),
+        }
+    """
+    import re as _re
+
+    plain = _re.sub(r"<[^>]+>", " ", content)
+    # 문장 분리 (마침표·느낌표·물음표 기준, 줄 포함)
+    raw_sentences = _re.split(r"(?<=[.!?。！？])\s+", plain)
+    sentences = [s.strip() for s in raw_sentences if len(s.strip()) > 15]
+
+    interp_total = 0
+    interp_hedged = 0
+    bad_lines: list = []
+
+    for sent in sentences:
+        if "[해석]" not in sent:
+            continue
+        interp_total += 1
+        for ending in _P14I_INTERP_HEDGE_ENDINGS:
+            if sent.rstrip().endswith(ending) or (ending + ".") in sent or (ending + "。") in sent:
+                interp_hedged += 1
+                if len(bad_lines) < 5:
+                    bad_lines.append(sent[:120])
+                break
+
+    ratio = interp_hedged / max(interp_total, 1)
+    if ratio > 0.50:
+        status = "FAIL"
+    elif ratio > 0.25:
+        status = "WARN"
+    else:
+        status = "PASS"
+
+    return {
+        "interp_total":  interp_total,
+        "interp_hedged": interp_hedged,
+        "hedge_ratio":   round(ratio, 3),
+        "status":        status,
+        "bad_lines":     bad_lines,
+    }
+
+
+def _extract_hedge_heavy_interp_blocks(content: str) -> list:
+    """Phase 14I Track C: [해석] 레이블을 포함하고 헤징 어미로 끝나는 HTML 블록 추출.
+
+    _extract_weak_interp_blocks과 별개로 작동. [해석] 태그가 있으면서
+    _P14I_INTERP_HEDGE_ENDINGS 어미로 끝나는 블록만 추출.
+
+    Returns:
+        list of block dicts (html_block, plain_text, matched_endings, ...)
+    """
+    import re as _re
+
+    block_pattern = _re.compile(
+        r"(<(?:p|li|blockquote)[^>]*>)(.*?)(</(?:p|li|blockquote)>)",
+        _re.DOTALL | _re.IGNORECASE,
+    )
+    hedge_blocks: list = []
+    for m in block_pattern.finditer(content):
+        open_tag, inner, close_tag = m.group(1), m.group(2), m.group(3)
+        plain = _re.sub(r"<[^>]+>", " ", inner).strip()
+        if len(plain) < 20:
+            continue
+        if "[해석]" not in plain:
+            continue
+        matched_endings: list = []
+        for ending in _P14I_INTERP_HEDGE_ENDINGS:
+            if (
+                plain.rstrip().endswith(ending)
+                or (ending + ".") in plain
+                or (ending + "。") in plain
+            ):
+                matched_endings.append(ending)
+        if matched_endings:
+            hedge_blocks.append({
+                "html_block":      m.group(0),
+                "open_tag":        open_tag,
+                "inner":           inner,
+                "close_tag":       close_tag,
+                "plain_text":      plain,
+                "matched_endings": matched_endings,
+                "matched_patterns": [(e, "") for e in matched_endings],  # 재작성 인터페이스 호환
+                "has_cooccurrence": True,  # 타겟 재작성에서 우선 처리
+                "section_hint":    "[해석]",
+                "start":           m.start(),
+                "end":             m.end(),
+            })
+            if len(hedge_blocks) >= 6:
+                break
+
+    return hedge_blocks
+
+
+# ── Phase 15A Track D: Mixed-Tense Residue Check ─────────────────────────────
+
+def _has_mixed_tense_residue(sentence: str, completed_years: list) -> bool:
+    """Phase 15A Track D: 교정 후 완료 연도 참조 + 미래형 어간이 공존하는지 확인.
+
+    교정 결과가 진짜로 해결됐는지 엄격하게 판정.
+    교정 후에도 "기록할 것으로" 같은 미래형 어간이 남아있으면 True 반환.
+
+    Args:
+        sentence:        교정 이후의 문장 (plain text or HTML fragment)
+        completed_years: 완료 연도 int 목록, 예: [2022, 2023, 2024, 2025]
+
+    Returns:
+        True  — 잔여 혼재(mixed) 시제 발견 → 교정 미완료
+        False — 잔여 없음 → 교정 완료
+    """
+    has_completed_year = any(str(cy) + "년" in sentence for cy in completed_years)
+    if not has_completed_year:
+        return False
+    return bool(_P15A_FUTURE_STEM_RE.search(sentence))
+
+
+# ── Phase 15 Track D: Completed-Year-as-Forecast Detection ───────────────────
+
+def _detect_completed_year_as_forecast(content: str, run_year: int = 2026) -> dict:
+    """Phase 15 Track D: 완료 연도 실적이 전망/예상 어미로 서술된 패턴 탐지.
+
+    완료 연도(run_year - 1 이하 연도) + 전망 어미 조합을 탐지한다.
+    잠정치·컨센서스·가이던스 문맥은 별도 경고(WARN)로 분류해 자동 교정에서 제외.
+
+    A2: run_year 기준 완료 연도 판단
+    D1: 탐지 패턴 — 완료 연도 + 전망 어미
+
+    Returns:
+        {
+          "violations":   list — clear completed-year-as-forecast violations (FAIL level),
+          "warnings":     list — ambiguous / preliminary / consensus cases (WARN),
+          "violation_count": int,
+          "status":       str — "FAIL" | "WARN" | "PASS",
+        }
+    """
+    import re as _re
+
+    plain = _re.sub(r"<[^>]+>", " ", content)
+    # 문장 분리
+    sentences = _re.split(r"(?<=[.!?。！？])\s+", plain)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+
+    violations: list = []
+    warnings: list   = []
+
+    # 완료 연도 목록 (run_year - 1 이하, 최근 3년만 검사해 오탐 최소화)
+    completed_years = [str(y) for y in range(run_year - 3, run_year)]
+
+    for sent in sentences:
+        # 완료 연도가 포함된 문장만 검사
+        year_in_sent = None
+        for cy in completed_years:
+            if cy + "년" in sent:
+                year_in_sent = cy
+                break
+        if year_in_sent is None:
+            continue
+
+        # 잠정치·컨센서스·가이던스 문맥 → WARN (자동 교정 제외)
+        has_exception_marker = any(m in sent for m in
+                                   _P15_PRELIMINARY_MARKERS +
+                                   _P15_CONSENSUS_MARKERS +
+                                   _P15_GUIDANCE_MARKERS)
+
+        # 전망 어미 탐지
+        for fv in _P15_COMPLETED_YEAR_FORECAST_VERBS:
+            if fv in sent:
+                record = {
+                    "sentence":      sent[:150],
+                    "year":          year_in_sent,
+                    "forecast_verb": fv,
+                    "has_exception": has_exception_marker,
+                }
+                if has_exception_marker:
+                    # 예외 마커 있으면 경고만 (컨센서스 참조 등)
+                    record["category"] = "COMPLETED_PERIOD_CONSENSUS_REFERENCE"
+                    if record not in warnings:
+                        warnings.append(record)
+                else:
+                    record["category"] = "COMPLETED_PERIOD_AS_FORECAST"
+                    if record not in violations:
+                        violations.append(record)
+                break  # 한 문장에 복수 패턴 중복 등록 방지
+
+    violation_count = len(violations)
+    status = (
+        "FAIL" if violation_count >= 1
+        else "WARN" if warnings
+        else "PASS"
+    )
+
+    if violations:
+        logger.warning(
+            f"[Phase 15] 완료 연도 전망 어미 위반 {violation_count}건 탐지"
+        )
+        for v in violations[:5]:
+            logger.warning(f"  ⚠ [{v['year']}년] {v['forecast_verb']} → {v['sentence'][:80]}")
+    elif warnings:
+        logger.info(f"[Phase 15] 컨센서스/잠정 문맥 경고 {len(warnings)}건 (자동 교정 제외)")
+    else:
+        logger.info("[Phase 15] 완료 연도 시제 이슈 없음")
+
+    return {
+        "violations":      violations,
+        "warnings":        warnings,
+        "violation_count": violation_count,
+        "status":          status,
+    }
+
+
+# ── Phase 15 Track E: Targeted Tense Correction ───────────────────────────────
+
+def _enforce_tense_correction(
+    content: str,
+    run_year: int = 2026,
+    label: str = "",
+) -> tuple:
+    """Phase 15 / 15A Track E: 완료 연도 전망 어미 문장을 확정 사실 어미로 교정.
+
+    E1: 위반 문장 특정 + 대체
+    E2: 팩트 의미 보존 (시제 레이블만 변경)
+    E3: 잠정치/컨센서스/가이던스 예외 처리 (자동 교정에서 제외)
+
+    Phase 15A 변경사항:
+    - Step 0: 전체 컨텐츠에 regex 복합 교정 먼저 적용 (어간+어미 동시 교체)
+      → "기록할 것으로 추정됩니다" → "기록한 것으로 집계됐습니다"
+    - Step 1: 위반 문장별 리스트 기반 맵 교정 (기존 Phase 15 로직, 잔여 처리)
+    - Step 2: _has_mixed_tense_residue()로 교정 후 잔여 혼재 시제 엄격 재검사
+      → 잔여 발견 시 경고 로그 기록 (교정 미완으로 처리)
+
+    전략:
+    1. Phase 15A regex 복합 교정 (어간+어미 동시) — 전체 컨텐츠 스캔
+    2. _detect_completed_year_as_forecast로 위반 문장 재감지
+    3. 위반 문장에서 리스트 맵으로 잔여 패턴 교체 (최우선 복합 패턴 먼저)
+    4. 교체 후 재탐지 + _has_mixed_tense_residue() 잔여 검사
+
+    Returns:
+        (corrected_content: str, correction_log: list)
+    """
+    completed_years = list(range(run_year - 3, run_year))
+
+    # ── Phase 15A Step 0: Regex 복합 교정 (어간+어미 동시 교체) ─────────────────
+    # list 기반 맵보다 먼저 적용하여 "기록할 것으로 추정됩니다" 등 완전 교체
+    updated = _P15A_COMPOUND_RE_FORMAL.sub(
+        lambda m: m.group(1) + "한" + m.group(2) + "집계됐습니다",
+        content,
+    )
+    updated = _P15A_COMPOUND_RE_INFORMAL.sub(
+        lambda m: m.group(1) + "한" + m.group(2) + "집계됐다",
+        updated,
+    )
+    regex_changed = updated != content
+    if regex_changed:
+        logger.info(
+            f"[Phase 15A] regex 복합 교정 적용 [{label}] — 어간+어미 동시 교체"
+        )
+
+    # ── 위반 재탐지 (regex 이후 잔여 확인) ───────────────────────────────────────
+    diag = _detect_completed_year_as_forecast(updated, run_year=run_year)
+    if diag["status"] == "PASS":
+        if regex_changed:
+            logger.info(f"[Phase 15A] regex 교정만으로 완전 해소 [{label}]")
+            return updated, [{"label": label, "method": "regex_compound", "status": "resolved"}]
+        logger.info(f"[Phase 15] 시제 교정 스킵 [{label}] — 위반 없음")
+        return updated, []
+
+    if not diag["violations"]:
+        logger.info(f"[Phase 15] 시제 교정 스킵 [{label}] — 명확 위반 없음 (경고만 있음)")
+        return updated, []
+
+    correction_log: list = []
+
+    # ── Phase 15 Step 1: 위반 문장별 리스트 맵 교정 ─────────────────────────────
+    for v in diag["violations"]:
+        original_sent = v["sentence"]
+        corrected_sent = original_sent
+
+        # 전망 어미를 확정 어미로 교체 — 복합 패턴 우선 (맵 상단 배치)
+        for bad_pattern, good_replacement in _P15_TENSE_CORRECTION_MAP:
+            if bad_pattern in corrected_sent:
+                corrected_sent = corrected_sent.replace(bad_pattern, good_replacement, 1)
+
+                # ── Phase 15A Step 2: 교정 후 잔여 혼재 시제 엄격 재검사 ─────────
+                residue = _has_mixed_tense_residue(corrected_sent, completed_years)
+                resolution = "unresolved_residue" if residue else "resolved"
+                if residue:
+                    logger.warning(
+                        f"[Phase 15A] 잔여 혼재 시제 발견 [{label}] "
+                        f"— 교정 후에도 미래형 어간 잔존: {corrected_sent[:80]}"
+                    )
+
+                correction_log.append({
+                    "label":           label,
+                    "year":            v["year"],
+                    "original":        original_sent[:120],
+                    "corrected":       corrected_sent[:120],
+                    "replaced_verb":   bad_pattern,
+                    "replacement":     good_replacement,
+                    "residue_check":   resolution,
+                })
+                # 전망 어미만 교체 (좁은 범위 교체로 내용 보존, E2)
+                updated = updated.replace(bad_pattern, good_replacement, 1)
+                break  # 한 문장에 첫 번째 매칭만 교정
+
+    if correction_log or regex_changed:
+        logger.info(
+            f"[Phase 15/15A] 시제 교정 완료 [{label}] — {len(correction_log)}건 교정"
+        )
+        # E3: 교정 후 재탐지 (post_correction_recheck)
+        post_diag = _detect_completed_year_as_forecast(updated, run_year=run_year)
+        remaining = post_diag["violation_count"]
+        logger.info(
+            f"[Phase 15] 교정 후 재탐지 [{label}] — 잔여 위반 {remaining}건"
+        )
+        unresolved = [e for e in correction_log if e.get("residue_check") == "unresolved_residue"]
+        if unresolved:
+            logger.warning(
+                f"[Phase 15A] 혼재 시제 잔여 [{label}] — "
+                f"{len(unresolved)}건 교정 미완 (교정 맵 확장 필요)"
+            )
+    else:
+        logger.warning(
+            f"[Phase 15] 시제 교정 시도했으나 매칭 없음 [{label}] — "
+            f"교정 맵에 없는 패턴일 수 있음"
+        )
+
+    return updated, correction_log
 
 
 def _extract_weak_interp_blocks(content: str) -> list:
@@ -1840,121 +2395,182 @@ def _enforce_interpretation_rewrite(
     weak_interp_hits: int,
     label: str = "",
     article_spine: str = "",
+    hedge_overuse_status: str = "",
 ) -> str:
-    """Phase 14 Track C (Hotfix): weak_interpretation FAIL 시 타겟 블록 교체 실행.
+    """Phase 14I Track C: weak_interpretation FAIL 또는 hedge_overuse FAIL 시 타겟 교체.
 
-    Phase 14.1 변경:
-    - 전체 기사 재작성 → 타겟 블록 단위 교체로 전환
-    - 약한 패턴 키워드가 실제로 동시 등장하는 블록만 Gemini에 전달
-    - 교체 후 re-score로 해소 여부 검증
+    Phase 14I 변경:
+    - 트리거 확장: weak_hits >= 3 OR hedge_overuse_status == "FAIL"
+    - hedge_overuse FAIL 트리거 시 _extract_hedge_heavy_interp_blocks 우선 사용
+    - [해석] 헤징 어미 saturated 블록 → 타겟 교체
+    - 교체 후 _detect_interp_hedge_density로 헤징 해소 여부 검증
 
     Args:
-        content:          Phase 13 진단 후 콘텐츠 (HTML)
-        weak_interp_hits: Phase 13 weak_hits 수 (>= 3 이면 FAIL)
-        label:            로그 레이블 ("Post1" | "Post2" 등)
-        article_spine:    Post1 분석 뼈대 문장 (선택)
+        content:              Phase 13 진단 후 콘텐츠 (HTML)
+        weak_interp_hits:     Phase 13 weak_hits 수
+        label:                로그 레이블 ("Post1" | "Post2" 등)
+        article_spine:        Post1 분석 뼈대 문장 (선택)
+        hedge_overuse_status: Phase 13 hedge_overuse 상태 ("FAIL" | "WARN" | "PASS")
 
     Returns:
         교체 후 콘텐츠 (실패/스킵 시 원본 반환)
     """
-    if weak_interp_hits < 3:
+    # ── Phase 14I: 트리거 판정 ────────────────────────────────────────────────
+    weak_trigger  = weak_interp_hits >= 3
+    hedge_trigger = hedge_overuse_status == "FAIL"
+
+    if not weak_trigger and not hedge_trigger:
         logger.info(
-            f"[Phase 14] 재작성 패스 스킵 [{label}] — "
-            f"weak_hits={weak_interp_hits} (임계값 3 미만)"
+            f"[Phase 14I] 재작성 패스 스킵 [{label}] — "
+            f"weak_hits={weak_interp_hits} (임계값 3 미만), "
+            f"hedge_overuse={hedge_overuse_status or 'N/A'} (FAIL 아님)"
         )
         return content
 
-    logger.info(
-        f"[Phase 14] 타겟 재작성 시작 [{label}] — weak_hits={weak_interp_hits}"
-    )
+    reason = []
+    if weak_trigger:
+        reason.append(f"weak_hits={weak_interp_hits}")
+    if hedge_trigger:
+        reason.append(f"hedge_overuse=FAIL")
+    logger.info(f"[Phase 14I] 타겟 재작성 시작 [{label}] — 트리거: {', '.join(reason)}")
 
-    # ── Step 1: 타겟 블록 추출 ──────────────────────────────────────────────
-    targets = _extract_weak_interp_blocks(content)
-    logger.info(
-        f"[Phase 14H] 타겟 블록 추출 [{label}]: {len(targets)}개 "
-        f"(코-오커런스 {sum(1 for t in targets if t.get('has_cooccurrence'))}개)"
-    )
+    post_type = "Post1" if "Post1" in label or label.endswith("1") else "Post2"
 
-    if targets:
-        # ── Step 2: 타겟 블록 Gemini 재작성 ──────────────────────────────
-        post_type = "Post1" if "Post1" in label or "1" in label else "Post2"
-        replacements = _rewrite_weak_blocks(targets, article_spine, post_type, label)
+    # ── Phase 14I: hedge_overuse 트리거 시 [해석] 헤징 블록 우선 추출 ─────────
+    if hedge_trigger:
+        hedge_diag_before = _detect_interp_hedge_density(content)
+        logger.info(
+            f"[Phase 14I] [해석] 헤징 진단 [{label}] 전 — "
+            f"{hedge_diag_before['interp_hedged']}/{hedge_diag_before['interp_total']} "
+            f"({hedge_diag_before['hedge_ratio']*100:.0f}%) status={hedge_diag_before['status']}"
+        )
+        if hedge_diag_before["bad_lines"]:
+            for line in hedge_diag_before["bad_lines"][:3]:
+                logger.warning(f"  ⚠ 헤징 어미 감지: {line[:80]}")
 
-        if replacements:
-            # ── Step 3: HTML 교체 적용 ────────────────────────────────────
-            updated = _apply_block_replacements(content, replacements, label)
+        hedge_targets = _extract_hedge_heavy_interp_blocks(content)
+        logger.info(
+            f"[Phase 14I] [해석] 헤징 블록 추출 [{label}]: {len(hedge_targets)}개"
+        )
 
-            # ── Step 4: PICKS 주석 보존 ───────────────────────────────────
-            if "<!-- PICKS:" in content and "<!-- PICKS:" not in updated:
-                picks_match = re.search(r"<!--\s*PICKS:.*?-->", content, re.DOTALL)
-                if picks_match:
-                    updated = updated.rstrip() + "\n" + picks_match.group(0)
-                    logger.info(f"[Phase 14H] PICKS 주석 복원 [{label}]")
-
-            # ── Step 5: re-score 검증 ────────────────────────────────────
-            new_score = _score_interpretation_quality(updated, label=f"{label}-타겟교체후")
-            new_hits = new_score.get("weak_interp_hits", weak_interp_hits)
-            if new_hits < weak_interp_hits:
-                logger.info(
-                    f"[Phase 14H] 타겟 교체 성공 [{label}] — "
-                    f"weak_hits {weak_interp_hits} → {new_hits}"
-                )
+        if hedge_targets:
+            replacements = _rewrite_weak_blocks(
+                hedge_targets, article_spine, post_type, f"{label}-hedge"
+            )
+            if replacements:
+                content = _apply_block_replacements(content, replacements, f"{label}-hedge")
+                # PICKS 주석 보존
+                if "<!-- PICKS:" not in content:
+                    pass  # 이미 원본에서 보존됨 (content가 원본 참조)
+                # 헤징 재작성 후 재진단
+                hedge_diag_after = _detect_interp_hedge_density(content)
+                if hedge_diag_after["hedge_ratio"] < hedge_diag_before["hedge_ratio"]:
+                    logger.info(
+                        f"[Phase 14I] [해석] 헤징 교체 성공 [{label}] — "
+                        f"{hedge_diag_before['hedge_ratio']*100:.0f}% → "
+                        f"{hedge_diag_after['hedge_ratio']*100:.0f}%"
+                    )
+                else:
+                    logger.warning(
+                        f"[Phase 14I] [해석] 헤징 교체 후 비율 불변 [{label}] — "
+                        f"{hedge_diag_before['hedge_ratio']*100:.0f}% → "
+                        f"{hedge_diag_after['hedge_ratio']*100:.0f}%"
+                    )
             else:
                 logger.warning(
-                    f"[Phase 14H] 타겟 교체 후 weak_hits 불변 [{label}] — "
-                    f"{weak_interp_hits} → {new_hits} (패턴이 비-해석 섹션에 잔존)"
+                    f"[Phase 14I] [해석] 헤징 블록 재작성 결과 없음 [{label}]"
                 )
-            logger.info(
-                f"[Phase 14H] 교체 완료 [{label}] | "
-                f"원본 {len(content)}자 → 교체 후 {len(updated)}자"
-            )
-            return updated
-        else:
-            logger.warning(
-                f"[Phase 14H] 타겟 블록 재작성 결과 없음 [{label}] — "
-                "전체 기사 재작성 폴백 시도"
-            )
-    else:
+
+    # ── 기존 weak_interp 타겟 블록 추출 ─────────────────────────────────────
+    if weak_trigger:
+        targets = _extract_weak_interp_blocks(content)
         logger.info(
-            f"[Phase 14H] 타겟 블록 미추출 [{label}] — "
-            "키워드가 다른 섹션에 분산됨, 전체 기사 폴백"
+            f"[Phase 14H] 타겟 블록 추출 [{label}]: {len(targets)}개 "
+            f"(코-오커런스 {sum(1 for t in targets if t.get('has_cooccurrence'))}개)"
         )
 
-    # ── Fallback: 전체 기사 재작성 (기존 Phase 14 방식) ─────────────────────
-    logger.info(f"[Phase 14] 전체 기사 재작성 폴백 [{label}]")
-    pattern_lines = []
-    for (kw1, kw2) in _P13_WEAK_INTERP_PATTERNS[:8]:
-        import re as _re
-        plain = _re.sub(r"<[^>]+>", " ", content)
-        if kw1 in plain and kw2 in plain:
-            pattern_lines.append(f"- '{kw1}' + '{kw2}' 조합 (교과서 인과 의심)")
-    pattern_desc = "\n".join(pattern_lines) if pattern_lines else "- 교과서 인과 패턴 다수 감지"
+        if targets:
+            replacements = _rewrite_weak_blocks(targets, article_spine, post_type, label)
 
-    user_msg = GEMINI_INTERP_REWRITE_USER.format(
-        weak_patterns=pattern_desc,
-        draft=content,
-    )
-    rewritten = _call_gemini(
-        GEMINI_INTERP_REWRITE_SYSTEM,
-        user_msg,
-        f"Step2.5-P14:해석재작성폴백[{label}]",
-        temperature=0.4,
-    )
+            if replacements:
+                updated = _apply_block_replacements(content, replacements, label)
 
-    if not rewritten or len(rewritten.strip()) < len(content) * 0.70:
-        logger.warning(f"[Phase 14] 폴백 재작성 결과 불충분 [{label}] — 원본 유지")
-        return content
+                # PICKS 주석 보존
+                if "<!-- PICKS:" in content and "<!-- PICKS:" not in updated:
+                    picks_match = re.search(r"<!--\s*PICKS:.*?-->", content, re.DOTALL)
+                    if picks_match:
+                        updated = updated.rstrip() + "\n" + picks_match.group(0)
+                        logger.info(f"[Phase 14H] PICKS 주석 복원 [{label}]")
 
-    rewritten = _strip_code_fences(rewritten)
-    if "<!-- PICKS:" in content and "<!-- PICKS:" not in rewritten:
-        picks_match = re.search(r"<!--\s*PICKS:.*?-->", content, re.DOTALL)
-        if picks_match:
-            rewritten = rewritten.rstrip() + "\n" + picks_match.group(0)
-    logger.info(
-        f"[Phase 14] 폴백 재작성 완료 [{label}] | "
-        f"원본 {len(content)}자 → 재작성 {len(rewritten)}자"
-    )
-    return rewritten
+                # re-score 검증
+                new_score = _score_interpretation_quality(updated, label=f"{label}-타겟교체후")
+                new_hits = new_score.get("weak_interp_hits", weak_interp_hits)
+                if new_hits < weak_interp_hits:
+                    logger.info(
+                        f"[Phase 14H] 타겟 교체 성공 [{label}] — "
+                        f"weak_hits {weak_interp_hits} → {new_hits}"
+                    )
+                else:
+                    logger.warning(
+                        f"[Phase 14H] 타겟 교체 후 weak_hits 불변 [{label}] — "
+                        f"{weak_interp_hits} → {new_hits} (패턴이 비-해석 섹션에 잔존)"
+                    )
+                logger.info(
+                    f"[Phase 14H] 교체 완료 [{label}] | "
+                    f"원본 {len(content)}자 → 교체 후 {len(updated)}자"
+                )
+                return updated
+            else:
+                logger.warning(
+                    f"[Phase 14H] 타겟 블록 재작성 결과 없음 [{label}] — "
+                    "전체 기사 재작성 폴백 시도"
+                )
+        else:
+            logger.info(
+                f"[Phase 14H] 타겟 블록 미추출 [{label}] — "
+                "키워드가 다른 섹션에 분산됨, 전체 기사 폴백"
+            )
+
+        # ── Fallback: 전체 기사 재작성 (기존 Phase 14 방식) ──────────────────
+        logger.info(f"[Phase 14] 전체 기사 재작성 폴백 [{label}]")
+        pattern_lines = []
+        for (kw1, kw2) in _P13_WEAK_INTERP_PATTERNS[:8]:
+            import re as _re
+            plain = _re.sub(r"<[^>]+>", " ", content)
+            if kw1 in plain and kw2 in plain:
+                pattern_lines.append(f"- '{kw1}' + '{kw2}' 조합 (교과서 인과 의심)")
+        pattern_desc = (
+            "\n".join(pattern_lines) if pattern_lines else "- 교과서 인과 패턴 다수 감지"
+        )
+
+        user_msg = GEMINI_INTERP_REWRITE_USER.format(
+            weak_patterns=pattern_desc,
+            draft=content,
+        )
+        rewritten = _call_gemini(
+            GEMINI_INTERP_REWRITE_SYSTEM,
+            user_msg,
+            f"Step2.5-P14:해석재작성폴백[{label}]",
+            temperature=0.4,
+        )
+
+        if not rewritten or len(rewritten.strip()) < len(content) * 0.70:
+            logger.warning(f"[Phase 14] 폴백 재작성 결과 불충분 [{label}] — 원본 유지")
+            return content
+
+        rewritten = _strip_code_fences(rewritten)
+        if "<!-- PICKS:" in content and "<!-- PICKS:" not in rewritten:
+            picks_match = re.search(r"<!--\s*PICKS:.*?-->", content, re.DOTALL)
+            if picks_match:
+                rewritten = rewritten.rstrip() + "\n" + picks_match.group(0)
+        logger.info(
+            f"[Phase 14] 폴백 재작성 완료 [{label}] | "
+            f"원본 {len(content)}자 → 재작성 {len(rewritten)}자"
+        )
+        return rewritten
+
+    # hedge_trigger only 경로: 이미 content가 hedge 교체 완료
+    return content
 
 
 # ── Track D: Numeric Sanity Recalibration ────────────────────────────────────
@@ -3574,22 +4190,44 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         verify_result.get("issues", []), draft, final_content
     )
 
-    # ── Phase 14 Track C (Hotfix): 약한 해석 FAIL 시 타겟 블록 교체 ────────
-    weak_hits = p13_interp.get("weak_interp_hits", 0)
+    # ── Phase 14I Track C: weak_interp OR hedge_overuse FAIL 시 타겟 블록 교체 ─
+    weak_hits   = p13_interp.get("weak_interp_hits", 0)
+    hedge_ovuse = p13_interp.get("hedge_overuse", "PASS")  # "FAIL"|"WARN"|"PASS"
     # spine은 이 시점에 아직 추출 전이므로 SPINE 주석에서 직접 추출
-    _pre_spine = _extract_post1_spine(final_content)
+    _pre_spine  = _extract_post1_spine(final_content)
     final_content = _enforce_interpretation_rewrite(
-        final_content, weak_hits, label="Post1", article_spine=_pre_spine
+        final_content,
+        weak_interp_hits=weak_hits,
+        label="Post1",
+        article_spine=_pre_spine,
+        hedge_overuse_status=hedge_ovuse,     # Phase 14I 신규
     )
-    # 재작성 후 품질 재진단 (타겟 교체 내부에서도 re-score하지만 최종 p13_interp 갱신)
-    if weak_hits >= 3:
+    # 재작성 후 품질 재진단
+    if weak_hits >= 3 or hedge_ovuse == "FAIL":
         p13_interp = _score_interpretation_quality(final_content, label="Post1-재작성후")
+
+    # ── Phase 15: 완료 연도 시제 교정 (Track D → Track E) ─────────────────
+    _run_year_int = int(datetime.now().strftime("%Y"))
+    p15_tense_diag = _detect_completed_year_as_forecast(final_content, run_year=_run_year_int)
+    if p15_tense_diag["status"] == "FAIL":
+        final_content, _p15_log = _enforce_tense_correction(
+            final_content, run_year=_run_year_int, label="Post1"
+        )
+        # 교정 후 temporal 재진단
+        p13_temporal = _check_temporal_sanity(final_content, run_date_str)
+        p15_tense_diag_after = _detect_completed_year_as_forecast(
+            final_content, run_year=_run_year_int
+        )
+        p15_tense_diag["after_correction"] = p15_tense_diag_after
+    else:
+        _p15_log = []
 
     p13_scores: dict = {
         "interpretation": p13_interp,
         "temporal":       p13_temporal,
         "numeric":        p13_numeric,
         "closure":        p13_closure,
+        "tense":          p15_tense_diag,   # Phase 15: 완료 연도 시제 진단
     }
 
     # ── Phase 14 Track B-4: Post1 분석 뼈대 추출 (Post2 연속성 강제용) ───
@@ -3768,14 +4406,36 @@ def generate_stock_picks_report(
     )
     p13_continuity = _check_post_continuity(post1_content, final_content)
 
-    # ── Phase 14 Track C (Hotfix): 약한 해석 FAIL 시 타겟 블록 교체 ────────
-    p2_weak_hits = p13_interp.get("weak_interp_hits", 0)
+    # ── Phase 14I Track C: weak_interp OR hedge_overuse FAIL 시 타겟 블록 교체 ─
+    p2_weak_hits  = p13_interp.get("weak_interp_hits", 0)
+    p2_hedge_ovuse = p13_interp.get("hedge_overuse", "PASS")
     final_content = _enforce_interpretation_rewrite(
-        final_content, p2_weak_hits, label="Post2",
-        article_spine=post1_spine,  # Post2는 Post1 뼈대를 spine으로 전달
+        final_content,
+        weak_interp_hits=p2_weak_hits,
+        label="Post2",
+        article_spine=post1_spine,
+        hedge_overuse_status=p2_hedge_ovuse,   # Phase 14I 신규
     )
-    if p2_weak_hits >= 3:
+    if p2_weak_hits >= 3 or p2_hedge_ovuse == "FAIL":
         p13_interp = _score_interpretation_quality(final_content, label="Post2-재작성후")
+
+    # ── Phase 15: 완료 연도 시제 교정 (Track D → Track E, Post2 엄격 적용) ─
+    _p2_run_year_int = int(datetime.now().strftime("%Y"))
+    p15_tense_diag_p2 = _detect_completed_year_as_forecast(
+        final_content, run_year=_p2_run_year_int
+    )
+    if p15_tense_diag_p2["status"] == "FAIL":
+        final_content, _p15_log_p2 = _enforce_tense_correction(
+            final_content, run_year=_p2_run_year_int, label="Post2"
+        )
+        # 교정 후 temporal 재진단
+        p13_temporal = _check_temporal_sanity(final_content, _run_date_str)
+        p15_tense_diag_p2_after = _detect_completed_year_as_forecast(
+            final_content, run_year=_p2_run_year_int
+        )
+        p15_tense_diag_p2["after_correction"] = p15_tense_diag_p2_after
+    else:
+        _p15_log_p2 = []
 
     p13_scores: dict = {
         "interpretation": p13_interp,
@@ -3783,6 +4443,7 @@ def generate_stock_picks_report(
         "numeric":        p13_numeric,
         "closure":        p13_closure,
         "continuity":     p13_continuity,
+        "tense":          p15_tense_diag_p2,   # Phase 15: 완료 연도 시제 진단
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
