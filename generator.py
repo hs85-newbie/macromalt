@@ -2464,6 +2464,221 @@ def _strip_misapplied_jeonmang_tags(
     return updated, strip_log
 
 
+# ── Phase 15E: Current-Year Past-Month Settlement Fix ─────────────────────────
+# 근본 원인: Phase 15 감지는 completed_years(run_year-1 이하)만 처리.
+# run_year의 이미 종료된 과거 월(예: 3월 발행 시 1월, 2월)은 감지 안 됨.
+# Phase 15D는 확정 어미가 이미 교정된 경우에만 [전망] 태그 제거 가능.
+# → 2026년 2월 양극재 집계가 "늘어날 것으로 전망됩니다"로 나오면 두 레이어 모두 무효.
+#
+# Phase 15E 해결:
+#   1. 현재 연도 과거 월 + 예측 동사 조합을 새 감지 함수로 탐지
+#   2. Phase 15A/15B regex + 신규 NAL 형태 regex로 동사 어미 교정
+#   3. 교정 후 [전망] 태그를 현재 연도 과거 월 기준으로 제거
+
+# Phase 15E 확장 regex: "날 것으로 X됩니다/된다/되며/되고/되어" 형태
+# 대상: 늘어날, 늘어날 → 늘어난 (어간 "늘어나" + 미래 ㄹ → 과거 ㄴ)
+import re as _re_p15e
+_P15E_COMPOUND_RE_NAL_FORMAL: "_re_p15e.Pattern" = _re_p15e.compile(
+    r"([가-힣]+)날(\s+것으로\s+)(추정|예상|전망|기대|관측)됩니다"
+)
+_P15E_COMPOUND_RE_NAL_INFORMAL: "_re_p15e.Pattern" = _re_p15e.compile(
+    r"([가-힣]+)날(\s+것으로\s+)(추정|예상|전망|기대|관측)된다"
+)
+_P15E_COMPOUND_RE_NAL_CONNECTIVE: "_re_p15e.Pattern" = _re_p15e.compile(
+    r"([가-힣]+)날(\s+것으로\s+)(추정|예상|전망|기대|관측)(되며|되고|되어)"
+)
+
+# 현재 연도 과거 월 탐지용 예측 동사 목록 (Phase 15와 동일 기반)
+_P15E_FORECAST_VERB_MARKERS: list = [
+    "것으로 전망됩니다", "것으로 전망된다", "것으로 전망되며", "것으로 전망되고",
+    "것으로 추정됩니다", "것으로 추정된다", "것으로 추정되며", "것으로 추정되고",
+    "것으로 예상됩니다", "것으로 예상된다", "것으로 예상되며", "것으로 예상되고",
+    "것으로 기대됩니다", "것으로 기대된다", "것으로 기대되며", "것으로 기대되고",
+    "것으로 관측됩니다", "것으로 관측된다",
+    "전망됩니다", "전망된다", "전망되며",
+    "추정됩니다", "추정된다", "추정되며",
+    "늘어날 것으로", "증가할 것으로", "기록할 것으로", "달성할 것으로",
+    "상승할 것으로", "하락할 것으로", "감소할 것으로",
+]
+
+
+def _detect_current_year_past_month_as_forecast(
+    content: str,
+    run_year: int = 2026,
+    run_month: int = None,
+) -> dict:
+    """Phase 15E Track A/C: 현재 연도 과거 월 집계 데이터가 예측 어미로 서술된 문장 탐지.
+
+    Phase 15 감지 로직의 커버리지 공백:
+      - _detect_completed_year_as_forecast: completed_years(run_year-1 이하)만 처리
+      - run_year의 이미 종료된 과거 월은 미처리
+
+    탐지 기준:
+      - 현재 연도 + 이미 종료된 월(run_month - 1 이하) 문자열 포함
+      - 예측 동사 패턴 포함
+
+    Returns:
+        {
+          "violations": list,
+          "violation_count": int,
+          "status": "FAIL" | "PASS",
+          "settled_periods": list,
+        }
+    """
+    import re as _re_15e
+
+    if run_month is None:
+        run_month = datetime.now().month
+
+    if run_month <= 1:
+        return {"violations": [], "violation_count": 0, "status": "PASS", "settled_periods": []}
+
+    # 현재 연도 확정 과거 월 패턴
+    settled_periods: list = []
+    for _m in range(1, run_month):
+        settled_periods.append(f"{run_year}년 {_m}월")
+        settled_periods.append(f"{run_year}년 {str(_m).zfill(2)}월")
+
+    plain = _re_15e.sub(r"<[^>]+>", " ", content)
+    sentences = _re_15e.split(r"(?<=[.!?。！？])\s+", plain)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+
+    violations: list = []
+    for sent in sentences:
+        has_settled = any(sp in sent for sp in settled_periods)
+        if not has_settled:
+            continue
+        for fv in _P15E_FORECAST_VERB_MARKERS:
+            if fv in sent:
+                record = {"sentence": sent[:150], "forecast_marker": fv}
+                if record not in violations:
+                    violations.append(record)
+                break
+
+    violation_count = len(violations)
+    status = "FAIL" if violation_count >= 1 else "PASS"
+
+    if violations:
+        logger.warning(
+            f"[Phase 15E] 현재 연도 과거 월 예측 어미 위반 {violation_count}건 탐지"
+        )
+        for v in violations[:3]:
+            logger.warning(f"  ⚠ {v['forecast_marker']} → {v['sentence'][:80]}")
+    else:
+        logger.info("[Phase 15E] 현재 연도 과거 월 시제 이슈 없음")
+
+    return {
+        "violations": violations,
+        "violation_count": violation_count,
+        "status": status,
+        "settled_periods": settled_periods,
+    }
+
+
+def _enforce_current_year_month_settlement(
+    content: str,
+    run_year: int = 2026,
+    run_month: int = None,
+    label: str = "",
+) -> tuple:
+    """Phase 15E Track B/C: 현재 연도 과거 월 예측 동사 교정 + [전망] 태그 제거.
+
+    Phase 15D와의 차이:
+      - Phase 15D: 확정 어미가 이미 존재하는 경우에만 [전망] 제거
+      - Phase 15E: 예측 어미를 확정 어미로 교정 AND [전망] 태그 제거 (동시 처리)
+
+    처리 순서:
+      1. 현재 연도 과거 월 + 예측 동사 탐지
+      2. 위반 탐지 시: Phase 15A/15B regex + Phase 15E NAL regex로 전역 동사 교정
+      3. 교정 후 현재 연도 과거 월 앞 [전망] 태그 제거
+
+    Returns:
+        (updated_content: str, settlement_log: list)
+    """
+    import re as _re15e_fn
+
+    if run_month is None:
+        run_month = datetime.now().month
+
+    diag = _detect_current_year_past_month_as_forecast(
+        content, run_year=run_year, run_month=run_month
+    )
+
+    if diag["status"] == "PASS":
+        logger.info(f"[Phase 15E] 교정 불필요 [{label}]")
+        return content, []
+
+    settled_periods = diag["settled_periods"]
+    updated = content
+
+    # ── Step 1: 동사 어미 교정 ─────────────────────────────────────────────────
+    # Phase 15A/15B regex (X할 것으로 Y됩니다/된다/되며)
+    updated = _P15A_COMPOUND_RE_FORMAL.sub(
+        lambda m: m.group(1) + "한" + m.group(2) + "집계됐습니다",
+        updated,
+    )
+    updated = _P15A_COMPOUND_RE_INFORMAL.sub(
+        lambda m: m.group(1) + "한" + m.group(2) + "집계됐다",
+        updated,
+    )
+    updated = _P15B_COMPOUND_RE_CONNECTIVE.sub(
+        lambda m: m.group(1) + "한" + m.group(2) + "집계" + _P15B_CONNECTIVE_ENDING_MAP[m.group(4)],
+        updated,
+    )
+    # Phase 15E 확장: X날 것으로 Y됩니다/된다/되며 (늘어날, 달려날 등)
+    updated = _P15E_COMPOUND_RE_NAL_FORMAL.sub(
+        lambda m: m.group(1) + "난" + m.group(2) + "집계됐습니다",
+        updated,
+    )
+    updated = _P15E_COMPOUND_RE_NAL_INFORMAL.sub(
+        lambda m: m.group(1) + "난" + m.group(2) + "집계됐다",
+        updated,
+    )
+    updated = _P15E_COMPOUND_RE_NAL_CONNECTIVE.sub(
+        lambda m: m.group(1) + "난" + m.group(2) + "집계" + _P15B_CONNECTIVE_ENDING_MAP[m.group(4)],
+        updated,
+    )
+
+    verb_changed = updated != content
+
+    # ── Step 2: [전망] 태그 제거 (현재 연도 과거 월 앞) ──────────────────────────
+    JEONMANG_TAG_RE = _re15e_fn.compile(r"\[전망\]\s*")
+    matches = list(JEONMANG_TAG_RE.finditer(updated))
+    strip_log: list = []
+
+    for match in reversed(matches):
+        start, end = match.start(), match.end()
+        following = updated[end:end + 300]
+        following_plain = _re15e_fn.sub(r"<[^>]+>", " ", following)
+        has_settled  = any(sp in following_plain for sp in settled_periods)
+        has_confirmed = any(cv in following_plain for cv in _P15D_CONFIRMED_VERB_MARKERS)
+        if has_settled and has_confirmed:
+            updated = updated[:start] + updated[end:]
+            strip_log.append({"removed": match.group(0), "preview": following[:100]})
+
+    settlement_log = {
+        "verb_changed":   verb_changed,
+        "verb_violations": diag["violation_count"],
+        "tag_stripped":   len(strip_log),
+        "strip_details":  strip_log,
+    }
+
+    if verb_changed or strip_log:
+        logger.warning(
+            f"[Phase 15E] 현재 연도 과거 월 교정 [{label}] "
+            f"— 동사 교정: {'✅' if verb_changed else '—'}, "
+            f"[전망] 태그 제거: {len(strip_log)}건"
+        )
+        for r in strip_log[:3]:
+            logger.warning(f"  ✂ 제거 → {r['preview'][:80]}")
+    else:
+        logger.warning(
+            f"[Phase 15E] {diag['violation_count']}건 위반 탐지했으나 교정 패턴 미매치 [{label}]"
+        )
+
+    return updated, [settlement_log]
+
+
 def _extract_weak_interp_blocks(content: str) -> list:
     """Phase 14 Hotfix Track A: 약한 해석 패턴 키워드가 동시 등장하는 HTML 블록 추출.
 
@@ -4508,13 +4723,19 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         final_content, run_year=_run_year_int, label="Post1"
     )
 
+    # ── Phase 15E: 현재 연도 과거 월 시제 + [전망] 태그 통합 교정 ─────────────
+    final_content, _p15e_log = _enforce_current_year_month_settlement(
+        final_content, run_year=_run_year_int, label="Post1"
+    )
+
     p13_scores: dict = {
-        "interpretation": p13_interp,
-        "temporal":       p13_temporal,
-        "numeric":        p13_numeric,
-        "closure":        p13_closure,
-        "tense":          p15_tense_diag,   # Phase 15: 완료 연도 시제 진단
-        "jeonmang_strip": {"stripped_count": len(_p15d_log), "log": _p15d_log},  # Phase 15D
+        "interpretation":   p13_interp,
+        "temporal":         p13_temporal,
+        "numeric":          p13_numeric,
+        "closure":          p13_closure,
+        "tense":            p15_tense_diag,   # Phase 15: 완료 연도 시제 진단
+        "jeonmang_strip":   {"stripped_count": len(_p15d_log), "log": _p15d_log},  # Phase 15D
+        "month_settlement": _p15e_log,         # Phase 15E: 현재 연도 과거 월 교정
     }
 
     # ── Phase 14 Track B-4: Post1 분석 뼈대 추출 (Post2 연속성 강제용) ───
@@ -4732,15 +4953,21 @@ def generate_stock_picks_report(
         final_content, run_year=_p2_run_year_int, label="Post2"
     )
 
+    # ── Phase 15E: 현재 연도 과거 월 시제 + [전망] 태그 통합 교정 ─────────────
+    final_content, _p15e_log_p2 = _enforce_current_year_month_settlement(
+        final_content, run_year=_p2_run_year_int, label="Post2"
+    )
+
     p13_scores: dict = {
-        "interpretation": p13_interp,
-        "temporal":       p13_temporal,
-        "numeric":        p13_numeric,
-        "closure":        p13_closure,
-        "continuity":     p13_continuity,
-        "tense":          p15_tense_diag_p2,   # Phase 15: 완료 연도 시제 진단
-        "label_leak":     p15c_label_diag,      # Phase 15C: 내부 레이블 노출 진단
-        "jeonmang_strip": {"stripped_count": len(_p15d_log_p2), "log": _p15d_log_p2},  # Phase 15D
+        "interpretation":   p13_interp,
+        "temporal":         p13_temporal,
+        "numeric":          p13_numeric,
+        "closure":          p13_closure,
+        "continuity":       p13_continuity,
+        "tense":            p15_tense_diag_p2,   # Phase 15: 완료 연도 시제 진단
+        "label_leak":       p15c_label_diag,      # Phase 15C: 내부 레이블 노출 진단
+        "jeonmang_strip":   {"stripped_count": len(_p15d_log_p2), "log": _p15d_log_p2},  # Phase 15D
+        "month_settlement": _p15e_log_p2,          # Phase 15E: 현재 연도 과거 월 교정
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
