@@ -2368,6 +2368,102 @@ def _detect_internal_label_leakage(content: str, label: str = "") -> dict:
     }
 
 
+# ── Phase 15D: Misapplied [전망] Tag Strip ────────────────────────────────────
+# 근본 원인: Step3 Reviser가 확정 실적/집계 데이터 앞에 [전망] 태그(텍스트 접두사)를 주입.
+# Phase 15C temporal grounding 프롬프트가 REVISER를 완전히 차단하지 못함.
+# 동사 어미(Phase 15A/15B)와 다르게 [전망] 태그는 별도 텍스트 요소 → 별도 교정 계층 필요.
+
+# 확정 실적 동사 패턴 (완료 연도 + 이 어미가 함께 있으면 [전망] 제거 대상)
+_P15D_CONFIRMED_VERB_MARKERS: list = [
+    "집계됐습니다",
+    "집계됐다",
+    "집계됐으며",
+    "집계됐고",
+    "집계됐습",
+    "기록한 것으로 집계",
+    "집계된 것으로",
+    "기록됐습니다",
+    "기록됐다",
+    "기록됐으며",
+    "달성했습니다",
+    "달성했다",
+    "달성했으며",
+    "증가한 것으로",
+    "감소한 것으로",
+    "상승한 것으로",
+    "하락한 것으로",
+]
+
+
+def _strip_misapplied_jeonmang_tags(
+    content: str,
+    run_year: int = 2026,
+    label: str = "",
+) -> tuple:
+    """Phase 15D: 확정 실적/집계 데이터 앞에 오주입된 [전망] 태그 제거.
+
+    [전망] 텍스트 태그가 붙은 문장을 검사하여:
+    1. 완료 연도(2024, 2025) + 확정 어미가 포함된 경우 → [전망] 제거
+    2. 발행 기준 확정 과거 월(2026년 1~2월 등) + 확정 어미가 포함된 경우 → [전망] 제거
+
+    Phase 15A/15B 동사 어미 교정과 동일한 코드-레벨 후처리 계층.
+    프롬프트 수준 차단(Phase 15C)이 부족할 때 최종 코드 안전망.
+
+    Returns:
+        (updated_content: str, strip_log: list)
+    """
+    import re as _re_15d
+
+    strip_log: list = []
+    updated = content
+
+    # 완료 연도 문자열
+    completed_year_strs = [f"{y}년" for y in range(run_year - 3, run_year)]
+
+    # 발행 기준 확정 과거 월 (run_year의 현재 월 - 1 이하)
+    _now_month = datetime.now().month if run_year == datetime.now().year else 12
+    confirmed_periods: list = []
+    for _m in range(1, _now_month):
+        confirmed_periods.append(f"{run_year}년 {_m}월")
+        confirmed_periods.append(f"{run_year}년 {str(_m).zfill(2)}월")
+
+    def _is_confirmed_sentence(following_raw: str) -> bool:
+        """[전망] 다음 텍스트가 확정 실적 서술인지 판단."""
+        # HTML 태그 제거 후 검사
+        plain = _re_15d.sub(r"<[^>]+>", " ", following_raw[:300])
+        has_completed_year  = any(cy in plain for cy in completed_year_strs)
+        has_confirmed_period = any(cp in plain for cp in confirmed_periods)
+        has_confirmed_verb  = any(cv in plain for cv in _P15D_CONFIRMED_VERB_MARKERS)
+        return (has_completed_year or has_confirmed_period) and has_confirmed_verb
+
+    # [전망] 태그 패턴 (텍스트 접두사, 선택적 후행 공백 포함)
+    JEONMANG_TAG_RE = _re_15d.compile(r"\[전망\]\s*")
+    matches = list(JEONMANG_TAG_RE.finditer(updated))
+
+    # 역순 처리 → 인덱스 이동 없음
+    for match in reversed(matches):
+        start, end = match.start(), match.end()
+        following = updated[end:end + 300]
+        if _is_confirmed_sentence(following):
+            updated = updated[:start] + updated[end:]
+            strip_log.append({
+                "removed":           match.group(0),
+                "following_preview": following[:120],
+            })
+
+    stripped_count = len(strip_log)
+    if stripped_count > 0:
+        logger.warning(
+            f"[Phase 15D] 확정 실적 앞 [전망] 태그 {stripped_count}건 제거 [{label}]"
+        )
+        for r in strip_log[:5]:
+            logger.warning(f"  ✂ 제거 → {r['following_preview'][:80]}")
+    else:
+        logger.info(f"[Phase 15D] [전망] 태그 오주입 없음 [{label}]")
+
+    return updated, strip_log
+
+
 def _extract_weak_interp_blocks(content: str) -> list:
     """Phase 14 Hotfix Track A: 약한 해석 패턴 키워드가 동시 등장하는 HTML 블록 추출.
 
@@ -4407,12 +4503,18 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     else:
         _p15_log = []
 
+    # ── Phase 15D: [전망] 태그 오주입 후처리 제거 ─────────────────────────────
+    final_content, _p15d_log = _strip_misapplied_jeonmang_tags(
+        final_content, run_year=_run_year_int, label="Post1"
+    )
+
     p13_scores: dict = {
         "interpretation": p13_interp,
         "temporal":       p13_temporal,
         "numeric":        p13_numeric,
         "closure":        p13_closure,
         "tense":          p15_tense_diag,   # Phase 15: 완료 연도 시제 진단
+        "jeonmang_strip": {"stripped_count": len(_p15d_log), "log": _p15d_log},  # Phase 15D
     }
 
     # ── Phase 14 Track B-4: Post1 분석 뼈대 추출 (Post2 연속성 강제용) ───
@@ -4625,6 +4727,11 @@ def generate_stock_picks_report(
     # ── Phase 15C Track D: 내부 파이프라인 레이블 노출 탐지 ──────────────────
     p15c_label_diag = _detect_internal_label_leakage(final_content, label="Post2")
 
+    # ── Phase 15D: [전망] 태그 오주입 후처리 제거 ─────────────────────────────
+    final_content, _p15d_log_p2 = _strip_misapplied_jeonmang_tags(
+        final_content, run_year=_p2_run_year_int, label="Post2"
+    )
+
     p13_scores: dict = {
         "interpretation": p13_interp,
         "temporal":       p13_temporal,
@@ -4633,6 +4740,7 @@ def generate_stock_picks_report(
         "continuity":     p13_continuity,
         "tense":          p15_tense_diag_p2,   # Phase 15: 완료 연도 시제 진단
         "label_leak":     p15c_label_diag,      # Phase 15C: 내부 레이블 노출 진단
+        "jeonmang_strip": {"stripped_count": len(_p15d_log_p2), "log": _p15d_log_p2},  # Phase 15D
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
