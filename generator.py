@@ -1190,8 +1190,13 @@ def _check_numeric_sanity(content: str) -> dict:
 def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
     """Phase 13 Track B: Gemini 검수 이슈가 Step3 수정 후 실제 해소되었는지 확인.
 
+    Phase 16H Track B: 스타일/구조 품질 이슈를 'style_residual'로 분리해
+    진짜 사실 미해소(truly_unresolved)와 구분한다.
+    FAIL 판정은 truly_unresolved 수에만 기반 → false fail 감소.
+
     Returns:
-        {status, total_checked, resolved_count, unresolved_count, unresolved}
+        {status, total_checked, resolved_count, unresolved_count, unresolved,
+         truly_unresolved_count, style_residual_count, closure_reason}
     """
     import re as _re
 
@@ -1199,6 +1204,8 @@ def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
         return {
             "status": "SKIP", "total_checked": 0,
             "resolved_count": 0, "unresolved_count": 0, "unresolved": [],
+            "truly_unresolved_count": 0, "style_residual_count": 0,
+            "closure_reason": "이슈 없음 또는 수정본 없음",
         }
 
     TEMPORAL_NUMERIC_KW = [
@@ -1206,12 +1213,23 @@ def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
         "기준 날짜", "출처 날짜", "연간", "전망치", "확정",
     ]
 
+    # Phase 16H Track B: 스타일/구조 이슈 키워드 — 이 키워드가 포함된 미해소 이슈는
+    # 사실 오류가 아닌 writing quality 문제이므로 closure FAIL 판정에서 제외.
+    STYLE_RESIDUAL_KW = [
+        "완충 문장", "4요소", "헤징", "비유", "마크다운", "숫자가 없는 문단",
+        "구체적인 근거 없이", "스타일", "문단 구조", "소제목",
+    ]
+
     high_risk = [
         iss for iss in issues
         if any(kw in iss for kw in TEMPORAL_NUMERIC_KW)
     ]
 
-    resolved, unresolved = [], []
+    # Phase 16H Track B: (original_issue, display_str, is_style_residual) 튜플로 관리
+    # → 원본 텍스트로 STYLE_RESIDUAL_KW 분류, 표시용 truncate 별도 처리
+    resolved_items: list = []    # (orig, display)
+    unresolved_items: list = []  # (orig, display)
+
     for issue in high_risk:
         quoted = _re.findall(
             r"[\u2018\u2019\u201c\u201d']([^\u2018\u2019\u201c\u201d']{10,80})[\u2018\u2019\u201c\u201d']",
@@ -1222,35 +1240,72 @@ def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
             quoted = [q[0] or q[1] for q in quoted_pairs if (q[0] or q[1])]
 
         if not quoted:
-            resolved.append(issue[:60] + "…")
+            resolved_items.append((issue, issue[:60] + "…"))
             continue
 
         still_present = any(phrase in revised for phrase in quoted if phrase)
-        (unresolved if still_present else resolved).append(issue[:80] + "…")
+        display = issue[:80] + "…"
+        if still_present:
+            unresolved_items.append((issue, display))
+        else:
+            resolved_items.append((issue, display))
+
+    # Phase 16H Track B: 원본 텍스트로 style/truly 분류 (truncate 전 전체 텍스트 사용)
+    truly_unresolved = [
+        disp for orig, disp in unresolved_items
+        if not any(kw in orig for kw in STYLE_RESIDUAL_KW)
+    ]
+    style_residual = [
+        disp for orig, disp in unresolved_items
+        if any(kw in orig for kw in STYLE_RESIDUAL_KW)
+    ]
+    # 하위호환: unresolved = display strings
+    unresolved = [disp for _, disp in unresolved_items]
+    resolved = [disp for _, disp in resolved_items]
 
     total = len(high_risk)
     un_cnt = len(unresolved)
+    truly_cnt = len(truly_unresolved)
+
+    # Phase 16H: FAIL 기준을 truly_unresolved >= 2 로 조정
+    # (style_residual만 남은 경우 WARN으로 강등, false fail 억제)
     status = (
-        "FAIL"  if un_cnt >= 2
-        else "WARN"  if un_cnt >= 1
+        "FAIL"  if truly_cnt >= 2
+        else "WARN"  if truly_cnt >= 1 or un_cnt >= 1
         else "PASS"  if total > 0
         else "SKIP"
     )
 
+    # closure_reason: 운영자 가독용 요약
+    if un_cnt == 0:
+        closure_reason = "전체 해소" if total > 0 else "해당 없음"
+    elif truly_cnt == 0:
+        closure_reason = f"style_residual {len(style_residual)}건만 잔존 (사실 오류 없음)"
+    else:
+        closure_reason = f"사실 미해소 {truly_cnt}건 + style_residual {len(style_residual)}건"
+
     result = {
-        "status":           status,
-        "total_checked":    total,
-        "resolved_count":   len(resolved),
-        "unresolved_count": un_cnt,
-        "unresolved":       unresolved[:3],
+        "status":                  status,
+        "total_checked":           total,
+        "resolved_count":          len(resolved),
+        "unresolved_count":        un_cnt,
+        "unresolved":              unresolved[:3],
+        "truly_unresolved_count":  truly_cnt,          # Phase 16H 신규
+        "style_residual_count":    len(style_residual), # Phase 16H 신규
+        "closure_reason":          closure_reason,       # Phase 16H 신규
     }
 
     logger.info(
         f"[Phase 13] 검수 해소 확인 | 고위험 {total}건 | "
-        f"해소 {len(resolved)} / 미해소 {un_cnt} | 상태: {status}"
+        f"해소 {len(resolved)} / 미해소 {un_cnt} "
+        f"(사실 {truly_cnt}건 + style {len(style_residual)}건) | 상태: {status}"
     )
-    for u in unresolved:
-        logger.warning(f"  ⚠ 미해소 이슈: {u}")
+    if truly_unresolved:
+        for u in truly_unresolved:
+            logger.warning(f"  ⚠ 미해소[사실]: {u}")
+    if style_residual:
+        for u in style_residual:
+            logger.info(f"  ℹ 미해소[style]: {u}")
 
     return result
 
@@ -3115,6 +3170,24 @@ _P16B_GENERIC_MARKERS: list = [
     "영향을 미칠 수 있습니다",
 ]
 
+# ─── Phase 16H Track A: Post1 hedge 절제 지침 ───────────────────────────────
+# 16G 실출력 진단 결과 Post1 헤징 비율 52%(13/25문장)로 FAIL — Phase 14I의
+# [해석] 블록 기반 재작성이 [해석] 태그 미노출로 0건 추출 → 효과 없음.
+# 프롬프트 레벨에서 factual vs interpretive 문장 구분 지침을 직접 주입.
+_P16H_POST1_HEDGE_REDUCTION: str = (
+    "[Phase 16H — Post1 사실 구간 헤징 절제 ★]\n\n"
+    "확정된 사실·수치 문장(factual spine)에는 유보형 어미를 쓰지 말라.\n\n"
+    "판단 기준:\n"
+    "  [사실 구간] 이미 발생한 사건, 확정 수치, 과거 공식 발표\n"
+    "    → '~했다', '~이다', '~기록했다', '~결정했다' 등 단정형 사용\n"
+    "    → ❌ '~것으로 보입니다', '~것으로 추정됩니다', '~것으로 파악됩니다' 금지\n\n"
+    "  [해석/전망 구간] 인과 추론, 미래 예측, 시나리오 서술\n"
+    "    → 필요한 만큼만 유보형 허용: '~로 판단된다', '~가능성이 높다'\n"
+    "    → 단, 전체 문장의 절반 이상을 유보형으로 끝내면 안 된다\n\n"
+    "목표: 분석 spine은 자신감 있게, 불확실성은 해석 구간에만 국소 표현.\n"
+    "premium editorial tone 유지 — 과잉 확신(단정 남발)도 금지.\n\n"
+)
+
 
 def _p16b_emergency_polish(
     content: str, label: str = "Post", step3_status: str = "PASS"
@@ -3146,15 +3219,22 @@ def _p16b_emergency_polish(
         if count > 0:
             found_markers.append({"marker": marker, "count": count})
 
-    total_generic = sum(m["count"] for m in found_markers)
-    status = "PASS" if total_generic == 0 else ("WARN" if total_generic <= 5 else "FAIL")
+    # Phase 16H Track C: 집계 기준 단일화
+    # unique_marker_count = 서로 다른 마커 종류 수
+    # total_occurrence_count = 전체 출현 횟수 (unique 마커별 count 합산)
+    unique_marker_count = len(found_markers)
+    total_occurrence_count = sum(m["count"] for m in found_markers)
+    # 집계 기준: total_occurrence_count 기준으로 status 판정 (기존 동일)
+    status = "PASS" if total_occurrence_count == 0 else ("WARN" if total_occurrence_count <= 5 else "FAIL")
 
     # Phase 16D Track D: 항상 관측 가능한 로그 출력 (실행/스킵 여부 + step3 컨텍스트)
     _is_fallback = step3_status == "FAILED_NO_REVISION"
     _mode = "fallback-diagnostic" if _is_fallback else "routine-diagnostic"
-    if total_generic > 0:
+    if total_occurrence_count > 0:
         logger.warning(
-            f"[Phase 16B] {label} emergency_polish: generic 마커 {total_generic}건 "
+            # Phase 16H: 로그 형식에 unique_count 및 total_count 모두 명시
+            f"[Phase 16B] {label} emergency_polish: "
+            f"generic 마커 {unique_marker_count}종 {total_occurrence_count}건 "
             f"| status={status} | mode={_mode} | step3={step3_status}"
         )
         for m in found_markers[:5]:
@@ -3169,10 +3249,16 @@ def _p16b_emergency_polish(
         "applied": False,
         "mode": _mode,
         "step3_status": step3_status,
-        "total_generic_found": total_generic,
+        # Phase 16H Track C: unique/total 구분 필드 명시 (하위호환: total_generic_found 유지)
+        "unique_marker_count":    unique_marker_count,    # 마커 종류 수
+        "total_occurrence_count": total_occurrence_count, # 총 출현 횟수
+        "total_generic_found":    total_occurrence_count, # 하위호환 유지
         "markers": found_markers,
         "status": status,
-        "note": "diagnostic-only — 실 치환 미수행 (Phase 16D 원칙 유지)",
+        "note": (
+            "diagnostic-only — 실 치환 미수행 (Phase 16D 원칙 유지). "
+            "집계: unique_marker_count=종류수, total_occurrence_count=총출현수 (Phase 16H 표준)"
+        ),
     }
 
 
@@ -5034,7 +5120,8 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
 
     user_msg = (
-        _P16B_QUALITY_HARDENING_RULES       # Phase 16B: generic 금지 + spine + premium tone
+        _P16H_POST1_HEDGE_REDUCTION         # Phase 16H Track A: factual spine 헤징 절제
+        + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
         + source_norm_block                 # Phase 14 Track A: 소스 정규화
         + _P13_POST1_INTELLIGENCE_RULES     # Phase 13: 비자명성 + 헤징 + 반론 규격
