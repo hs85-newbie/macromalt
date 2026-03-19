@@ -3,7 +3,7 @@
 작성일: 2026-03-19
 Phase: **Phase 17 Kickoff**
 대상: Post2 opener 구조 개편 + PARSE_FAILED 런타임 검증 강화
-보고서 기준: PHASE17_REPORT_FULL_BODY_REQUIREMENT.md 적용
+보고서 기준: PHASE17_REPORT_FULL_BODY_REQUIREMENT.md + PHASE17_REPORT_WORDING_REPLACEMENT.md 적용
 
 ---
 
@@ -148,8 +148,8 @@ Post 187 PARSE_FAILED 로그 (실제 출력):
 
 | 기준 | 내용 | 판정 |
 |------|------|------|
-| 기준1 (시점 혼합) | 최근 7일 중심 구성 / 30일 초과 근거 사용 금지 | PASS — Step3 verifier 검수 통과 (PARSE_FAILED 1건은 skip → GPT 초안 원본 발행) |
-| 기준5 (권유성 표현) | "매수", "유망", "담아야 한다" 등 전면 금지 | PASS — reviser 수정본에서 권유성 제거 확인 |
+| 기준1 (시점 혼합) | 최근 7일 중심 구성 / 30일 초과 근거 사용 금지 | PASS — 샘플 5건 발행본 기준 기준1 위반은 관찰되지 않음. 단, Post 187은 verifier JSON parse 실패로 fallback 발행 경로 사용 |
+| 기준5 (권유성 표현) | "매수", "유망", "담아야 한다" 등 전면 금지 | PASS — 샘플 5건 발행본 기준 권유성 표현 재등장은 관찰되지 않음 |
 
 ---
 
@@ -732,11 +732,76 @@ DART 재무 수치 및 기업 보고서
 | 실패 발생 시 10필드 로그 저장 | ✅ Post 187에서 TYPE_D 실제 분류 및 로그 기록 확인 |
 | TYPE_A~TYPE_E / TYPE_UNKNOWN 분류 | ✅ Post 187: TYPE_D 정상 분류 |
 | raw/normalized 비교 가능 | ✅ snapshot 필드 포함 |
-| PARSE_FAILED 발생 시 publish_blocked | False (정상 발행) — 운영 정책 부합 |
+| PARSE_FAILED 발생 시 fallback/publish 경로 확인 | ✅ fallback_used=True, publish_blocked=False 실전 확인 |
 
-### **최종 판정: GO**
+- PARSE_FAILED가 "없었다"가 아니라, 발생 시 분류·로그·fallback 동작이 실전에서 확인되었다.
+
+### 기준1 / 기준5 판정
+
+| 기준 | 판정 |
+|------|------|
+| 기준1 (시점 혼합) | PASS — 샘플 5건 발행본 기준 위반은 관찰되지 않음. 단, Post 187은 verifier JSON parse 실패로 fallback 발행 경로 사용 |
+| 기준5 (권유성 표현) | PASS — 샘플 5건 발행본 기준 권유성 표현 재등장은 관찰되지 않음 |
+
+### **최종 판정: Phase 17 핵심 범위 기준 GO**
 
 - opener 구조 전환 100% 달성 (5/5)
-- PARSE_FAILED 런타임 분류 시스템 최초 실제 작동 확인 (Post 187, TYPE_D)
-- 기준1/기준5 위반 없음
-- 5건 전원 실제 발행 및 URL 확보
+- PARSE_FAILED는 미발생이 아니라, 발생 시 분류·로그·fallback 동작이 실전에서 확인됨
+- 기준1/기준5는 샘플 5건 발행본 기준 위반이 관찰되지 않음
+- 5건 전원 실제 발행 및 공개 URL 확보
+- 다만 일부 verifier_revision_closure FAIL/WARN 잔존 항목은 Phase 18 후속 모니터링 대상으로 이관
+
+---
+
+## 13. 잔여 이슈 및 Phase 18 인계 포인트
+
+### 잔여 이슈
+
+- opener 구조 전환은 5/5로 달성되었으나, verifier_revision_closure는 일부 포스트에서 FAIL/WARN 잔존
+- Post 187에서 verifier JSON parse 실패로 fallback 발행 경로 사용
+- 즉, Phase 17은 opener 구조 개편과 PARSE_FAILED 관측 가능성 확보에는 성공했지만, Step3 closure 완전 안정화까지 모두 종료된 상태로 보지는 않음
+
+### 후속 모니터링 항목
+
+- verifier_revision_closure FAIL/WARN 잔존 원인 분리
+- fallback_used=True 사례의 재발 여부 모니터링
+- PARSE_FAILED TYPE 분포가 TYPE_D 외 다른 유형으로 확장되는지 관찰
+- opener 규칙 유지 여부를 추가 샘플 발행에서 추적
+
+### Phase 18 인계 포인트
+
+1. verifier_revision_closure FAIL/WARN 잔존 케이스 정리
+2. fallback 발행 경로 정책 세분화
+3. PARSE_FAILED 원인별 후속 대응 규칙 보강
+4. opener 성공 상태가 후속 실행에서도 안정 유지되는지 반복 검증
+
+---
+
+## Phase 17 Close-out
+
+Phase 17은 아래 범위에서 공식 종료한다.
+
+- Post2 opener 구조 개편 완료
+- generic opener 제거 및 pick-angle opener 강제 완료
+- PARSE_FAILED 분류/로그/발행 경로 관측 가능성 확보
+- 실제 발행본 5건 기준 핵심 검수 범위 확인 완료
+
+따라서 Phase 17은 **핵심 범위 기준 GO**로 클로즈한다.
+
+단, verifier_revision_closure FAIL/WARN 잔존 항목과 fallback_used=True 사례는
+Phase 18에서 후속 안정화 대상으로 이어서 다룬다.
+
+---
+
+## Phase 18 Kickoff
+
+Phase 18에서는 Phase 17에서 남은 운영 안정화 이슈를 이어받는다.
+
+핵심 대상:
+1. verifier_revision_closure FAIL/WARN 잔존 원인 분리
+2. fallback 발행 경로 정책 정교화
+3. PARSE_FAILED 유형별 후속 대응 규칙 보강
+4. opener 성공 상태의 반복 실행 안정성 검증
+
+Phase 17이 opener 구조와 PARSE_FAILED 관측 가능성을 확보했다면,
+Phase 18은 이를 운영 안정성 기준으로 더 단단하게 고정하는 단계다.
