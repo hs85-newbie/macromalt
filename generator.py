@@ -3071,20 +3071,29 @@ _P16D_POST2_CONTINUITY_HARDENING: str = (
 )
 
 # ─── Phase 16D Track B: Post2 픽-테마 브릿지 강제 ───────────────────────────────
+# Phase 16F Track A: 브릿지-픽 정합성 보강 (Phase 16E 피드백 반영)
+# 16E에서 "에너지 vs 기술 섹터" 대비형 브릿지가 생성됐으나 실제 픽이 모두 에너지인 케이스 발생
+# → 대비형 브릿지 조건 명시, 동일 섹터 픽 시 좁은 공통 논리 브릿지 강제
 _P16D_POST2_BRIDGE_REQUIREMENT: str = (
-    "[Phase 16D — 픽-테마 브릿지 강제 ★]\n\n"
+    "[Phase 16D/16F — 픽-테마 브릿지 강제 ★ 픽 정합성 필수]\n\n"
     "종목 개별 섹션(메인 픽 / 보조 픽)을 시작하기 직전에,\n"
     "'왜 이 종목들이 오늘의 매크로 국면에서 한 바구니에 담겼는가'를\n"
     "1~2문장으로 설명하는 브릿지 문장을 반드시 포함하라.\n\n"
-    "브릿지 문장 기준:\n"
-    "  - 공통 투자 논리(예: 고유가 직수혜, 금리 내성, AI 인프라 수요 등)를 명시\n"
-    "  - 서로 다른 성격의 종목이 함께 들어가면, 묶는 기준을 먼저 제시\n"
-    "  - 브릿지는 구체적이어야 하며, 'X, Y, Z를 함께 봅니다' 식의 단순 나열 금지\n\n"
-    "예시 방향(하드코딩 금지 — 상황에 맞게 작성):\n"
-    "  ✅ '고유가 국면에서 직접 수익이 확대되는 에너지 섹터와,\n"
-    "      유가 상승에도 독자적인 AI 수요 모멘텀을 보유한 반도체를 함께 담는다.'\n"
-    "  ✅ '이 세 종목은 각각 에너지·반도체·후공정으로 다르지만,\n"
-    "      모두 달러 강세 + 공급 제약 국면에서 가격 결정력을 갖는다는 공통점을 공유한다.'\n\n"
+    "브릿지 작성 필수 원칙 (픽 정합성):\n"
+    "  ★ 브릿지는 반드시 아래 메시지에 명시된 최종 선정 종목 리스트의\n"
+    "    실제 공통 속성에만 기반해야 한다.\n"
+    "  ★ '섹터 A vs 섹터 B' 대비형 브릿지는 실제로 양쪽 섹터에 모두 픽이 있을 때만 사용하라.\n"
+    "    픽이 모두 같은 섹터에 속하면 대비형 축은 절대 쓰지 말라.\n"
+    "  ★ 공통 논리가 뚜렷하지 않으면 과장하지 말고 '같은 방향의 직접 수혜'처럼\n"
+    "    더 좁고 안전한 표현으로 쓰라.\n\n"
+    "브릿지 유형 가이드:\n"
+    "  [동일 섹터 픽] → 공통 수혜 논리 / 공통 민감도 / 헤지 구조 차이로 묶어라\n"
+    "  [이종 섹터 픽] → 오늘 매크로 국면에서 두 섹터를 동시에 보는 이유를 1문장으로 연결하라\n"
+    "  [단일 픽]      → 픽-테마 연결 한 문장으로 충분하다\n\n"
+    "❌ 금지:\n"
+    "  - 픽 바스켓에 없는 섹터를 브릿지에서 언급\n"
+    "  - 'X, Y, Z를 함께 봅니다' 식의 단순 나열\n"
+    "  - 픽 확정 전 가상 후보군 기준으로 브릿지를 생성하는 것\n\n"
 )
 
 # ─── Track A: Step3 실패 시 diagnostic용 generic 마커 목록 ─────────────────────
@@ -3118,8 +3127,10 @@ def _p16b_emergency_polish(
     Args:
         content:      GPT 초안 또는 Step3 수정본 HTML
         label:        로그 레이블 (Post1 / Post2)
-        step3_status: 현재 Step3 처리 상태 (PASS / FAILED_REVISION_ADOPTED /
-                      FAILED_NO_REVISION). 로그 컨텍스트로만 사용.
+        step3_status: 현재 Step3 처리 상태 (PASS / REVISED / FAILED_NO_REVISION).
+                      Phase 16F 표준 enum — 로그 컨텍스트로만 사용.
+                      ※ 구 보고서(16B/16C)에서 "FAILED_REVISION_ADOPTED"로 표기된 것은
+                        코드 기준 "REVISED"와 동일한 상태임 (Phase 16F에서 통일).
 
     Returns:
         (content_unchanged: str, polish_log: dict)
@@ -3239,6 +3250,68 @@ def _p16b_compute_intro_overlap(
         "intro_chars_used": intro_chars,
         "post1_intro": p1_intro[:80],
         "post2_intro": p2_intro[:80],
+    }
+
+
+def _p16f_diagnose_bridge(content: str, picks: list) -> dict:
+    """Phase 16F Track C: Post2 브릿지 타입 진단 (관측 전용, 본문 무수정).
+
+    생성된 Post2 HTML에서 브릿지 섹션 존재 여부와 타입을 감지하고 로그로 남긴다.
+    대비형 브릿지("A vs B") 감지 시 picks가 동일 섹터에 몰려 있는지 함께 기록한다.
+
+    Args:
+        content: Post2 HTML (최종 본문 적용 후)
+        picks:   최종 선정 종목 리스트 (dict 목록, 'sector' 또는 'ticker' 포함)
+
+    Returns:
+        {"bridge_found": bool, "bridge_mode": str, "contrast_risk": bool, "note": str}
+    """
+    import re as _re
+
+    _tag_strip = _re.compile(r"<[^>]+>")
+    plain = _tag_strip.sub(" ", content)
+    plain = _re.sub(r"\s+", " ", plain)
+
+    # 브릿지 섹션 존재 여부: "오늘 이 테마" 또는 종목 바스켓 설명 패턴
+    bridge_keywords = ["오늘 이 테마", "이 종목들을", "함께 담는", "한 바구니", "공통 논리", "공통 수혜"]
+    bridge_found = any(kw in plain for kw in bridge_keywords)
+
+    # 대비형 브릿지 감지: "A vs B", "A와 달리", "A 반면 B", "에너지 섹터와 기술"
+    contrast_patterns = ["vs ", "와 달리", "반면", "상반된", "에너지 섹터와 기술", "기술 섹터와 에너지"]
+    contrast_detected = any(pat in plain[:800] for pat in contrast_patterns)
+
+    # picks의 섹터 다양성 체크 (단순 ticker 수 기반 — 섹터 필드 없으면 스킵)
+    tickers = [p.get("ticker", "") for p in (picks or [])]
+    pick_count = len(tickers)
+
+    bridge_mode = "NONE"
+    if bridge_found:
+        bridge_mode = "CONTRAST" if contrast_detected else "COMMON"
+
+    # 대비형 브릿지인데 picks가 1개 이하거나 동일 섹터일 가능성 있으면 contrast_risk=True
+    contrast_risk = contrast_detected and pick_count <= 2
+
+    note = (
+        f"picks={tickers} | bridge_mode={bridge_mode} | contrast_detected={contrast_detected}"
+    )
+
+    log_level = "WARNING" if (bridge_mode == "CONTRAST" and contrast_risk) else "INFO"
+    if log_level == "WARNING":
+        logger.warning(
+            f"[Phase 16F] Post2 브릿지 타입: {bridge_mode} — 대비형 브릿지이나 picks={tickers} "
+            f"(동일 섹터 가능성 있음). 브릿지-픽 정합성 확인 필요."
+        )
+    else:
+        logger.info(
+            f"[Phase 16F] Post2 브릿지: found={bridge_found} | mode={bridge_mode} | picks={tickers}"
+        )
+
+    return {
+        "bridge_found": bridge_found,
+        "bridge_mode": bridge_mode,
+        "contrast_risk": contrast_risk,
+        "picks": tickers,
+        "note": note,
     }
 
 
@@ -5090,7 +5163,11 @@ def verify_draft(draft: str) -> dict:
     passed = result.get("pass", True)
     issues = result.get("issues", [])
     revised = None  # Step 3b에서 별도 채움
-    step3_status = "PASS"  # Phase 16B: PASS / REVISED / FAILED_NO_REVISION
+    # Phase 16B/16F step3_status enum (표준, Phase 16F에서 전체 통일):
+    #   "PASS"              — Step3 팩트체크 이슈 없음 (검수 통과)
+    #   "REVISED"           — Step3 이슈 발견, 수정본 채택 (구 보고서 표기: "FAILED_REVISION_ADOPTED"와 동일)
+    #   "FAILED_NO_REVISION"— Step3 수정 API 실패 (503/timeout 등), GPT 초안 원본 발행
+    step3_status = "PASS"
 
     if passed:
         logger.info("Step3 검수 통과" + (f" | 경고 {len(issues)}건" if issues else ""))
@@ -5599,6 +5676,9 @@ def generate_stock_picks_report(
         post1_content, final_content, n=4
     )
 
+    # ── Phase 16F Track C: 브릿지 타입 진단 (관측 전용) ─────────────────
+    _p16f_bridge_diag = _p16f_diagnose_bridge(final_content, parsed_picks)
+
     p13_scores: dict = {
         "interpretation":   p13_interp,
         "temporal":         p13_temporal,
@@ -5613,11 +5693,12 @@ def generate_stock_picks_report(
         "p16_ssot_run":     {"run_year": _p2_p16_ssot["run_year"], "run_month": _p2_p16_ssot["run_month"],
                              "completed_years": _p2_p16_ssot["completed_years"],
                              "completed_months": _p2_p16_ssot["completed_months_this_year"]},
-        "p16b_guard": {                            # Phase 16B: 품질 하드닝 진단
-            "step3_status":         _p2_step3_status,
+        "p16b_guard": {                            # Phase 16B/16F: 품질 하드닝 진단
+            "step3_status":         _p2_step3_status,  # PASS / REVISED / FAILED_NO_REVISION
             "fallback_triggered":   _p2_step3_status == "FAILED_NO_REVISION",
             "emergency_polish":     _p2_16b_polish_log,
             "intro_overlap":        _p16b_intro_overlap,
+            "bridge_diag":          _p16f_bridge_diag,  # Phase 16F: 브릿지 타입 진단
         },
     }
 
