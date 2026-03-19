@@ -3009,6 +3009,190 @@ def _strip_current_year_past_month_jeonmang(
     return updated, strip_log
 
 
+# ── Phase 16B: Output Quality Hardening ──────────────────────────────────────
+# 목적: Phase 16A SSOT 성과를 회귀 없이 유지하면서
+#   1) Step3 timeout/503 → 품질 급락 방지 (Track A)
+#   2) Post1/Post2 도입부 n-gram 중복 감소 (Track B)
+#   3) Generic wording·analytical spine 진단 강화 (Track C)
+#   4) Premium editorial tone 복구 지침 (Track D)
+#   5) Temporal SSOT 비회귀 보호 (Track E)
+#   6) 이후 16C~16E 미세조정을 위한 진단 가시성 (Track F)
+
+# ─── Track C/D: Generic Wording + Premium Tone — GPT 공통 주입 블록 ───────────
+_P16B_QUALITY_HARDENING_RULES: str = (
+    "[Phase 16B — 품질 하드닝 ★ GPT 생성 적용]\n\n"
+    "■ Generic/Bland 문장 금지:\n"
+    "  ❌ 수치·근거 없이 '주목됩니다', '기대됩니다', '기대감을 높이고 있습니다' 단독 사용\n"
+    "  ❌ '이러한 흐름은', '이러한 상황에서', '이러한 변화는' 류의 무의미 연결 표현\n"
+    "  ❌ 사실 나열 후 해석 없이 문단 종료\n"
+    "  ❌ 'X가 Y에 긍정적인 영향을 미칠 수 있습니다' — 왜·어떻게가 빠진 빈 인과 문장\n\n"
+    "■ Analytical Spine 유지:\n"
+    "  ✅ 모든 핵심 주장: [사실] → [해석] → [변수] → [반론] 흐름\n"
+    "  ✅ 수치는 단독 나열 금지, 반드시 시장 의미 해석과 결합\n"
+    "  ✅ Why-Now 프레임: 이 사실이 지금 중요한 이유를 명시할 것\n"
+    "  ✅ 인과 연결: '때문에', '결과', '영향' 대신 구체적 메커니즘 서술\n\n"
+    "■ Premium Editorial Tone:\n"
+    "  ✅ 고요하고 확신 있는 어조 — 과장 없이 정확하게\n"
+    "  ✅ 재무 전문 언어 — Sell-side 보고서 수준 이상\n"
+    "  ❌ 연극적 비유, 과도한 수사, 독자 감정 호소\n"
+    "  ❌ '투자자들의 주목을 받고 있습니다' 같은 관찰 빈 문장\n\n"
+)
+
+# ─── Track B: Post2 도입부 차별화 — gpt_write_picks 전용 주입 블록 ─────────────
+_P16B_POST2_ANGLE_DIVERSIFICATION: str = (
+    "[Phase 16B — Post2 도입부 차별화 ★ 최우선]\n\n"
+    "Post2([캐시의 픽])의 도입부는 반드시 Post1([심층분석])과 다른 각도에서 열어야 합니다.\n\n"
+    "❌ 금지:\n"
+    "  - Post1이 사용한 은유/비유를 그대로 반복\n"
+    "  - Post1의 첫 문장 또는 첫 단락 테마를 동일하게 재서술\n"
+    "  - '오늘의 테마는 X와 Y입니다' 형식의 단순 테마 나열로 시작\n"
+    "  - Post1 도입부에서 사용한 3어절 이상 연속 표현 재사용\n\n"
+    "✅ 권장:\n"
+    "  - 투자자 관점: '왜 지금 이 종목인가?' 각도로 직접 시작\n"
+    "  - 구체적 수치·가격 움직임·기술 변화로 直入\n"
+    "  - Post1이 '현상'을 설명했다면 Post2는 '선택'으로 시작\n"
+    "  - 도입부 첫 문장은 선정 종목과 연결되어야 함\n\n"
+)
+
+# ─── Track A: Step3 실패 시 diagnostic용 generic 마커 목록 ─────────────────────
+_P16B_GENERIC_MARKERS: list = [
+    "이러한 흐름은",
+    "이러한 상황에서",
+    "이러한 변화는",
+    "주목됩니다",
+    "기대됩니다",
+    "관심이 집중되고 있습니다",
+    "주의가 필요합니다",
+    "모니터링이 필요합니다",
+    "긍정적으로 평가됩니다",
+    "투자자들의 주목을 받고 있습니다",
+    "시장에서 주목받고 있습니다",
+    "이목이 집중되고 있습니다",
+    "확인이 필요합니다",
+    "필요가 있습니다",
+    "영향을 미칠 수 있습니다",
+]
+
+
+def _p16b_emergency_polish(content: str, label: str = "Post") -> tuple:
+    """Phase 16B Track A: Step3 실패 시 최소 품질 보호 diagnostic pass.
+
+    Step3가 503/timeout으로 실패했을 때 GPT 초안 원본에 적용한다.
+    Temporal SSOT에 영향 없는 surface-level generic wording을 통계로 수집하고
+    경고 로그로 노출한다 (실 치환은 미수행 — 문장 컨텍스트 없는 단순 regex 치환은
+    의미 역전 위험이 있으므로 진단만 수행하고 16C에서 처리 방향을 결정한다).
+
+    Args:
+        content: GPT 초안 HTML
+        label:   로그 레이블 (Post1 / Post2)
+
+    Returns:
+        (content_unchanged: str, polish_log: dict)
+    """
+    import re as _re
+
+    _tag_strip = _re.compile(r"<[^>]+>")
+    plain = _tag_strip.sub(" ", content)
+
+    found_markers = []
+    for marker in _P16B_GENERIC_MARKERS:
+        count = plain.count(marker)
+        if count > 0:
+            found_markers.append({"marker": marker, "count": count})
+
+    total_generic = sum(m["count"] for m in found_markers)
+    status = "PASS" if total_generic == 0 else ("WARN" if total_generic <= 5 else "FAIL")
+
+    if total_generic > 0:
+        logger.warning(
+            f"[Phase 16B] {label} emergency polish: generic 마커 {total_generic}건 "
+            f"(Step3 미적용 상태) — 상태: {status}"
+        )
+        for m in found_markers[:5]:
+            logger.warning(f"  ⚠ '{m['marker']}' x{m['count']}")
+    else:
+        logger.info(f"[Phase 16B] {label} emergency polish: generic 마커 없음 — 상태: PASS")
+
+    return content, {
+        "applied": False,
+        "total_generic_found": total_generic,
+        "markers": found_markers,
+        "status": status,
+        "note": "Step3 미적용 상태 diagnostic — 실 치환은 16C에서 결정",
+    }
+
+
+def _p16b_compute_intro_overlap(
+    post1_content: str, post2_content: str, n: int = 4, intro_chars: int = 300
+) -> dict:
+    """Phase 16B Track B: Post1/Post2 도입부 n-gram 중복률 계산.
+
+    각 아티클의 앞 intro_chars자(plain text 기준)에서 n-gram을 추출하고
+    겹치는 비율을 반환한다.
+
+    Returns:
+        {"overlap_ratio": float, "shared_ngrams": list[str], "status": str,
+         "post1_intro": str, "post2_intro": str}
+    """
+    import re as _re
+
+    _tag_strip = _re.compile(r"<[^>]+>")
+
+    def _get_intro(html: str) -> str:
+        plain = _tag_strip.sub(" ", html)
+        plain = _re.sub(r"\s+", " ", plain).strip()
+        return plain[:intro_chars]
+
+    def _ngrams(text: str, size: int) -> set:
+        tokens = list(text)
+        if len(tokens) < size:
+            return set()
+        return {tuple(tokens[i : i + size]) for i in range(len(tokens) - size + 1)}
+
+    p1_intro = _get_intro(post1_content)
+    p2_intro = _get_intro(post2_content)
+    ng1 = _ngrams(p1_intro, n)
+    ng2 = _ngrams(p2_intro, n)
+
+    if not ng1 or not ng2:
+        return {
+            "overlap_ratio": 0.0,
+            "shared_ngrams": [],
+            "status": "SKIP",
+            "post1_intro": p1_intro[:80],
+            "post2_intro": p2_intro[:80],
+        }
+
+    shared = ng1 & ng2
+    overlap_ratio = len(shared) / max(len(ng1), len(ng2))
+    shared_samples = ["".join(ng) for ng in list(shared)[:5]]
+
+    if overlap_ratio < 0.15:
+        status = "LOW"
+    elif overlap_ratio < 0.30:
+        status = "MEDIUM"
+    else:
+        status = "HIGH"
+
+    logger.info(
+        f"[Phase 16B] 도입부 {n}-gram 중복: {overlap_ratio:.1%} ({status}) "
+        f"| 공유 n-gram {len(shared)}개"
+    )
+    if status == "HIGH":
+        logger.warning(
+            f"[Phase 16B] 도입부 HIGH 중복 감지 — 16C에서 각도 분리 강화 필요. "
+            f"샘플: {shared_samples[:3]}"
+        )
+
+    return {
+        "overlap_ratio": round(overlap_ratio, 4),
+        "shared_ngrams": shared_samples,
+        "status": status,
+        "post1_intro": p1_intro[:80],
+        "post2_intro": p2_intro[:80],
+    }
+
+
 def _extract_weak_interp_blocks(content: str) -> list:
     """Phase 14 Hotfix Track A: 약한 해석 패턴 키워드가 동시 등장하는 HTML 블록 추출.
 
@@ -4728,7 +4912,8 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
 
     user_msg = (
-        _P14_POST1_ENFORCEMENT_BLOCK        # Phase 14: few-shot + spine + hedge 금지
+        _P16B_QUALITY_HARDENING_RULES       # Phase 16B: generic 금지 + spine + premium tone
+        + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
         + source_norm_block                 # Phase 14 Track A: 소스 정규화
         + _P13_POST1_INTELLIGENCE_RULES     # Phase 13: 비자명성 + 헤징 + 반론 규격
         + _P12_POST1_EVIDENCE_RULES         # Phase 12: 증거 밀도 규칙
@@ -4800,6 +4985,8 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
 
     user_msg = (
         _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단 (최우선)
+        + _P16B_POST2_ANGLE_DIVERSIFICATION # Phase 16B: 도입부 각도 차별화 (Track B)
+        + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + continuation_block                # Phase 14: Post1 결론 + 연속성 강제
         + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
         + source_norm_block                 # Phase 14 Track A: 소스 정규화
@@ -4846,11 +5033,13 @@ def verify_draft(draft: str) -> dict:
 
     if not result or not isinstance(result, dict):
         logger.warning("검수 결과 파싱 실패 — 통과로 처리")
-        return {"pass": True, "issues": [], "revised_content": None}
+        return {"pass": True, "issues": [], "revised_content": None,
+                "step3_status": "PARSE_FAILED"}  # Phase 16B: status 추적
 
     passed = result.get("pass", True)
     issues = result.get("issues", [])
     revised = None  # Step 3b에서 별도 채움
+    step3_status = "PASS"  # Phase 16B: PASS / REVISED / FAILED_NO_REVISION
 
     if passed:
         logger.info("Step3 검수 통과" + (f" | 경고 {len(issues)}건" if issues else ""))
@@ -4876,6 +5065,7 @@ def verify_draft(draft: str) -> dict:
             revised = _strip_code_fences(revised_raw)  # Phase 4.3: 공통 헬퍼로 통일
             revised_len = len(revised)
             ratio = revised_len / draft_len * 100 if draft_len else 0
+            step3_status = "REVISED"  # Phase 16B
             # ── Phase 4.3 보존형 편집 검증 로그 ──────────────────────────
             logger.info(
                 f"Step3 수정본 채택 | GPT초안 {draft_len}자 → Step3수정본 {revised_len}자 "
@@ -4899,9 +5089,14 @@ def verify_draft(draft: str) -> dict:
             elif picks_in_draft and picks_in_revised:
                 logger.info("  ✅ PICKS 주석 보존 확인")
         else:
-            logger.warning("Step3 수정 호출 실패 — 원본 유지")
+            step3_status = "FAILED_NO_REVISION"  # Phase 16B: 503/timeout 케이스
+            logger.warning(
+                f"[Phase 16B] Step3 수정 호출 실패 (step3_status=FAILED_NO_REVISION) "
+                f"— GPT 초안 원본 발행 경로"
+            )
 
-    return {"pass": passed, "issues": issues, "revised_content": revised}
+    return {"pass": passed, "issues": issues, "revised_content": revised,
+            "step3_status": step3_status}  # Phase 16B: status 포함
 
 
 def gemini_select_tickers_v2(theme: str, materials: dict, research_text: str) -> list:
@@ -5004,11 +5199,19 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     # ── Step 3: Gemini 팩트체크 + 수정 ────────────────────────────────────
     draft_len = len(draft)
     verify_result = verify_draft(draft)
+    _p1_step3_status = verify_result.get("step3_status", "PASS")  # Phase 16B
     if not verify_result["pass"] and verify_result.get("revised_content"):
         logger.info("Step3 검수 실패 — 수정본 채택")
         final_content = verify_result["revised_content"]
     else:
         final_content = draft
+
+    # ── Phase 16B Track A: Step3 실패 시 emergency quality diagnostic ────
+    _p16b_polish_log: dict = {}
+    if _p1_step3_status == "FAILED_NO_REVISION":
+        final_content, _p16b_polish_log = _p16b_emergency_polish(
+            final_content, label="Post1"
+        )
 
     # ── Phase 5-A 후처리 ─────────────────────────────────────────────────
     final_content = _fix_double_typing(final_content)
@@ -5092,6 +5295,12 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         "p16_ssot_run":     {"run_year": _p16_ssot["run_year"], "run_month": _p16_ssot["run_month"],
                              "completed_years": _p16_ssot["completed_years"],
                              "completed_months": _p16_ssot["completed_months_this_year"]},
+        "p16b_guard": {                        # Phase 16B: 품질 하드닝 진단
+            "step3_status":            _p1_step3_status,
+            "fallback_triggered":      _p1_step3_status == "FAILED_NO_REVISION",
+            "emergency_polish":        _p16b_polish_log,
+            "intro_overlap":           None,   # Post1은 단독 — 비교 대상 없음
+        },
     }
 
     # ── Phase 14 Track B-4: Post1 분석 뼈대 추출 (Post2 연속성 강제용) ───
@@ -5234,11 +5443,19 @@ def generate_stock_picks_report(
     # ── Step 3: Gemini 팩트체크 + 수정 ────────────────────────────────────
     post2_draft_len = len(draft)
     verify_result = verify_draft(draft)
+    _p2_step3_status = verify_result.get("step3_status", "PASS")  # Phase 16B
     if not verify_result["pass"] and verify_result.get("revised_content"):
         logger.info("Post2 Step3 검수 실패 — 수정본 채택")
         raw_content = verify_result["revised_content"]
     else:
         raw_content = draft
+
+    # ── Phase 16B Track A: Step3 실패 시 emergency quality diagnostic ────
+    _p2_16b_polish_log: dict = {}
+    if _p2_step3_status == "FAILED_NO_REVISION":
+        raw_content, _p2_16b_polish_log = _p16b_emergency_polish(
+            raw_content, label="Post2"
+        )
 
     # ── Phase 4.3: 종목 섹션별 글자수 보고 ───────────────────────────────
     post2_final_len = len(raw_content)
@@ -5330,6 +5547,11 @@ def generate_stock_picks_report(
         final_content, ssot=_p2_p16_ssot, label="Post2"
     )
 
+    # ── Phase 16B Track B: 도입부 n-gram 중복 계산 ────────────────────────
+    _p16b_intro_overlap = _p16b_compute_intro_overlap(
+        post1_content, final_content, n=4
+    )
+
     p13_scores: dict = {
         "interpretation":   p13_interp,
         "temporal":         p13_temporal,
@@ -5344,6 +5566,12 @@ def generate_stock_picks_report(
         "p16_ssot_run":     {"run_year": _p2_p16_ssot["run_year"], "run_month": _p2_p16_ssot["run_month"],
                              "completed_years": _p2_p16_ssot["completed_years"],
                              "completed_months": _p2_p16_ssot["completed_months_this_year"]},
+        "p16b_guard": {                            # Phase 16B: 품질 하드닝 진단
+            "step3_status":         _p2_step3_status,
+            "fallback_triggered":   _p2_step3_status == "FAILED_NO_REVISION",
+            "emergency_polish":     _p2_16b_polish_log,
+            "intro_overlap":        _p16b_intro_overlap,
+        },
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
