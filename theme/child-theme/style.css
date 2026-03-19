@@ -1,0 +1,35 @@
+/*
+Theme Name: Macromalt Child
+Template: (부모 테마 이름으로 교체 필요 — 예: twentytwentyfour)
+Description: Macromalt 브랜드 테마. 스타일 분리 트랙 Pre-Phase 17 기준.
+Version: 0.1.0
+
+브랜드 방향:
+  premium financial editorial · restrained luxury
+  calm & intelligent · typography-first · mobile readable
+  generic news portal 느낌 금지 / retail trading app 느낌 금지
+
+이 파일은 WordPress child-theme 진입점이다.
+- 스타일 토큰: styles/tokens.py (Python) → styles/wordpress/base.css (CSS 변수)
+- 타이포그래피: styles/wordpress/typography.css
+- 컴포넌트:     styles/wordpress/components.css
+
+Antigravity 작업 범위:
+  이 파일 + styles/wordpress/*.css 에서만 작업한다.
+  generator.py 는 건드리지 않는다.
+
+TODO (Antigravity):
+  - 부모 테마 이름 확인 후 Template 필드 교체
+  - single post view 타이포그래피 hierarchy 조정
+  - section spacing / block rhythm 정리
+  - source/reference block 가독성 개선
+  - archive / category / mobile view 통일
+*/
+
+@import url("../../styles/wordpress/typography.css");
+@import url("../../styles/wordpress/components.css");
+
+/*
+ * ─── 커스텀 오버라이드 (Antigravity 작업 영역) ──────────────────────────────
+ * 아래에 사이트별 오버라이드를 추가하세요.
+ */

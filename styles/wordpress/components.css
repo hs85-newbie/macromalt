@@ -1,0 +1,72 @@
+/*
+ * styles/wordpress/components.css — Macromalt 컴포넌트 레이어
+ * Pre-Phase 17 스타일 분리 트랙
+ *
+ * 픽 박스, 참고 출처 박스, 분석 레이블 등 기능별 컴포넌트.
+ * Antigravity 가 이 파일에서 badge / source block / picks box 를 시각적으로 정돈한다.
+ */
+
+@import "base.css";
+
+/* ─── 픽 박스 (Post2 종목 섹션) ───────────────────────────────────────────── */
+.macromalt-picks-box {
+  padding: var(--padding-picks);
+  background-color: var(--color-bg-warm);
+  border-left: 5px solid var(--color-accent);
+  margin: var(--margin-picks-v) 0;
+}
+
+/* ─── 참고 출처 박스 ──────────────────────────────────────────────────────── */
+.macromalt-source-box {
+  background: var(--color-bg-source);
+  border-left: 4px solid var(--color-accent);
+  padding: var(--padding-source-box);
+  margin: var(--margin-source-top) 0 0 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.macromalt-source-box h3 {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-strong);
+  color: var(--color-muted);
+  margin: 0 0 8px 0;
+  /* 소제목 H3 공통 스타일 오버라이드 */
+  border-left: none;
+  padding: 0;
+  background-color: transparent;
+}
+
+.macromalt-source-box .source-category {
+  font-size: var(--font-size-meta);
+  color: var(--color-subtle);
+  margin: 6px 0 2px 0;
+}
+
+.macromalt-source-box ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.macromalt-source-box li {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-list);
+  color: var(--color-muted);
+  margin: 2px 0;
+}
+
+/* ─── 분석 레이블 (인라인 텍스트 마커) ───────────────────────────────────── */
+/*
+ * [심층분석], [캐시의 픽], [전망], [해석], [반론]
+ * 현재는 텍스트로만 존재. Antigravity 가 badge 스타일로 정돈할 수 있다.
+ */
+.macromalt-label-jeonmang {
+  /* [전망] 태그 */
+  color: var(--color-accent);
+  font-weight: var(--font-weight-strong);
+}
+
+.macromalt-label-haesuk {
+  /* [해석] 태그 */
+  color: var(--color-ink);
+  font-weight: var(--font-weight-strong);
+}
