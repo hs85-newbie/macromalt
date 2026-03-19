@@ -221,6 +221,61 @@ def save_publish_history(slot: str, post1: dict, post2: Optional[dict]) -> None:
     )
 
 
+def _p16j_check_theme_repeat(current_theme: str) -> dict:
+    """Phase 16J Track B: 동일 macro theme 연속 슬롯 여부 진단.
+
+    최근 publish_history에서 theme_fingerprint 일치 항목 수를 확인.
+    repeat 감지 시 logger.warning으로 운영자에게 알림.
+
+    Returns:
+        {
+            "is_repeat":    bool   — 1건 이상 동일 theme_fp 있으면 True,
+            "repeat_count": int    — 이력 내 동일 theme_fp 건수,
+            "theme_fp":     str    — 현재 theme fingerprint,
+            "matched_slots": list  — 최근 3건의 slot/published_at/post1_title,
+        }
+    """
+    theme_fp = _make_theme_fingerprint(current_theme)
+
+    if theme_fp == "기타":
+        logger.info("[Phase 16J] theme_fp=기타 — 연속 감지 제외")
+        return {"is_repeat": False, "repeat_count": 0,
+                "theme_fp": theme_fp, "matched_slots": []}
+
+    history = _load_publish_history()
+    matched = []
+    for entry in reversed(history):  # 최신 순
+        e_fp = entry.get("theme_fingerprint") or _make_theme_fingerprint(
+            entry.get("theme", ""))
+        if e_fp == theme_fp:
+            matched.append({
+                "slot":         entry.get("slot", ""),
+                "published_at": entry.get("published_at", ""),
+                "post1_title":  entry.get("post1_title", "")[:40],
+            })
+
+    is_repeat = len(matched) >= 1
+
+    if is_repeat:
+        logger.warning(
+            f"[Phase 16J] 동일 theme 연속 감지 | theme_fp={theme_fp} | "
+            f"최근 {len(matched)}건 동일 theme 발행 이력 — Post2 opener 다양화 강화"
+        )
+        for m in matched[:3]:
+            logger.warning(
+                f"  ⚠ [{m['slot']}] {m['published_at'][:16]} | {m['post1_title']}"
+            )
+    else:
+        logger.info(f"[Phase 16J] theme 연속 없음 | theme_fp={theme_fp}")
+
+    return {
+        "is_repeat":    is_repeat,
+        "repeat_count": len(matched),
+        "theme_fp":     theme_fp,
+        "matched_slots": matched[:3],
+    }
+
+
 def _log_freshness_summary(articles: list, research: list) -> None:
     """수집 자료의 date_tier 분포를 INFO 로그로 기록합니다 (Phase 10)."""
     all_items = articles + research
@@ -3151,6 +3206,21 @@ _P16D_POST2_BRIDGE_REQUIREMENT: str = (
     "  - 픽 확정 전 가상 후보군 기준으로 브릿지를 생성하는 것\n\n"
 )
 
+# ─── Phase 16J Track B: 동일 theme 연속 슬롯 시 Post2 opener 강화 ───────────────
+_P16J_POST2_SAME_THEME_OPENER: str = (
+    "[Phase 16J — 동일 매크로 테마 연속 실행 감지: Post2 도입부 각도 강제 ★★]\n\n"
+    "이번 슬롯은 직전 슬롯(들)과 동일한 거시 테마로 진행됩니다.\n"
+    "Post2([캐시의 픽])의 첫 2~3문단은 반드시 아래 세 각도 중 하나로 열어야 합니다:\n\n"
+    "  ① 픽 바스켓의 공통 민감도: '이 종목들이 같은 방향에 놓인 이유'\n"
+    "  ② 왜 이 종목들인가: '같은 테마 중에서도 이 바스켓을 선택한 트리거 논거'\n"
+    "  ③ 어떤 트리거에 베팅하는가: '오늘 이 특정 촉매에서 수혜 포지션'\n\n"
+    "❌ 절대 금지 (동일 테마 연속 시 추가 제한):\n"
+    "  - 매크로 배경을 이전 글과 같은 어휘·문장 구조로 재서술\n"
+    "  - '이 테마가 중요한 이유' 식의 거시 설명으로 도입부 시작\n"
+    "  - Post1 도입부와 유사한 흐름으로 같은 국면 설명 반복\n\n"
+    "✅ 필수: 첫 문장부터 종목 선택의 논리 또는 투자 각도를 직접 제시하라.\n\n"
+)
+
 # ─── Track A: Step3 실패 시 diagnostic용 generic 마커 목록 ─────────────────────
 _P16B_GENERIC_MARKERS: list = [
     "이러한 흐름은",
@@ -3200,10 +3270,12 @@ def _p16b_emergency_polish(
     Args:
         content:      GPT 초안 또는 Step3 수정본 HTML
         label:        로그 레이블 (Post1 / Post2)
-        step3_status: 현재 Step3 처리 상태 (PASS / REVISED / FAILED_NO_REVISION).
-                      Phase 16F 표준 enum — 로그 컨텍스트로만 사용.
+        step3_status: 현재 Step3 처리 상태 (PASS / REVISED / FAILED_NO_REVISION / PARSE_FAILED).
+                      Phase 16F/16J 표준 enum — 로그 컨텍스트로만 사용.
                       ※ 구 보고서(16B/16C)에서 "FAILED_REVISION_ADOPTED"로 표기된 것은
                         코드 기준 "REVISED"와 동일한 상태임 (Phase 16F에서 통일).
+                      ※ PARSE_FAILED: Gemini 검수 응답 JSON 파싱 불가 → 검수 skip,
+                        GPT 초안 원본 발행. FAILED_NO_REVISION과 달리 수정 시도 없음.
 
     Returns:
         (content_unchanged: str, polish_log: dict)
@@ -5144,14 +5216,18 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
 
 
 def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: str,
-                    slot: str = "default", post1_spine: str = "") -> str:
+                    slot: str = "default", post1_spine: str = "",
+                    same_theme_hint: str = "") -> str:
     """
     Step 2b: GPT 작성 엔진 — Post 2 종목 리포트.
     분석 재료 + 종목 + 실제 가격 데이터로 종목 리포트 HTML을 작성합니다.
 
     Args:
-        slot:        발행 슬롯 — Phase 10 슬롯별 Post2 방향 힌트 삽입
-        post1_spine: Phase 14 Track B-4 — Post1 분석 뼈대/결론 (Post2 연속성 강제용)
+        slot:            발행 슬롯 — Phase 10 슬롯별 Post2 방향 힌트 삽입
+        post1_spine:     Phase 14 Track B-4 — Post1 분석 뼈대/결론 (Post2 연속성 강제용)
+        same_theme_hint: Phase 16J Track B — 동일 theme 연속 시 opener 강화 프롬프트 주입.
+                         _p16j_check_theme_repeat() 결과가 is_repeat=True인 경우 주입.
+                         is_repeat=False이면 빈 문자열 — 동작 변화 없음.
 
     반환: HTML 문자열 ({PRICE_PLACEHOLDER} 포함, PICKS JSON 주석 포함)
     """
@@ -5196,6 +5272,7 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단 (최우선)
         + _P16D_POST2_CONTINUITY_HARDENING  # Phase 16D: Track A — 매크로 배경 재서술 억제
         + _P16D_POST2_BRIDGE_REQUIREMENT    # Phase 16D: Track B — 픽-테마 브릿지 강제
+        + same_theme_hint                   # Phase 16J: 동일 theme 연속 시 opener 강화 (조건부)
         + _P16B_POST2_ANGLE_DIVERSIFICATION # Phase 16B: 도입부 각도 차별화 (Track B)
         + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + continuation_block                # Phase 14: Post1 결론 + 연속성 강제
@@ -5243,17 +5320,25 @@ def verify_draft(draft: str) -> dict:
     result = _parse_json_response(raw) if raw else None
 
     if not result or not isinstance(result, dict):
-        logger.warning("검수 결과 파싱 실패 — 통과로 처리")
+        logger.warning(
+            "[Phase 16J] Step3 검수 결과 파싱 실패 (step3_status=PARSE_FAILED) "
+            "— Gemini 응답이 JSON으로 파싱 불가 → 검수 단계 skip, GPT 초안 원본 발행 경로. "
+            "FAILED_NO_REVISION과 달리 수정 시도 없이 즉시 통과 처리."
+        )
         return {"pass": True, "issues": [], "revised_content": None,
-                "step3_status": "PARSE_FAILED"}  # Phase 16B: status 추적
+                "step3_status": "PARSE_FAILED"}  # Phase 16B/16J: status 추적
 
     passed = result.get("pass", True)
     issues = result.get("issues", [])
     revised = None  # Step 3b에서 별도 채움
-    # Phase 16B/16F step3_status enum (표준, Phase 16F에서 전체 통일):
+    # Phase 16B/16F/16J step3_status enum (표준, Phase 16F에서 통일 / 16J에서 PARSE_FAILED 추가):
     #   "PASS"              — Step3 팩트체크 이슈 없음 (검수 통과)
     #   "REVISED"           — Step3 이슈 발견, 수정본 채택 (구 보고서 표기: "FAILED_REVISION_ADOPTED"와 동일)
     #   "FAILED_NO_REVISION"— Step3 수정 API 실패 (503/timeout 등), GPT 초안 원본 발행
+    #   "PARSE_FAILED"      — [Phase 16J] Gemini 검수 응답 JSON 파싱 불가 → 검수 단계 skip.
+    #                         GPT 초안 원본 발행 (FAILED_NO_REVISION과 달리 수정 시도 자체 없음).
+    #                         운영 해석: verifier가 비표준 형식을 반환한 것 — 검수 실질 미실행.
+    #                         발행은 정상 진행되나 Step3 품질 보호 없이 발행됨.
     step3_status = "PASS"
 
     if passed:
@@ -5508,9 +5593,11 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         "p16_ssot_run":     {"run_year": _p16_ssot["run_year"], "run_month": _p16_ssot["run_month"],
                              "completed_years": _p16_ssot["completed_years"],
                              "completed_months": _p16_ssot["completed_months_this_year"]},
-        "p16b_guard": {                        # Phase 16B: 품질 하드닝 진단
+        "p16b_guard": {                        # Phase 16B/16J: 품질 하드닝 진단
             "step3_status":            _p1_step3_status,
+            # PASS / REVISED / FAILED_NO_REVISION / PARSE_FAILED
             "fallback_triggered":      _p1_step3_status == "FAILED_NO_REVISION",
+            "parse_failed":            _p1_step3_status == "PARSE_FAILED",  # [Phase 16J]
             "emergency_polish":        _p16b_polish_log,
             "intro_overlap":           None,   # Post1은 단독 — 비교 대상 없음
         },
@@ -5645,9 +5732,16 @@ def generate_stock_picks_report(
     if post1_spine:
         logger.info(f"[Phase 14] Post2용 Post1 뼈대: {post1_spine[:80]}…")
 
+    # ── Phase 16J Track B: 동일 theme 연속 진단 (opener 강화 + 경고) ──────
+    _p16j_theme_diag = _p16j_check_theme_repeat(materials.get("theme", theme))
+    _p16j_same_theme_hint = (
+        _P16J_POST2_SAME_THEME_OPENER if _p16j_theme_diag["is_repeat"] else ""
+    )
+
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
     draft = gpt_write_picks(materials, picks, prices, context_text, slot=slot,
-                            post1_spine=post1_spine)  # Phase 14: 뼈대 주입
+                            post1_spine=post1_spine,
+                            same_theme_hint=_p16j_same_theme_hint)  # Phase 16J: theme repeat hint
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
@@ -5780,12 +5874,14 @@ def generate_stock_picks_report(
         "p16_ssot_run":     {"run_year": _p2_p16_ssot["run_year"], "run_month": _p2_p16_ssot["run_month"],
                              "completed_years": _p2_p16_ssot["completed_years"],
                              "completed_months": _p2_p16_ssot["completed_months_this_year"]},
-        "p16b_guard": {                            # Phase 16B/16F: 품질 하드닝 진단
-            "step3_status":         _p2_step3_status,  # PASS / REVISED / FAILED_NO_REVISION
+        "p16b_guard": {                            # Phase 16B/16F/16J: 품질 하드닝 진단
+            "step3_status":         _p2_step3_status,  # PASS / REVISED / FAILED_NO_REVISION / PARSE_FAILED
             "fallback_triggered":   _p2_step3_status == "FAILED_NO_REVISION",
+            "parse_failed":         _p2_step3_status == "PARSE_FAILED",  # [Phase 16J]
             "emergency_polish":     _p2_16b_polish_log,
             "intro_overlap":        _p16b_intro_overlap,
             "bridge_diag":          _p16f_bridge_diag,  # Phase 16F: 브릿지 타입 진단
+            "theme_repeat_diag":    _p16j_theme_diag,   # [Phase 16J Track B]: 동일 theme 연속 진단
         },
     }
 
