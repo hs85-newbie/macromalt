@@ -3054,6 +3054,39 @@ _P16B_POST2_ANGLE_DIVERSIFICATION: str = (
     "  - 도입부 첫 문장은 선정 종목과 연결되어야 함\n\n"
 )
 
+# ─── Phase 16D Track A: Post2 매크로 배경 재서술 억제 ────────────────────────────
+_P16D_POST2_CONTINUITY_HARDENING: str = (
+    "[Phase 16D — Post2 매크로 재서술 억제 ★]\n\n"
+    "Post2([캐시의 픽])에서 '오늘 이 테마를 보는 이유' 또는 유사 섹션을 작성할 때:\n\n"
+    "❌ 금지:\n"
+    "  - Post1([심층분석])이 이미 서술한 거시 배경(호르무즈 해협 수치, 브렌트유 가격,\n"
+    "    FOMC 결정 내용, 달러 강세 등)을 같은 분량으로 다시 설명\n"
+    "  - '중동 전쟁이 X주 차에 접어들며...' / 'Y 해협 통행량이 Z% 급감...' 류의\n"
+    "    사건 경위 재서술\n"
+    "  - 거시 배경 단독 설명 문단이 2문장을 초과\n\n"
+    "✅ 필수:\n"
+    "  - 매크로 사실은 1~2문장 이내 요약으로만 참조하고,\n"
+    "    즉시 '그렇다면 어떤 종목/섹터가 이 흐름에서 포지셔닝 기회를 갖는가?'로 전환\n"
+    "  - 섹션 첫 문장부터 종목 바스켓 또는 투자 각도를 명시\n\n"
+)
+
+# ─── Phase 16D Track B: Post2 픽-테마 브릿지 강제 ───────────────────────────────
+_P16D_POST2_BRIDGE_REQUIREMENT: str = (
+    "[Phase 16D — 픽-테마 브릿지 강제 ★]\n\n"
+    "종목 개별 섹션(메인 픽 / 보조 픽)을 시작하기 직전에,\n"
+    "'왜 이 종목들이 오늘의 매크로 국면에서 한 바구니에 담겼는가'를\n"
+    "1~2문장으로 설명하는 브릿지 문장을 반드시 포함하라.\n\n"
+    "브릿지 문장 기준:\n"
+    "  - 공통 투자 논리(예: 고유가 직수혜, 금리 내성, AI 인프라 수요 등)를 명시\n"
+    "  - 서로 다른 성격의 종목이 함께 들어가면, 묶는 기준을 먼저 제시\n"
+    "  - 브릿지는 구체적이어야 하며, 'X, Y, Z를 함께 봅니다' 식의 단순 나열 금지\n\n"
+    "예시 방향(하드코딩 금지 — 상황에 맞게 작성):\n"
+    "  ✅ '고유가 국면에서 직접 수익이 확대되는 에너지 섹터와,\n"
+    "      유가 상승에도 독자적인 AI 수요 모멘텀을 보유한 반도체를 함께 담는다.'\n"
+    "  ✅ '이 세 종목은 각각 에너지·반도체·후공정으로 다르지만,\n"
+    "      모두 달러 강세 + 공급 제약 국면에서 가격 결정력을 갖는다는 공통점을 공유한다.'\n\n"
+)
+
 # ─── Track A: Step3 실패 시 diagnostic용 generic 마커 목록 ─────────────────────
 _P16B_GENERIC_MARKERS: list = [
     "이러한 흐름은",
@@ -3074,17 +3107,19 @@ _P16B_GENERIC_MARKERS: list = [
 ]
 
 
-def _p16b_emergency_polish(content: str, label: str = "Post") -> tuple:
-    """Phase 16B Track A: Step3 실패 시 최소 품질 보호 diagnostic pass.
+def _p16b_emergency_polish(
+    content: str, label: str = "Post", step3_status: str = "PASS"
+) -> tuple:
+    """Phase 16B Track A / Phase 16D Track D: generic wording diagnostic pass.
 
-    Step3가 503/timeout으로 실패했을 때 GPT 초안 원본에 적용한다.
-    Temporal SSOT에 영향 없는 surface-level generic wording을 통계로 수집하고
-    경고 로그로 노출한다 (실 치환은 미수행 — 문장 컨텍스트 없는 단순 regex 치환은
-    의미 역전 위험이 있으므로 진단만 수행하고 16C에서 처리 방향을 결정한다).
+    Phase 16D: step3_status 파라미터 추가 — 항상 실행하되, 실제 Step3 fallback 상황과
+    일반 품질 진단 상황을 구분해 로그에 남긴다 (applied=False 원칙 유지).
 
     Args:
-        content: GPT 초안 HTML
-        label:   로그 레이블 (Post1 / Post2)
+        content:      GPT 초안 또는 Step3 수정본 HTML
+        label:        로그 레이블 (Post1 / Post2)
+        step3_status: 현재 Step3 처리 상태 (PASS / FAILED_REVISION_ADOPTED /
+                      FAILED_NO_REVISION). 로그 컨텍스트로만 사용.
 
     Returns:
         (content_unchanged: str, polish_log: dict)
@@ -3103,22 +3138,30 @@ def _p16b_emergency_polish(content: str, label: str = "Post") -> tuple:
     total_generic = sum(m["count"] for m in found_markers)
     status = "PASS" if total_generic == 0 else ("WARN" if total_generic <= 5 else "FAIL")
 
+    # Phase 16D Track D: 항상 관측 가능한 로그 출력 (실행/스킵 여부 + step3 컨텍스트)
+    _is_fallback = step3_status == "FAILED_NO_REVISION"
+    _mode = "fallback-diagnostic" if _is_fallback else "routine-diagnostic"
     if total_generic > 0:
         logger.warning(
-            f"[Phase 16B] {label} emergency polish: generic 마커 {total_generic}건 "
-            f"(Step3 미적용 상태) — 상태: {status}"
+            f"[Phase 16B] {label} emergency_polish: generic 마커 {total_generic}건 "
+            f"| status={status} | mode={_mode} | step3={step3_status}"
         )
         for m in found_markers[:5]:
             logger.warning(f"  ⚠ '{m['marker']}' x{m['count']}")
     else:
-        logger.info(f"[Phase 16B] {label} emergency polish: generic 마커 없음 — 상태: PASS")
+        logger.info(
+            f"[Phase 16B] {label} emergency_polish: generic 마커 없음 "
+            f"| status=PASS | mode={_mode} | step3={step3_status}"
+        )
 
     return content, {
         "applied": False,
+        "mode": _mode,
+        "step3_status": step3_status,
         "total_generic_found": total_generic,
         "markers": found_markers,
         "status": status,
-        "note": "Step3 미적용 상태 diagnostic — 실 치환은 16C에서 결정",
+        "note": "diagnostic-only — 실 치환 미수행 (Phase 16D 원칙 유지)",
     }
 
 
@@ -3174,20 +3217,26 @@ def _p16b_compute_intro_overlap(
     else:
         status = "HIGH"
 
+    # Phase 16D Track C: threshold 기준 명시 + 원인 n-gram 구간 로그
+    _thresholds = {"LOW": "<15%", "MEDIUM": "15~30%", "HIGH": "≥30%"}
     logger.info(
         f"[Phase 16B] 도입부 {n}-gram 중복: {overlap_ratio:.1%} ({status}) "
-        f"| 공유 n-gram {len(shared)}개"
+        f"| 공유 n-gram {len(shared)}개 "
+        f"| 기준: LOW<15% / MEDIUM<30% / HIGH≥30%"
     )
-    if status == "HIGH":
+    if status in ("HIGH", "MEDIUM"):
         logger.warning(
-            f"[Phase 16B] 도입부 HIGH 중복 감지 — 16C에서 각도 분리 강화 필요. "
-            f"샘플: {shared_samples[:3]}"
+            f"[Phase 16B] 도입부 {status} 중복 감지 "
+            f"(임계값: {_thresholds[status]}) "
+            f"— 반복 n-gram 샘플: {shared_samples[:5]}"
         )
 
     return {
         "overlap_ratio": round(overlap_ratio, 4),
         "shared_ngrams": shared_samples,
         "status": status,
+        "thresholds": {"LOW": 0.15, "MEDIUM": 0.30, "HIGH": 0.30},
+        "intro_chars_used": intro_chars,
         "post1_intro": p1_intro[:80],
         "post2_intro": p2_intro[:80],
     }
@@ -4985,6 +5034,8 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
 
     user_msg = (
         _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단 (최우선)
+        + _P16D_POST2_CONTINUITY_HARDENING  # Phase 16D: Track A — 매크로 배경 재서술 억제
+        + _P16D_POST2_BRIDGE_REQUIREMENT    # Phase 16D: Track B — 픽-테마 브릿지 강제
         + _P16B_POST2_ANGLE_DIVERSIFICATION # Phase 16B: 도입부 각도 차별화 (Track B)
         + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + continuation_block                # Phase 14: Post1 결론 + 연속성 강제
@@ -5206,12 +5257,10 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     else:
         final_content = draft
 
-    # ── Phase 16B Track A: Step3 실패 시 emergency quality diagnostic ────
-    _p16b_polish_log: dict = {}
-    if _p1_step3_status == "FAILED_NO_REVISION":
-        final_content, _p16b_polish_log = _p16b_emergency_polish(
-            final_content, label="Post1"
-        )
+    # ── Phase 16B/16D Track A+D: emergency quality diagnostic (항상 실행) ────
+    final_content, _p16b_polish_log = _p16b_emergency_polish(
+        final_content, label="Post1", step3_status=_p1_step3_status
+    )
 
     # ── Phase 5-A 후처리 ─────────────────────────────────────────────────
     final_content = _fix_double_typing(final_content)
@@ -5450,12 +5499,10 @@ def generate_stock_picks_report(
     else:
         raw_content = draft
 
-    # ── Phase 16B Track A: Step3 실패 시 emergency quality diagnostic ────
-    _p2_16b_polish_log: dict = {}
-    if _p2_step3_status == "FAILED_NO_REVISION":
-        raw_content, _p2_16b_polish_log = _p16b_emergency_polish(
-            raw_content, label="Post2"
-        )
+    # ── Phase 16B/16D Track A+D: emergency quality diagnostic (항상 실행) ────
+    raw_content, _p2_16b_polish_log = _p16b_emergency_polish(
+        raw_content, label="Post2", step3_status=_p2_step3_status
+    )
 
     # ── Phase 4.3: 종목 섹션별 글자수 보고 ───────────────────────────────
     post2_final_len = len(raw_content)
