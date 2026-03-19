@@ -940,8 +940,9 @@ _P13_POST2_CONTINUITY_RULE: str = """
 Post2(캐시의 픽)는 Post1(심층분석)이 종료된 시점에서 시작합니다.
 Post1의 매크로/테마 설정을 다시 설명하지 마십시오.
 
-'오늘 이 테마를 보는 이유' 섹션 구조:
-  Post1이 도출한 결론 → 이 테마에서 가장 직접 영향받는 종목 탐색으로 즉시 진입
+'왜 지금 {메인 픽 또는 핵심 섹터}인가' 섹션 구조 (Phase 17 개편):
+  Post1이 도출한 결론 → 메인 픽/핵심 섹터의 핵심 민감도와 트리거를 즉시 제시 → 종목 분석으로 진입
+  ⚠ '오늘 이 테마를 보는 이유' 섹션명은 Phase 17부터 금지됨. 픽 각도 진입형으로 교체됨.
 
 ❌ 금지:
 - "최근 X가 발생하면서..." 배경 재설명
@@ -3213,6 +3214,44 @@ _P16D_POST2_BRIDGE_REQUIREMENT: str = (
     "  - 픽 확정 전 가상 후보군 기준으로 브릿지를 생성하는 것\n\n"
 )
 
+# ─── Phase 17 Track A: Post2 opener pick-angle 강제 ─────────────────────────────
+# Phase 17 핵심 변경: Post2 opener를 theme explainer → pick-angle opener로 전환
+# "오늘 이 테마를 보는 이유" 섹션 완전 폐기 → "왜 지금 {픽/섹터}인가" 구조로 교체
+_P17_POST2_OPENER_ENFORCEMENT: str = (
+    "[Phase 17 — Post2 opener pick-angle 강제 ★★ 최우선]\n\n"
+    "Post2([캐시의 픽])의 세 번째 섹션(H3)은 반드시 픽 각도 진입형으로 작성한다.\n\n"
+    "★ H3 생성 규칙:\n"
+    "  - 메인 픽명 또는 핵심 섹터명을 H3에 직접 포함한다.\n"
+    "  - generic fallback H3는 절대 금지한다.\n\n"
+    "❌ H3 금지 패턴:\n"
+    "  - '오늘 이 테마를 보는 이유'\n"
+    "  - '오늘 시장을 보는 이유'\n"
+    "  - '최근 거시 환경을 먼저 보면'\n"
+    "  - '글로벌 매크로 흐름을 먼저 정리하면'\n"
+    "  - '이번 시장 변수는'\n"
+    "  - '최근 변동성이 커지면서'\n\n"
+    "✅ H3 허용 패턴:\n"
+    "  - '왜 지금 {메인 픽}인가'\n"
+    "  - '{메인 픽}을 먼저 봐야 하는 이유'\n"
+    "  - '이번 변수에서 먼저 봐야 할 {핵심 섹터}'\n"
+    "  - '지금 시장이 {메인 픽}에 묻는 질문'\n"
+    "  - '오늘 테마보다 먼저 확인할 {핵심 종목}'\n\n"
+    "★ opener 첫 문장 강제 규칙:\n"
+    "  - 첫 문장은 메인 픽 또는 핵심 섹터명을 반드시 포함한다.\n"
+    "  - 첫 문장은 거시 배경(금리/환율/유가/불확실성) 재서술로 시작하면 안 된다.\n"
+    "  - 첫 문장에 수주/판가/재고/CAPEX/정책 수혜/실적 민감도/가격 전가력 중\n"
+    "    핵심 변수 1개 이상을 반드시 제시해야 한다.\n"
+    "  - '불확실성이 커졌다', '변동성이 확대됐다' 같은 범용 문장 단독 시작 금지.\n"
+    "  - 첫 문장과 둘째 문장 안에 메인 픽/핵심 섹터명이 모두 빠지는 구성 금지.\n\n"
+    "✅ 권장 첫 문장 패턴:\n"
+    "  - '{메인 픽}은 이번 변수에서 {핵심 변수} 해석이 먼저 붙는 종목이다.'\n"
+    "  - '이번 테마에서 먼저 봐야 할 것은 시장 전체보다 {핵심 섹터}의 {핵심 변수}다.'\n"
+    "  - '{메인 픽}은 단순 테마 수혜보다 {실적/수주/가격 전가력/정책 연결}이 핵심이다.'\n\n"
+    "★ Post1 역할 중복 금지:\n"
+    "  - Post1이 이미 제공한 시장 컨텍스트를 Post2 opener가 길게 반복하지 않는다.\n"
+    "  - 거시 배경 설명은 opener 첫 문장 이후 또는 다음 문단으로 배치한다.\n\n"
+)
+
 # ─── Phase 16J Track B: 동일 theme 연속 슬롯 시 Post2 opener 강화 ───────────────
 _P16J_POST2_SAME_THEME_OPENER: str = (
     "[Phase 16J — 동일 매크로 테마 연속 실행 감지: Post2 도입부 각도 강제 ★★]\n\n"
@@ -4793,7 +4832,14 @@ GPT_WRITER_PICKS_SYSTEM = f"""
 [글 구조]
 1. 제목: <h1>로 작성 — "[캐시의 픽] {{메인종목명}} 외 — {{테마 핵심 키워드}}" 형식
 2. 도입부: <p>로 간결하게 오늘의 테마와 종목 선정 배경 연결
-3. 오늘 이 테마를 보는 이유: <h3> + <p> — 매크로 근거 설명 (숫자·기준시점 포함)
+3. 왜 지금 {{메인 픽 또는 핵심 섹터}}인가: <h3> + <p>
+   - H3에 메인 픽명 또는 핵심 섹터명을 반드시 직접 명시 (generic fallback 금지)
+   - 첫 문장은 메인 픽 또는 핵심 섹터명을 반드시 포함해야 한다
+   - 첫 문장은 거시 배경 재서술로 시작하면 안 된다
+   - 첫 문장에 수주/판가/재고/CAPEX/정책 수혜/실적 민감도/가격 전가력 중 핵심 변수 1개 이상 제시
+   - 거시 배경은 첫 문장 이후 또는 다음 문단에 배치
+   ❌ H3 금지 예시: "오늘 이 테마를 보는 이유" / "오늘 시장을 보는 이유" / "최근 거시 환경을 먼저 보면" / "이번 시장 변수는"
+   ✅ H3 허용 예시: "왜 지금 {{메인 픽}}인가" / "{{메인 픽}}을 먼저 봐야 하는 이유" / "이번 변수에서 먼저 봐야 할 {{핵심 섹터}}"
 4. ⭐ 메인 픽: <div style="{_PICKS_DIV_STYLE}">로 감싸고
    - <h3>으로 "⭐ 메인 픽 — 종목명(티커)" 표시
    - 4문장 이상 리포트형 서술 (4단계 순서 준수)
@@ -4886,6 +4932,22 @@ GEMINI_VERIFIER_SYSTEM = """
 18. [캐시 톤] 캐시 바텐더 톤이 과장되거나 부자연스럽지 않은지
 19. [출처 대응] 본문에 인용된 내용과 참고 출처가 직접 대응하는지 (미인용 출처 포함 여부)
 
+★ Phase 17 opener 구조 점검 (Post2 전용, 20~25번):
+20. [opener H3 generic] Post2 세 번째 섹션 H3가 "오늘 이 테마를 보는 이유" / "오늘 시장을 보는 이유" /
+    "최근 거시 환경을 먼저 보면" / "글로벌 매크로 흐름" / "이번 시장 변수는" / "최근 변동성" 등
+    generic theme explainer 패턴인지 (해당 시 pass=false)
+21. [opener 첫 문장 픽 누락] Post2 세 번째 섹션의 첫 문장에 메인 픽명 또는 핵심 섹터명이
+    포함되지 않은 경우 (해당 시 pass=false)
+22. [opener macro recap 시작] Post2 세 번째 섹션의 첫 문장이 금리/환율/유가/불확실성/변동성
+    등 macro 변수 설명으로만 시작하는 경우 (해당 시 pass=false)
+23. [opener 핵심 변수 누락] Post2 세 번째 섹션의 첫 문장에 수주/판가/재고/CAPEX/정책 수혜/
+    실적 민감도/가격 전가력/운임/밸류체인 등 핵심 변수가 1개도 없는 경우 (경미하면 issues 기재)
+24. [Post1 opener 중복] Post2 세 번째 섹션이 Post1의 시장 배경 설명과 역할 중복인 경우
+    (중복 문장이 뚜렷하면 pass=false)
+25. [opener 픽 연결 누락] Post2 세 번째 섹션이 이후 메인 픽/보조 픽 섹션과 논리적으로
+    연결되지 않는 경우 (경미하면 issues 기재)
+※ 20~22번 위반 시 반드시 pass=false. 위반 문장을 issues에 정확히 인용할 것.
+
 [출력 JSON — pass/issues만 출력, revised_content 없음]
 {
   "pass": true 또는 false,
@@ -4955,7 +5017,20 @@ GEMINI_REVISER_SYSTEM = """
    도입부에 이미 있는 경우 새로운 비유를 보강 목적으로 삽입하지 말 것.
    위스키·바텐더·캐스크·싱글몰트 관련 표현은 "보존 대상"이지 "보강 대상"이 아님.
    수정 중 새로운 비유 문장을 추가하거나 기존 비유를 다른 위치에 재삽입하는 행위는 엄격히 금지.
-9. [★ 날짜 생성·삽입 금지 — 절대 원칙]
+9. [★ Phase 17 — opener 구조 보정 — Post2 전용]
+   generic H2/H3 → pick-angle H3 교체 규칙:
+   - "오늘 이 테마를 보는 이유" 등 generic opener H3 → "왜 지금 {메인 픽}인가" 형태로 교체
+   - macro-first opener 첫 문장 → pick-first 문장으로 재작성 (메인 픽/섹터명 반드시 포함)
+   - 메인 픽/핵심 섹터명이 첫 문장에 누락된 경우 → 첫 문장 앞에 즉시 삽입
+   - Post1과 중복된 거시 배경 서술 → 시장 배경 축소 후 종목 연결 문장으로 치환
+   - 보정 과정에서 새 절대 날짜를 발명하거나 삽입하지 않는다
+   opener 검수 출력 형식 (issues에 포함할 것):
+   - opener 구조: 적합 / 부적합
+   - 문제 문장: (인용)
+   - 문제 유형: generic H3 / macro recap / 픽 누락 / 역할 중복 / 핵심 변수 누락
+   - 수정 이유: (한 줄)
+   - 교체 문장 제안: (한 줄)
+10. [★ 날짜 생성·삽입 금지 — 절대 원칙]
    - 본문이나 source에 없는 절대 날짜(예: "2024년 5월 20일", "2024년 4월 15일")를 새로 생성해서 삽입하지 말 것.
    - 날짜가 불명확하면 임의 보강 금지.
    - 날짜를 확정할 수 없으면 절대 날짜를 제거하고 "현재", "최근", "이날", "당시", "해당 시점" 등 일반 시점 표현으로 바꿀 것.
@@ -5238,7 +5313,8 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
 
     user_msg = (
-        _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단 (최우선)
+        _P17_POST2_OPENER_ENFORCEMENT       # Phase 17: opener pick-angle 강제 ★★ (최우선)
+        + _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단
         + _P16D_POST2_CONTINUITY_HARDENING  # Phase 16D: Track A — 매크로 배경 재서술 억제
         + _P16D_POST2_BRIDGE_REQUIREMENT    # Phase 16D: Track B — 픽-테마 브릿지 강제
         + same_theme_hint                   # Phase 16J: 동일 theme 연속 시 opener 강화 (조건부)
@@ -5268,6 +5344,89 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
     return draft
 
 
+# ── Phase 17: PARSE_FAILED 런타임 분류 체계 ─────────────────────────────────────
+# TYPE_A: H2/H3 구조 누락 또는 섹션 순서 불일치
+# TYPE_B: 금지된 opener 패턴으로 인한 후처리 불일치
+# TYPE_C: HTML 태그 파손 또는 중첩 오류
+# TYPE_D: source box / 체크포인트 / 종목 구간 파싱 실패
+# TYPE_E: reviser 수정 후 구조 재파손
+# TYPE_UNKNOWN: 위 분류로 설명되지 않는 실패
+
+def _classify_parse_failed(raw: str, normalized: Optional[str] = None) -> str:
+    """Phase 17: PARSE_FAILED 발생 원인을 TYPE_A~TYPE_E 또는 TYPE_UNKNOWN으로 분류."""
+    if raw is None:
+        return "TYPE_UNKNOWN"
+    # TYPE_A: H2/H3 구조 이상 또는 섹션 순서 불일치 → JSON에 h2/h3/section 키워드 부재
+    if re.search(r"<h[23][^>]*>", raw) is None:
+        return "TYPE_A"
+    # TYPE_B: opener 금지 패턴 존재 → 후처리 불일치 가능
+    opener_banned = ["오늘 이 테마를 보는 이유", "오늘 시장을 보는 이유",
+                     "최근 거시 환경을 먼저 보면", "글로벌 매크로 흐름",
+                     "이번 시장 변수는", "최근 변동성이 커지면서"]
+    if any(p in raw for p in opener_banned):
+        return "TYPE_B"
+    # TYPE_C: HTML 태그 파손 (닫는 태그 누락 또는 중첩 오류 의심)
+    open_tags  = len(re.findall(r"<(?!/)(?!br|hr|!)[a-zA-Z][^>]*>", raw))
+    close_tags = len(re.findall(r"</[a-zA-Z]+>", raw))
+    if abs(open_tags - close_tags) > 5:
+        return "TYPE_C"
+    # TYPE_D: source box / 체크포인트 / PICKS 주석 파싱 실패
+    if "<!-- PICKS:" not in raw and len(raw) > 500:
+        return "TYPE_D"
+    # TYPE_E: reviser 수정 후 구조 재파손 — normalized가 raw보다 현저히 짧을 때
+    if normalized and len(normalized) < len(raw) * 0.6:
+        return "TYPE_E"
+    return "TYPE_UNKNOWN"
+
+
+def _log_parse_failed_event(
+    *,
+    run_id: str,
+    slot: str,
+    post_type: str,
+    raw_output: str,
+    normalized_output: Optional[str] = None,
+    failed_section_name: str = "",
+    parse_stage: str = "Step3:verifier",
+    fallback_used: bool = True,
+    publish_blocked: bool = False,
+) -> dict:
+    """Phase 17: PARSE_FAILED 런타임 이벤트를 구조화된 필드로 기록한다.
+
+    반환: 로그 딕셔너리 (감사 / 관측 목적)
+    필수 필드: run_id / slot / post_type / failure_type / parse_stage /
+              failed_section_name / raw_output_snapshot / normalized_output_snapshot /
+              fallback_used / publish_blocked
+    """
+    failure_type = _classify_parse_failed(raw_output, normalized_output)
+    raw_snap   = (raw_output or "")[:500]
+    norm_snap  = (normalized_output or "")[:500]
+
+    log_entry = {
+        "run_id":                    run_id,
+        "slot":                      slot,
+        "post_type":                 post_type,
+        "failure_type":              failure_type,
+        "parse_stage":               parse_stage,
+        "failed_section_name":       failed_section_name,
+        "raw_output_snapshot":       raw_snap,
+        "normalized_output_snapshot": norm_snap,
+        "fallback_used":             fallback_used,
+        "publish_blocked":           publish_blocked,
+    }
+
+    logger.warning(
+        f"[Phase 17] PARSE_FAILED 런타임 이벤트 | run_id={run_id} | slot={slot} | "
+        f"post_type={post_type} | failure_type={failure_type} | "
+        f"parse_stage={parse_stage} | failed_section={failed_section_name or '(unknown)'} | "
+        f"fallback_used={fallback_used} | publish_blocked={publish_blocked}"
+    )
+    logger.debug(f"[Phase 17] raw_snapshot: {raw_snap!r}")
+    if norm_snap:
+        logger.debug(f"[Phase 17] normalized_snapshot: {norm_snap!r}")
+    return log_entry
+
+
 def verify_draft(draft: str) -> dict:
     """
     Step 3: Gemini 검수 엔진 (2단계 분리 방식).
@@ -5290,9 +5449,20 @@ def verify_draft(draft: str) -> dict:
 
     if not result or not isinstance(result, dict):
         logger.warning(
-            "[Phase 16J] Step3 검수 결과 파싱 실패 (step3_status=PARSE_FAILED) "
+            "[Phase 16J/17] Step3 검수 결과 파싱 실패 (step3_status=PARSE_FAILED) "
             "— Gemini 응답이 JSON으로 파싱 불가 → 검수 단계 skip, GPT 초안 원본 발행 경로. "
             "FAILED_NO_REVISION과 달리 수정 시도 없이 즉시 통과 처리."
+        )
+        # Phase 17: 구조화된 PARSE_FAILED 런타임 로그 기록
+        _log_parse_failed_event(
+            run_id=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            slot="unknown",
+            post_type="unknown",
+            raw_output=raw or "",
+            parse_stage="Step3:verifier:json_parse",
+            failed_section_name="verifier_response",
+            fallback_used=True,
+            publish_blocked=False,
         )
         return {"pass": True, "issues": [], "revised_content": None,
                 "step3_status": "PARSE_FAILED"}  # Phase 16B/16J: status 추적
