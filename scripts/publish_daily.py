@@ -22,6 +22,7 @@ import sys
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 # ── 경로 설정 ────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -64,7 +65,7 @@ def _run_pipeline() -> tuple[int, str]:
     return result.returncode, result.stdout
 
 
-def _extract_run_id_from_log(started_after: datetime) -> str | None:
+def _extract_run_id_from_log(started_after: datetime) -> Optional[str]:
     """로그 파일에서 started_after 이후에 시작된 최신 run_id를 추출."""
     if not LOG_PATH.exists():
         return None
