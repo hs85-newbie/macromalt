@@ -12,6 +12,7 @@ Version: 1.5.0
 @import url("styles/typography.css");
 @import url("styles/components.css");
 @import url("styles/seasonal.css");
+@import url("styles/seo-ads.css");
 
 /*
  * ─── Step02: Global Shell & Masthead Stylings ───────────────────────────

@@ -1,0 +1,81 @@
+/**
+ * styles/wordpress/seo-ads.css
+ * Phase 20 — SEO / Monetization Layer
+ *
+ * Ad container styles only. Actual AdSense code is inactive
+ * until MACROMALT_ADSENSE_ACTIVE is set to true in functions.php.
+ *
+ * CLS protection: min-height reserves space before ad loads,
+ * preventing layout shift (Google CWV CLS < 0.1 target).
+ */
+
+/* ── Base Ad Slot ───────────────────────────────────────────── */
+.mm-ad-slot {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-align: center;
+    position: relative;
+    /* CLS guard: reserve vertical space before ad loads */
+    min-height: 90px;
+    /* Visual separation — breathable, not intrusive */
+    margin: 40px 0;
+    border-top: 1px solid var(--mm-rule, #e0e0e0);
+    border-bottom: 1px solid var(--mm-rule, #e0e0e0);
+    padding: 12px 0;
+    background-color: var(--mm-bg, #ffffff);
+}
+
+/* ── Ad Disclosure Label ────────────────────────────────────── */
+.mm-ad-label {
+    display: block;
+    font-family: var(--font-mono, monospace);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #aaa;
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+/* ── Mid-Article Slot ───────────────────────────────────────── */
+.mm-ad-mid {
+    margin: 48px 0;
+    min-height: 100px;
+}
+
+/* ── End-of-Article Slot ────────────────────────────────────── */
+.mm-ad-end {
+    margin: 40px 0 32px;
+    min-height: 90px;
+}
+
+/* ── Mobile Adjustments ─────────────────────────────────────── */
+@media (max-width: 768px) {
+    .mm-ad-slot {
+        margin: 28px 0;
+        min-height: 60px;
+        padding: 8px 0;
+    }
+
+    .mm-ad-mid {
+        margin: 32px 0;
+        min-height: 60px;
+    }
+
+    .mm-ad-end {
+        margin: 28px 0 24px;
+        min-height: 60px;
+    }
+
+    .mm-ad-label {
+        font-size: 8px;
+    }
+}
+
+/* ── Exclusion guards: disclosure box must not be directly adjacent ── */
+.editorial-disclosure-box + .mm-ad-slot,
+.mm-ad-slot + .editorial-disclosure-box {
+    margin-top: 60px;
+}
