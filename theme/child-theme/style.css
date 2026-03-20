@@ -1,17 +1,16 @@
 /*
 Theme Name: Macromalt Child
 Template: generatepress
-Description: Macromalt 브랜드 테마. Step04 - Seasonal Layer Refinement 적용.
-Version: 1.5.0
+Description: Macromalt 브랜드 테마. Step04 - Seasonal Layer Refinement 적용 [Merged].
+Version: 1.5.5
 */
 
 /* 
- * ─── 스타일 레이어 임포트 (배포용 경로) ──────────────────────────────────
+ * ─── 스타일 레이어 임포트 [배포용 경로] ──────────────────────────────────
  */
 @import url("styles/base.css");
 @import url("styles/typography.css");
 @import url("styles/components.css");
-@import url("styles/seasonal.css");
 @import url("styles/seo-ads.css");
 
 /*
@@ -27,7 +26,7 @@ body {
   background-color: var(--mm-bg);
 }
 
-/* 2. 에디토리얼 마스트헤드 (Homepage Hero Only) */
+/* 2. 에디토리얼 마스트헤드 [Homepage Hero Only] */
 .editorial-masthead {
   padding: 80px 0;
   text-align: center;
