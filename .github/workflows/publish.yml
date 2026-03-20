@@ -1,0 +1,86 @@
+name: macromalt Daily Publish
+
+# ─────────────────────────────────────────────────────────────
+# 스케줄 — KST / UTC 대응
+#   KST 08:17  =  UTC 23:17 (전일)  →  cron: '17 23 * * *'
+#   KST 14:17  =  UTC 05:17         →  cron: '17 5  * * *'
+#   KST 20:17  =  UTC 11:17         →  cron: '17 11 * * *'
+# ─────────────────────────────────────────────────────────────
+on:
+  schedule:
+    - cron: '17 23 * * *'   # KST 08:17 (아침 슬롯)
+    - cron: '17 5  * * *'   # KST 14:17 (오후 슬롯)
+    - cron: '17 11 * * *'   # KST 20:17 (저녁 슬롯)
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: '수동 실행 사유 (예: 긴급 발행, 재시도)'
+        required: false
+        default: 'manual trigger'
+
+# 동시 실행 방지 — 이전 run이 끝나야 다음 run 시작
+concurrency:
+  group: macromalt-publish
+  cancel-in-progress: false
+
+# 최소 권한: 읽기 전용 (repo commit 없음)
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish Post1 + Post2
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      # ── 1. 코드 체크아웃 ────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python 환경 설정 ─────────────────────────────────
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      # ── 3. 의존성 설치 ──────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. 로그 디렉토리 준비 ──────────────────────────────
+      - name: Prepare log directory
+        run: mkdir -p logs
+
+      # ── 5. 발행 파이프라인 실행 ─────────────────────────────
+      - name: Run publish pipeline
+        env:
+          # ── Secrets (민감 정보) ──────────────────────────────
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          WORDPRESS_SITE_URL:    ${{ secrets.WORDPRESS_SITE_URL }}
+          WORDPRESS_USERNAME:    ${{ secrets.WORDPRESS_USERNAME }}
+          WORDPRESS_PASSWORD:    ${{ secrets.WORDPRESS_PASSWORD }}
+          WP_CATEGORY_ANALYSIS:  ${{ secrets.WP_CATEGORY_ANALYSIS }}
+          WP_CATEGORY_PICKS:     ${{ secrets.WP_CATEGORY_PICKS }}
+          WP_CATEGORY_DEFAULT:   ${{ secrets.WP_CATEGORY_DEFAULT }}
+          DART_API_KEY:          ${{ secrets.DART_API_KEY }}
+          HANKYUNG_USERNAME:     ${{ secrets.HANKYUNG_USERNAME }}
+          HANKYUNG_PASSWORD:     ${{ secrets.HANKYUNG_PASSWORD }}
+          # ── Variables (비민감 설정) ───────────────────────────
+          TIMEZONE:              ${{ vars.TIMEZONE || 'Asia/Seoul' }}
+          SCRAPE_INTERVAL_MINUTES: ${{ vars.SCRAPE_INTERVAL_MINUTES || '60' }}
+        run: python scripts/publish_daily.py
+
+      # ── 6. 로그 artifact 업로드 (항상 실행) ────────────────
+      - name: Upload logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-log-${{ github.run_id }}
+          path: |
+            logs/macromalt_daily.log
+            logs/publish_result.jsonl
+          retention-days: 14
+          if-no-files-found: warn

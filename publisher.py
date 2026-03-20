@@ -58,8 +58,20 @@ def _strip_leading_h1(content: str) -> str:
     WordPress 발행 전 content에서 맨 앞 <h1> 태그를 제거합니다.
     WordPress가 title 필드를 별도로 렌더링하므로 content에 h1이 있으면
     제목이 페이지에 두 번 출력됩니다. 발행 단계에서만 제거합니다.
+
+    Phase 19 BUG-POST2-TITLE-DUP-20260320 수정:
+    _P14_ANALYTICAL_SPINE_ENFORCEMENT 프롬프트로 인해 GPT가 <h1> 앞에
+    <!-- SPINE: ... --> HTML 주석을 삽입한다. 기존 regex(^\s*<h1...)는 이
+    주석 선행 시 매칭 실패 → <h1> 미제거 → 제목 2회 출력 버그 발생.
+    regex를 확장해 선행 HTML 주석 0개 이상을 건너뛰고 <h1>을 탐지한다.
     """
-    return re.sub(r"^\s*<h1[^>]*>.*?</h1>\s*", "", content, count=1, flags=re.DOTALL)
+    return re.sub(
+        r"^\s*(<!--.*?-->\s*)*<h1[^>]*>.*?</h1>\s*",
+        "",
+        content,
+        count=1,
+        flags=re.DOTALL,
+    )
 
 
 def publish_draft(title: str, content: str, category_ids: list = None) -> dict:

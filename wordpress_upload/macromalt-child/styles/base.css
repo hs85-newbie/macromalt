@@ -1,0 +1,59 @@
+/**
+ * styles/wordpress/base.css
+ * Step02 - Global Shell & IA Refinement
+ */
+
+/* 1. Shell Containers */
+.editorial-masthead .grid-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 40px;
+}
+
+/* 2. Rule Lines & Borders */
+.site-header {
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.editorial-masthead {
+  border-top: 2px solid var(--color-ink);
+  border-bottom: 1px solid var(--color-ink);
+  margin-top: -1px; /* Align with header border */
+}
+
+/* 3. Mobile Header Compacting (LOCKED) */
+@media (max-width: 768px) {
+  .site-header {
+    padding: 15px 0 !important;
+  }
+  
+  .navigation-branding img {
+    height: 30px;
+    width: auto;
+  }
+  
+  .main-navigation .menu-toggle {
+    line-height: 40px;
+    font-size: 14px;
+    padding: 0 15px;
+  }
+  
+  .separate-containers .inside-article {
+    padding: 25px 20px !important;
+  }
+  
+  .editorial-masthead .grid-container {
+    padding: 0 20px;
+  }
+}
+
+/* 4. Layout Rhythm */
+.site-content {
+  margin-top: 40px;
+}
+
+@media (max-width: 768px) {
+  .site-content {
+    margin-top: 20px;
+  }
+}

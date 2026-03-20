@@ -1,0 +1,142 @@
+/**
+ * styles/wordpress/components.css
+ * Step02 - Global Shell & IA Refinement
+ */
+
+/* 1. IA Shell Meta (Breadcrumbs / Category Badges) */
+.editorial-shell-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.shell-badge {
+  background-color: var(--color-ink);
+  color: #fff;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 2px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* 2. Homepage Section Overrides */
+/* 
+ * GP에서 최근글 목록 상단에 'Strategic Briefings'와 같은 
+ * 문구를 훅으로 추가할 경우 적용 
+ */
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border-bottom: 2px solid var(--color-ink);
+  display: inline-block;
+  margin-bottom: 30px;
+  padding-bottom: 5px;
+}
+
+/* 3. Featured Images & Thumbnails */
+.post-image img {
+  border: 1px solid var(--color-rule);
+}
+
+/* 4. Archive Post Rhythm & Metadata */
+.archive .inside-article,
+.search-results .inside-article {
+  border-bottom: 1px solid var(--color-rule);
+  padding-bottom: 30px !important;
+  margin-bottom: 30px !important;
+}
+
+.archive .inside-article:last-child,
+.search-results .inside-article:last-child {
+  border-bottom: none;
+}
+
+.entry-meta {
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 15px;
+}
+
+/* 5. Disclosure & Methodology Box */
+.editorial-disclosure-box {
+  background-color: #f8f9fa;
+  border: 1px solid var(--color-rule);
+  padding: 20px 25px;
+  margin-bottom: 40px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.disclosure-heading {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-ink);
+  display: block;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+/* 6. Utility Elements: Read More & Pagination */
+.read-more {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.read-more:hover {
+  text-decoration: underline;
+}
+
+.nav-links {
+  border-top: 1px solid var(--color-rule);
+  padding-top: 30px;
+  margin-top: 30px;
+}
+
+.page-numbers {
+  padding: 5px 10px;
+  font-size: 13px;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.page-numbers.current {
+  font-weight: 700;
+  background: none;
+  border-bottom: 2px solid var(--color-ink);
+}
+
+/* 7. Footer & Search Search Labels */
+.footer-trust-layer {
+  font-size: 10px;
+  color: #888;
+  margin-top: 20px;
+  border-top: 1px solid var(--color-rule);
+  padding-top: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.search-results-label {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 40px;
+  border-bottom: 2px solid var(--color-ink);
+  display: inline-block;
+  padding-bottom: 5px;
+}

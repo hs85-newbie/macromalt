@@ -5379,6 +5379,90 @@ def _classify_parse_failed(raw: str, normalized: Optional[str] = None) -> str:
     return "TYPE_UNKNOWN"
 
 
+def _calc_quality_pass_fields(content: str) -> dict:
+    """Phase 19: 품질 pass 필드 4종을 계산해 dict로 반환한다.
+
+    PARSE_FAILED 경로 / 정상 발행 경로 양쪽에서 동일 정의로 사용한다.
+    bool 값과 계산 기준이 두 경로 간에 항상 일치하도록 이 함수를 단일 진실 소스로 유지한다.
+
+    반환 키:
+        opener_pass          — pick-angle H3 패턴 존재 + 금지 opener 6종 미포함
+        criteria_1_pass      — 시점 혼합 금지 간이 판정 PASS (간이 지표)
+        criteria_5_pass      — 권유성 표현 6종 미포함
+        source_structure_pass — 참고 출처 블록 존재 여부
+    """
+    _raw = content or ""
+
+    # opener_pass: pick-angle H3 패턴 존재 + 금지 opener 6종 미포함
+    _opener_banned = [
+        "오늘 이 테마를 보는 이유", "최근 거시 환경을 먼저 보면",
+        "이번 시장 변수는", "최근 투자 환경을 보면",
+        "현재 시장의 관심은", "현 시점에서 주목해야 할 것은",
+    ]
+    _has_pick_angle = bool(re.search(r"왜\s+지금\s+\S+인가|을\s+먼저\s+봐야\s+하는\s+이유", _raw))
+    _has_banned_opener = any(p in _raw for p in _opener_banned)
+    opener_pass: bool = _has_pick_angle and not _has_banned_opener
+
+    # criteria_5_pass (권유성 표현 부재): 기준5 금지 표현 미포함 여부
+    _criteria5_banned = ["매수", "유망", "담아야", "사야", "투자 추천", "강력 추천"]
+    criteria_5_pass: bool = not any(p in _raw for p in _criteria5_banned)
+
+    # criteria_1_pass (시점 혼합 금지 간이 판정): 30일 초과 연월 단독 언급 미포함 여부
+    # 간이 지표: "지난해" / "작년" / "전년" 이 거시 배경 근거로 단독 등장하지 않으면 PASS
+    # NOTE: 정밀 판정은 verifier가 담당 — 여기서는 간이 기록용
+    _criteria1_risk = bool(re.search(r"지난\s*해|작년|전년\s*동기", _raw))
+    criteria_1_pass: bool = not _criteria1_risk
+
+    # source_structure_pass: 참고 출처 블록 존재 여부
+    _source_markers = ["참고 출처", "📊", "증권사 리서치", "뉴스 기사"]
+    source_structure_pass: bool = any(m in _raw for m in _source_markers)
+
+    return {
+        "opener_pass":           opener_pass,
+        "criteria_1_pass":       criteria_1_pass,
+        "criteria_5_pass":       criteria_5_pass,
+        "source_structure_pass": source_structure_pass,
+    }
+
+
+def _log_normal_publish_event(
+    *,
+    run_id: str,
+    slot: str,
+    post_type: str,
+    content: str,
+    final_status: str,
+    public_url: str,
+) -> dict:
+    """Phase 19: 정상 발행 경로 품질 필드 로그.
+
+    PARSE_FAILED 경로(_log_parse_failed_event)와 동일한 4개 pass 필드를
+    정상 발행 시에도 운영 로그에 직접 남긴다.
+    필드 정의는 _calc_quality_pass_fields()로 통일된다.
+    """
+    qf = _calc_quality_pass_fields(content)
+    log_entry = {
+        "run_id":                run_id,
+        "slot":                  slot,
+        "post_type":             post_type,
+        "final_status":          final_status,
+        "public_url":            public_url,
+        "opener_pass":           qf["opener_pass"],
+        "criteria_1_pass":       qf["criteria_1_pass"],
+        "criteria_5_pass":       qf["criteria_5_pass"],
+        "source_structure_pass": qf["source_structure_pass"],
+    }
+    logger.info(
+        f"[Phase 19] 정상발행 품질로그 | run_id={run_id} | slot={slot} | "
+        f"post_type={post_type} | final_status={final_status} | "
+        f"opener_pass={qf['opener_pass']} | criteria_1_pass={qf['criteria_1_pass']} | "
+        f"criteria_5_pass={qf['criteria_5_pass']} | "
+        f"source_structure_pass={qf['source_structure_pass']} | "
+        f"public_url={public_url}"
+    )
+    return log_entry
+
+
 def _log_parse_failed_event(
     *,
     run_id: str,
@@ -5393,43 +5477,80 @@ def _log_parse_failed_event(
 ) -> dict:
     """Phase 17: PARSE_FAILED 런타임 이벤트를 구조화된 필드로 기록한다.
 
+    Phase 19 보강:
+    - picks_section_offset: PICKS 주석 구간의 문자 오프셋 (TYPE_D 정밀 분석용)
+    - opener_pass / criteria_1_pass / criteria_5_pass / source_structure_pass:
+      _calc_quality_pass_fields()로 계산 — 정상 발행 경로와 동일 정의 유지.
+
     반환: 로그 딕셔너리 (감사 / 관측 목적)
     필수 필드: run_id / slot / post_type / failure_type / parse_stage /
               failed_section_name / raw_output_snapshot / normalized_output_snapshot /
               fallback_used / publish_blocked
+    권장 필드(Phase 19): picks_section_offset / opener_pass /
+                         criteria_1_pass / criteria_5_pass / source_structure_pass
     """
     failure_type = _classify_parse_failed(raw_output, normalized_output)
     raw_snap   = (raw_output or "")[:500]
     norm_snap  = (normalized_output or "")[:500]
 
+    # ── Phase 19 T1-2: PICKS 구간 offset 탐지 ────────────────────────────
+    _picks_markers = ["<!-- PICKS:", "<!-- picks:", "<!-- PICKS -->",
+                      "<!-- picks -->", "PICKS:", "picks:"]
+    picks_section_offset: int = -1
+    for _marker in _picks_markers:
+        _pos = (raw_output or "").find(_marker)
+        if _pos >= 0:
+            picks_section_offset = _pos
+            break
+
+    # ── Phase 19 T1-3: 권장 필드 4종 — 공통 헬퍼로 계산 (정상 경로와 동일 정의) ──
+    qf = _calc_quality_pass_fields(raw_output or "")
+    opener_pass           = qf["opener_pass"]
+    criteria_1_pass       = qf["criteria_1_pass"]
+    criteria_5_pass       = qf["criteria_5_pass"]
+    source_structure_pass = qf["source_structure_pass"]
+
     log_entry = {
-        "run_id":                    run_id,
-        "slot":                      slot,
-        "post_type":                 post_type,
-        "failure_type":              failure_type,
-        "parse_stage":               parse_stage,
-        "failed_section_name":       failed_section_name,
-        "raw_output_snapshot":       raw_snap,
+        # ── 필수 10필드 (Phase 17) ──────────────────────────────────────
+        "run_id":                     run_id,
+        "slot":                       slot,
+        "post_type":                  post_type,
+        "failure_type":               failure_type,
+        "parse_stage":                parse_stage,
+        "failed_section_name":        failed_section_name,
+        "raw_output_snapshot":        raw_snap,
         "normalized_output_snapshot": norm_snap,
-        "fallback_used":             fallback_used,
-        "publish_blocked":           publish_blocked,
+        "fallback_used":              fallback_used,
+        "publish_blocked":            publish_blocked,
+        # ── 권장 필드 (Phase 19) ────────────────────────────────────────
+        "picks_section_offset":       picks_section_offset,
+        "opener_pass":                opener_pass,
+        "criteria_1_pass":            criteria_1_pass,
+        "criteria_5_pass":            criteria_5_pass,
+        "source_structure_pass":      source_structure_pass,
     }
 
     logger.warning(
-        f"[Phase 17] PARSE_FAILED 런타임 이벤트 | run_id={run_id} | slot={slot} | "
+        f"[Phase 19] PARSE_FAILED 런타임 이벤트 | run_id={run_id} | slot={slot} | "
         f"post_type={post_type} | failure_type={failure_type} | "
         f"parse_stage={parse_stage} | failed_section={failed_section_name or '(unknown)'} | "
-        f"fallback_used={fallback_used} | publish_blocked={publish_blocked}"
+        f"fallback_used={fallback_used} | publish_blocked={publish_blocked} | "
+        f"picks_offset={picks_section_offset} | opener_pass={opener_pass} | "
+        f"criteria_1_pass={criteria_1_pass} | criteria_5_pass={criteria_5_pass} | "
+        f"source_structure_pass={source_structure_pass}"
     )
-    logger.debug(f"[Phase 17] raw_snapshot: {raw_snap!r}")
+    logger.debug(f"[Phase 19] raw_snapshot: {raw_snap!r}")
     if norm_snap:
-        logger.debug(f"[Phase 17] normalized_snapshot: {norm_snap!r}")
+        logger.debug(f"[Phase 19] normalized_snapshot: {norm_snap!r}")
     return log_entry
 
 
-def verify_draft(draft: str) -> dict:
+def verify_draft(draft: str, *, slot: str = "unknown", post_type: str = "unknown") -> dict:
     """
     Step 3: Gemini 검수 엔진 (2단계 분리 방식).
+
+    Phase 19 T1-1: slot / post_type 파라미터 추가.
+    PARSE_FAILED 발생 시 _log_parse_failed_event()에 정상 값을 전달한다.
 
     Step 3a — 검수: pass/issues만 담은 소형 JSON 반환 (HTML 미포함)
     Step 3b — 수정: pass=false일 때 별도 호출로 HTML만 직접 출력 (JSON 래핑 없음)
@@ -5453,11 +5574,12 @@ def verify_draft(draft: str) -> dict:
             "— Gemini 응답이 JSON으로 파싱 불가 → 검수 단계 skip, GPT 초안 원본 발행 경로. "
             "FAILED_NO_REVISION과 달리 수정 시도 없이 즉시 통과 처리."
         )
-        # Phase 17: 구조화된 PARSE_FAILED 런타임 로그 기록
+        # Phase 17/19: 구조화된 PARSE_FAILED 런타임 로그 기록
+        # Phase 19 T1-1: slot/post_type을 verify_draft() 파라미터로 수신하여 전달
         _log_parse_failed_event(
             run_id=datetime.now().strftime("%Y%m%d_%H%M%S"),
-            slot="unknown",
-            post_type="unknown",
+            slot=slot,
+            post_type=post_type,
             raw_output=raw or "",
             parse_stage="Step3:verifier:json_parse",
             failed_section_name="verifier_response",
@@ -5636,8 +5758,9 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     _postprocess_density_check(draft, label="Post1")
 
     # ── Step 3: Gemini 팩트체크 + 수정 ────────────────────────────────────
+    # Phase 19 T1-1: slot / post_type 전달 (PARSE_FAILED 로그 보강)
     draft_len = len(draft)
-    verify_result = verify_draft(draft)
+    verify_result = verify_draft(draft, slot=slot, post_type="post1")
     _p1_step3_status = verify_result.get("step3_status", "PASS")  # Phase 16B
     if not verify_result["pass"] and verify_result.get("revised_content"):
         logger.info("Step3 검수 실패 — 수정본 채택")
@@ -5887,8 +6010,9 @@ def generate_stock_picks_report(
     _postprocess_density_check(draft, label="Post2")
 
     # ── Step 3: Gemini 팩트체크 + 수정 ────────────────────────────────────
+    # Phase 19 T1-1: slot / post_type 전달 (PARSE_FAILED 로그 보강)
     post2_draft_len = len(draft)
-    verify_result = verify_draft(draft)
+    verify_result = verify_draft(draft, slot=slot, post_type="post2")
     _p2_step3_status = verify_result.get("step3_status", "PASS")  # Phase 16B
     if not verify_result["pass"] and verify_result.get("revised_content"):
         logger.info("Post2 Step3 검수 실패 — 수정본 채택")

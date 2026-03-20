@@ -1,0 +1,143 @@
+/*
+Theme Name: Macromalt Child
+Template: generatepress
+Description: Macromalt 브랜드 테마. Step02 - Global Shell & IA Refinement 적용.
+Version: 1.4.0
+*/
+
+/* 
+ * ─── 스타일 레이어 임포트 (배포용 경로) ──────────────────────────────────
+ */
+@import url("styles/base.css");
+@import url("styles/typography.css");
+@import url("styles/components.css");
+
+/*
+ * ─── Step02: Global Shell & Masthead Stylings ───────────────────────────
+ */
+
+/* 1. 브랜드 배경색 및 기본 레이아웃 */
+body {
+  background-color: var(--color-bg-page) !important;
+}
+
+#page {
+  background-color: var(--color-bg-page);
+}
+
+/* 2. 에디토리얼 마스트헤드 (Homepage Hero Only) */
+.editorial-masthead {
+  padding: 80px 0;
+  text-align: center;
+  border-top: 2px solid var(--color-ink);
+  border-bottom: 1px solid var(--color-ink);
+  margin-bottom: 60px;
+  background-color: var(--color-bg-page);
+}
+
+.masthead-title {
+  font-family: var(--font-heading);
+  font-size: 84px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  margin: 0;
+  line-height: 1;
+  color: var(--color-ink);
+  text-transform: uppercase;
+}
+
+.masthead-tagline {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  margin-top: 20px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+}
+
+/* 3. 글로벌 헤더 & 내비게이션 (Fixed IA Style) */
+.site-header {
+  padding: 30px 0;
+  background-color: var(--color-bg-page);
+}
+
+/* 데스크탑 메뉴 간격 및 스타일 */
+.main-navigation .main-nav ul li a {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 0 25px;
+  color: var(--color-muted) !important;
+}
+
+.main-navigation .main-nav ul li:hover > a,
+.main-navigation .main-nav ul li.current-menu-item > a {
+  color: var(--color-ink) !important;
+}
+
+/* 4. 아카이브/포스트 브레드크럼 (IA Layer) */
+.editorial-shell-meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 30px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-muted);
+}
+
+.shell-badge {
+  color: var(--color-accent);
+  margin-right: 8px;
+}
+
+/* 5. 모바일 쉘 최적화 (Compact Header) */
+@media (max-width: 768px) {
+  .site-header {
+    padding: 15px 0;
+  }
+  
+  .masthead-title {
+    font-size: 48px;
+  }
+  
+  .masthead-tagline {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+  }
+  
+  .editorial-masthead {
+    padding: 40px 0;
+    margin-bottom: 30px;
+  }
+}
+
+/* 6. 푸터 정돈 (Step01 유지 및 강화) */
+.site-info {
+  border-top: 1px solid var(--color-ink);
+  padding: 60px 0;
+  background-color: var(--color-bg-page);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.site-info::before {
+  content: "MACROMALT INSTITUTIONAL RESEARCH";
+  display: block;
+  font-weight: 800;
+  font-size: 13px;
+  margin-bottom: 12px;
+  color: var(--color-ink);
+}
+
+.copyright-bar {
+  display: none !important;
+}

@@ -1,0 +1,136 @@
+/**
+ * styles/wordpress/seasonal.css
+ * Step04 - Seasonal Layer Token Matrix
+ */
+
+/* 01. January - Frost */
+.mm-season-jan {
+  --mm-bg: #FBFCFF;
+  --mm-bg-alt: #F5F7FA;
+  --mm-rule: #E0E3EB;
+  --mm-ink-soft: #667085;
+  --mm-accent: #2D4B75;
+  --mm-badge-bg: #E8EDF5;
+  --mm-badge-text: #1D2D45;
+}
+
+/* 02. February - Ash */
+.mm-season-feb {
+  --mm-bg: #F8F8F9;
+  --mm-bg-alt: #F2F2F3;
+  --mm-rule: #DEDFE0;
+  --mm-ink-soft: #707070;
+  --mm-accent: #4A4A4A;
+  --mm-badge-bg: #ECECED;
+  --mm-badge-text: #222222;
+}
+
+/* 03. March - Thaw */
+.mm-season-mar {
+  --mm-bg: #FCFAF8;
+  --mm-bg-alt: #F7F2ED;
+  --mm-rule: #EDE2D9;
+  --mm-ink-soft: #8C7B6D;
+  --mm-accent: #8C6D51;
+  --mm-badge-bg: #F5EBE4;
+  --mm-badge-text: #4D3A2B;
+}
+
+/* 04. April - Mist */
+.mm-season-apr {
+  --mm-bg: #F7FAF9;
+  --mm-bg-alt: #F0F5F2;
+  --mm-rule: #D9E5E1;
+  --mm-ink-soft: #66857A;
+  --mm-accent: #4D756A;
+  --mm-badge-bg: #E6F0EE;
+  --mm-badge-text: #2B403A;
+}
+
+/* 05. May - Sage */
+.mm-season-may {
+  --mm-bg: #F9FAF7;
+  --mm-bg-alt: #F2F5ED;
+  --mm-rule: #E1E5D9;
+  --mm-ink-soft: #7A8566;
+  --mm-accent: #6A754D;
+  --mm-badge-bg: #EFF2E9;
+  --mm-badge-text: #3A402B;
+}
+
+/* 06. June - Haze */
+.mm-season-jun {
+  --mm-bg: #FFFBF8;
+  --mm-bg-alt: #FAF5F0;
+  --mm-rule: #EBE0D5;
+  --mm-ink-soft: #8C7D6D;
+  --mm-accent: #8C5E3D;
+  --mm-badge-bg: #F7EFE9;
+  --mm-badge-text: #4D3321;
+}
+
+/* 07. July - Storm */
+.mm-season-jul {
+  --mm-bg: #F6F7F9;
+  --mm-bg-alt: #F0F1F5;
+  --mm-rule: #D5DAE1;
+  --mm-ink-soft: #667085;
+  --mm-accent: #3D5475;
+  --mm-badge-bg: #E9EDF2;
+  --mm-badge-text: #212D40;
+}
+
+/* 08. August - Amber */
+.mm-season-aug {
+  --mm-bg: #FAF9F7;
+  --mm-bg-alt: #F5F2ED;
+  --mm-rule: #E6E1D9;
+  --mm-ink-soft: #857A66;
+  --mm-accent: #755E3D;
+  --mm-badge-bg: #F2F0E9;
+  --mm-badge-text: #403A2B;
+}
+
+/* 09. September - Harvest */
+.mm-season-sep {
+  --mm-bg: #FBF9F5;
+  --mm-bg-alt: #F5F0E9;
+  --mm-rule: #E1DCCF;
+  --mm-ink-soft: #857A66;
+  --mm-accent: #756A3D;
+  --mm-badge-bg: #F2EEE4;
+  --mm-badge-text: #403A21;
+}
+
+/* 10. October - Oak */
+.mm-season-oct {
+  --mm-bg: #F9F7F5;
+  --mm-bg-alt: #F2EFEC;
+  --mm-rule: #E3D8CE;
+  --mm-ink-soft: #857066;
+  --mm-accent: #754D2D;
+  --mm-badge-bg: #F2E9E1;
+  --mm-badge-text: #402B1D;
+}
+
+/* 11. November - Smoke */
+.mm-season-nov {
+  --mm-bg: #F7F7F7;
+  --mm-bg-alt: #F2F2F2;
+  --mm-rule: #D9D9D9;
+  --mm-ink-soft: #707070;
+  --mm-accent: #4A4A4A;
+  --mm-badge-bg: #EEEEEE;
+  --mm-badge-text: #222222;
+}
+
+/* 12. December - Velvet */
+.mm-season-dec {
+  --mm-bg: #F6F5F7;
+  --mm-bg-alt: #F1F0F2;
+  --mm-rule: #DED9E1;
+  --mm-ink-soft: #706685;
+  --mm-accent: #5E3D75;
+  --mm-badge-bg: #EEE9F2;
+  --mm-badge-text: #332140;
+}

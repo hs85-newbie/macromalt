@@ -1,35 +1,144 @@
 /*
 Theme Name: Macromalt Child
-Template: (부모 테마 이름으로 교체 필요 — 예: twentytwentyfour)
-Description: Macromalt 브랜드 테마. 스타일 분리 트랙 Pre-Phase 17 기준.
-Version: 0.1.0
-
-브랜드 방향:
-  premium financial editorial · restrained luxury
-  calm & intelligent · typography-first · mobile readable
-  generic news portal 느낌 금지 / retail trading app 느낌 금지
-
-이 파일은 WordPress child-theme 진입점이다.
-- 스타일 토큰: styles/tokens.py (Python) → styles/wordpress/base.css (CSS 변수)
-- 타이포그래피: styles/wordpress/typography.css
-- 컴포넌트:     styles/wordpress/components.css
-
-Antigravity 작업 범위:
-  이 파일 + styles/wordpress/*.css 에서만 작업한다.
-  generator.py 는 건드리지 않는다.
-
-TODO (Antigravity):
-  - 부모 테마 이름 확인 후 Template 필드 교체
-  - single post view 타이포그래피 hierarchy 조정
-  - section spacing / block rhythm 정리
-  - source/reference block 가독성 개선
-  - archive / category / mobile view 통일
+Template: generatepress
+Description: Macromalt 브랜드 테마. Step04 - Seasonal Layer Refinement 적용.
+Version: 1.5.0
 */
 
-@import url("../../styles/wordpress/typography.css");
-@import url("../../styles/wordpress/components.css");
+/* 
+ * ─── 스타일 레이어 임포트 (배포용 경로) ──────────────────────────────────
+ */
+@import url("styles/base.css");
+@import url("styles/typography.css");
+@import url("styles/components.css");
+@import url("styles/seasonal.css");
 
 /*
- * ─── 커스텀 오버라이드 (Antigravity 작업 영역) ──────────────────────────────
- * 아래에 사이트별 오버라이드를 추가하세요.
+ * ─── Step02: Global Shell & Masthead Stylings ───────────────────────────
  */
+
+/* 1. 브랜드 배경색 및 기본 레이아웃 */
+body {
+  background-color: var(--mm-bg) !important;
+}
+
+#page {
+  background-color: var(--mm-bg);
+}
+
+/* 2. 에디토리얼 마스트헤드 (Homepage Hero Only) */
+.editorial-masthead {
+  padding: 80px 0;
+  text-align: center;
+  border-top: 2px solid var(--mm-accent);
+  border-bottom: 1px solid var(--mm-accent);
+  margin-bottom: 60px;
+  background-color: var(--mm-bg);
+}
+
+.masthead-title {
+  font-family: var(--font-heading);
+  font-size: 84px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  margin: 0;
+  line-height: 1;
+  color: var(--mm-accent);
+  text-transform: uppercase;
+}
+
+.masthead-tagline {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  margin-top: 20px;
+  color: var(--mm-ink-soft);
+  text-transform: uppercase;
+}
+
+/* 3. 글로벌 헤더 & 내비게이션 (Fixed IA Style) */
+.site-header {
+  padding: 30px 0;
+  background-color: var(--mm-bg);
+}
+
+/* 데스크탑 메뉴 간격 및 스타일 */
+.main-navigation .main-nav ul li a {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 0 25px;
+  color: var(--mm-ink-soft) !important;
+}
+
+.main-navigation .main-nav ul li:hover > a,
+.main-navigation .main-nav ul li.current-menu-item > a {
+  color: var(--mm-accent) !important;
+}
+
+/* 4. 아카이브/포스트 브레드크럼 (IA Layer) */
+.editorial-shell-meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 30px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--mm-rule);
+  color: var(--mm-ink-soft);
+}
+
+.shell-badge {
+  color: var(--mm-accent);
+  margin-right: 8px;
+}
+
+/* 5. 모바일 쉘 최적화 (Compact Header) */
+@media (max-width: 768px) {
+  .site-header {
+    padding: 15px 0;
+  }
+  
+  .masthead-title {
+    font-size: 48px;
+  }
+  
+  .masthead-tagline {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+  }
+  
+  .editorial-masthead {
+    padding: 40px 0;
+    margin-bottom: 30px;
+  }
+}
+
+/* 6. 푸터 정돈 (Step01 유지 및 강화) */
+.site-info {
+  border-top: 1px solid var(--mm-accent);
+  padding: 60px 0;
+  background-color: var(--mm-bg);
+  color: var(--mm-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.site-info::before {
+  content: "MACROMALT INSTITUTIONAL RESEARCH";
+  display: block;
+  font-weight: 800;
+  font-size: 13px;
+  margin-bottom: 12px;
+  color: var(--mm-accent);
+}
+
+.copyright-bar {
+  display: none !important;
+}

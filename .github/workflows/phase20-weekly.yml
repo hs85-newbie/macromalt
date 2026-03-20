@@ -1,0 +1,67 @@
+name: macromalt Phase 20 Weekly Report
+
+# ─────────────────────────────────────────────────────────────
+# 스케줄
+#   일요일 KST 22:30  =  UTC 13:30  →  cron: '30 13 * * 0'
+# ─────────────────────────────────────────────────────────────
+on:
+  schedule:
+    - cron: '30 13 * * 0'   # 일요일 KST 22:30
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: '수동 실행 사유'
+        required: false
+        default: 'manual trigger'
+
+concurrency:
+  group: macromalt-phase20-weekly
+  cancel-in-progress: false
+
+# 최소 권한: 읽기 전용 (artifact 다운로드는 read로 가능)
+permissions:
+  contents: read
+  actions: read    # artifact 목록 조회 / 다운로드 필요
+
+jobs:
+  weekly-report:
+    name: Generate Phase 20 Weekly Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. 코드 체크아웃 ────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python 환경 설정 ─────────────────────────────────
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      # ── 3. 리포트 전용 의존성 설치 ─────────────────────────
+      - name: Install report dependencies
+        run: pip install requests python-dateutil
+
+      # ── 4. 출력 디렉토리 준비 ──────────────────────────────
+      - name: Prepare output directories
+        run: mkdir -p reports logs
+
+      # ── 5. 주간 리포트 생성 ─────────────────────────────────
+      - name: Generate weekly report
+        env:
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/phase20_weekly_report.py
+
+      # ── 6. 리포트 artifact 업로드 ───────────────────────────
+      - name: Upload weekly report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase20-weekly-report-${{ github.run_id }}
+          path: reports/REPORT_PHASE20_WEEKLY.md
+          retention-days: 90
+          if-no-files-found: warn

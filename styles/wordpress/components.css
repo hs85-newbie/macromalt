@@ -1,72 +1,145 @@
-/*
- * styles/wordpress/components.css — Macromalt 컴포넌트 레이어
- * Pre-Phase 17 스타일 분리 트랙
- *
- * 픽 박스, 참고 출처 박스, 분석 레이블 등 기능별 컴포넌트.
- * Antigravity 가 이 파일에서 badge / source block / picks box 를 시각적으로 정돈한다.
+/**
+ * styles/wordpress/components.css
+ * Step02 - Global Shell & IA Refinement
  */
 
-@import "base.css";
-
-/* ─── 픽 박스 (Post2 종목 섹션) ───────────────────────────────────────────── */
-.macromalt-picks-box {
-  padding: var(--padding-picks);
-  background-color: var(--color-bg-warm);
-  border-left: 5px solid var(--color-accent);
-  margin: var(--margin-picks-v) 0;
+/* 1. IA Shell Meta (Breadcrumbs / Category Badges) */
+.editorial-shell-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
-/* ─── 참고 출처 박스 ──────────────────────────────────────────────────────── */
-.macromalt-source-box {
-  background: var(--color-bg-source);
-  border-left: 4px solid var(--color-accent);
-  padding: var(--padding-source-box);
-  margin: var(--margin-source-top) 0 0 0;
-  border-radius: 0 4px 4px 0;
+.shell-badge {
+  background-color: var(--mm-badge-bg);
+  color: var(--mm-badge-text);
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 2px;
+  display: inline-block;
+  vertical-align: middle;
 }
 
-.macromalt-source-box h3 {
-  font-size: var(--font-size-small);
-  font-weight: var(--font-weight-strong);
-  color: var(--color-muted);
-  margin: 0 0 8px 0;
-  /* 소제목 H3 공통 스타일 오버라이드 */
-  border-left: none;
-  padding: 0;
-  background-color: transparent;
-}
-
-.macromalt-source-box .source-category {
-  font-size: var(--font-size-meta);
-  color: var(--color-subtle);
-  margin: 6px 0 2px 0;
-}
-
-.macromalt-source-box ul {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.macromalt-source-box li {
-  font-size: var(--font-size-small);
-  line-height: var(--line-height-list);
-  color: var(--color-muted);
-  margin: 2px 0;
-}
-
-/* ─── 분석 레이블 (인라인 텍스트 마커) ───────────────────────────────────── */
-/*
- * [심층분석], [캐시의 픽], [전망], [해석], [반론]
- * 현재는 텍스트로만 존재. Antigravity 가 badge 스타일로 정돈할 수 있다.
+/* 2. Homepage Section Overrides */
+/* 
+ * GP에서 최근글 목록 상단에 'Strategic Briefings'와 같은 
+ * 문구를 훅으로 추가할 경우 적용 
  */
-.macromalt-label-jeonmang {
-  /* [전망] 태그 */
-  color: var(--color-accent);
-  font-weight: var(--font-weight-strong);
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mm-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border-bottom: 2px solid var(--mm-accent);
+  display: inline-block;
+  margin-bottom: 30px;
+  padding-bottom: 5px;
 }
 
-.macromalt-label-haesuk {
-  /* [해석] 태그 */
-  color: var(--color-ink);
-  font-weight: var(--font-weight-strong);
+/* 3. Featured Images & Thumbnails */
+.post-image img {
+  border: 1px solid var(--mm-rule);
+}
+
+/* 4. Archive Post Rhythm & Metadata */
+.archive .inside-article,
+.search-results .inside-article {
+  border-bottom: 1px solid var(--mm-rule);
+  padding-bottom: 30px !important;
+  margin-bottom: 30px !important;
+}
+
+.archive .inside-article:last-child,
+.search-results .inside-article:last-child {
+  border-bottom: none;
+}
+
+.entry-meta {
+  font-size: 11px;
+  color: var(--mm-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 15px;
+}
+
+/* 5. Disclosure & Methodology Box */
+.editorial-disclosure-box {
+  background-color: var(--mm-bg-alt);
+  border: 1px solid var(--mm-rule);
+  padding: 20px 25px;
+  margin-bottom: 40px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.disclosure-heading {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mm-accent);
+  display: block;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+/* 6. Utility Elements: Read More & Pagination */
+.read-more {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--mm-accent);
+  text-decoration: none;
+}
+
+.read-more:hover {
+  text-decoration: underline;
+  opacity: 0.8;
+}
+
+.nav-links {
+  border-top: 1px solid var(--mm-rule);
+  padding-top: 30px;
+  margin-top: 30px;
+}
+
+.page-numbers {
+  padding: 5px 10px;
+  font-size: 13px;
+  color: var(--mm-ink-soft);
+  text-decoration: none;
+}
+
+.page-numbers.current {
+  font-weight: 700;
+  background: none;
+  border-bottom: 2px solid var(--mm-accent);
+  color: var(--mm-accent);
+}
+
+/* 7. Footer & Search Search Labels */
+.footer-trust-layer {
+  font-size: 10px;
+  color: var(--mm-ink-soft);
+  margin-top: 20px;
+  border-top: 1px solid var(--mm-rule);
+  padding-top: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.search-results-label {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 40px;
+  border-bottom: 2px solid var(--mm-accent);
+  display: inline-block;
+  padding-bottom: 5px;
+  color: var(--mm-accent);
 }

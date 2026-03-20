@@ -267,6 +267,32 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"⚠ 발행 이력 저장 실패 (비치명): {e}")
 
+    # ── Phase 19: 정상 발행 경로 품질 필드 로그 ────────────────────────
+    try:
+        from generator import _log_normal_publish_event
+        _final_status = "GO"  # 여기까지 도달하면 정상 발행 완료
+
+        if post1_result:
+            _log_normal_publish_event(
+                run_id=run_id,
+                slot=slot,
+                post_type="post1",
+                content=post1.get("content", ""),
+                final_status=_final_status,
+                public_url=post1_result.get("post_url", ""),
+            )
+        if post2_result:
+            _log_normal_publish_event(
+                run_id=run_id,
+                slot=slot,
+                post_type="post2",
+                content=post2.get("content", ""),
+                final_status=_final_status,
+                public_url=post2_result.get("post_url", ""),
+            )
+    except Exception as e:
+        logger.warning(f"⚠ Phase 19 정상발행 품질로그 실패 (비치명): {e}")
+
     # ── Phase 15E: Post1/Post2 역할 분리 + 해석 지성 + 신뢰성 + P14~15E 게이트 ─
     try:
         from generator import (
