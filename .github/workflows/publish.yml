@@ -32,7 +32,7 @@ jobs:
     name: Publish Post1 + Post2
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: 'Configure GitHub Actions'   # Environment secret SECRETS + variable VARIABLES 사용
+    environment: 'Configure GitHub Actions'
 
     steps:
       # ── 1. 코드 체크아웃 ────────────────────────────────────
@@ -50,15 +50,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. .env 파일 복원 ───────────────────────────────────
-      # ENV secret에 .env 파일 전체 내용이 저장되어 있음
-      # python-dotenv가 load_dotenv()로 이 파일을 자동 로드함
-      # ※ printf 방식 사용: echo "${{ ... }}" 직접 치환 시 $기호가
-      #   쉘 변수로 해석되어 API 키 값이 깨지는 문제 방지
-      - name: Restore .env from secret
+      # ── 4. .env 복원 + OS 환경변수 주입 (이중 방어) ─────────
+      # 방법 A: .env 파일 작성 → load_dotenv() 사용 코드 호환
+      # 방법 B: $GITHUB_ENV 주입 → OS env 직접 주입 (subprocess 포함 전체 상속)
+      # 두 방법을 동시 적용하여 어느 경로로도 키를 찾을 수 있게 함
+      - name: Restore .env and inject env vars
         env:
           ENV_CONTENT: ${{ secrets.SECRETS }}
-        run: printf '%s' "$ENV_CONTENT" > .env
+        run: |
+          # A: .env 파일 작성
+          printf '%s\n' "$ENV_CONTENT" > .env
+
+          # B: KEY=VALUE 형식의 줄만 추출 → $GITHUB_ENV 주입
+          # 주석(#) 및 빈 줄 제외, 값이 있는 줄만 대상
+          grep -E '^[A-Z_][A-Z0-9_]*=.+' .env >> $GITHUB_ENV || true
+
+          # 검증: 로드된 키 목록 출력 (값은 숨김)
+          echo "=== 로드된 환경변수 키 목록 ==="
+          grep -E '^[A-Z_][A-Z0-9_]*=.+' .env | cut -d= -f1 || echo "(없음)"
+          echo "================================"
 
       # ── 5. 로그 디렉토리 준비 ──────────────────────────────
       - name: Prepare log directory
