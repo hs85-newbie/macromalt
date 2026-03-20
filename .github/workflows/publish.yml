@@ -32,7 +32,7 @@ jobs:
     name: Publish Post1 + Post2
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: 'Configure .env'   # Environment secret ENV + variable VARIABLES2 사용
+    environment: 'Configure GitHub Actions'   # Environment secret SECRETS + variable VARIABLES 사용
 
     steps:
       # ── 1. 코드 체크아웃 ────────────────────────────────────
@@ -57,7 +57,7 @@ jobs:
       #   쉘 변수로 해석되어 API 키 값이 깨지는 문제 방지
       - name: Restore .env from secret
         env:
-          ENV_CONTENT: ${{ secrets.ENV }}
+          ENV_CONTENT: ${{ secrets.SECRETS }}
         run: printf '%s' "$ENV_CONTENT" > .env
 
       # ── 5. 로그 디렉토리 준비 ──────────────────────────────
