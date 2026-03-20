@@ -50,35 +50,54 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. .env 복원 + OS 환경변수 주입 (이중 방어) ─────────
-      # 방법 A: .env 파일 작성 → load_dotenv() 사용 코드 호환
-      # 방법 B: $GITHUB_ENV 주입 → OS env 직접 주입 (subprocess 포함 전체 상속)
-      # 두 방법을 동시 적용하여 어느 경로로도 키를 찾을 수 있게 함
-      - name: Restore .env and inject env vars
+      # ── 4. SECRETS → .env 파일 + $GITHUB_ENV 이중 주입 ────────
+      # 방법 A: .env 파일 작성 → load_dotenv() 호환
+      # 방법 B: $GITHUB_ENV 주입 → OS env 직접 상속 (subprocess 포함)
+      - name: Inject secrets into environment
         env:
           ENV_CONTENT: ${{ secrets.SECRETS }}
         run: |
           # A: .env 파일 작성
           printf '%s\n' "$ENV_CONTENT" > .env
 
-          # B: KEY=VALUE 형식의 줄만 추출 → $GITHUB_ENV 주입
-          # 주석(#) 및 빈 줄 제외, 값이 있는 줄만 대상
+          # B: KEY=VALUE 형식 줄만 추출 → $GITHUB_ENV 주입 (주석/빈 줄 제외)
           grep -E '^[A-Z_][A-Z0-9_]*=.+' .env >> $GITHUB_ENV || true
 
-          # 검증: 로드된 키 목록 출력 (값은 숨김)
-          echo "=== 로드된 환경변수 키 목록 ==="
+          # 검증: 로드된 키 목록 출력 (값 비노출)
+          echo "=== SECRETS 로드된 키 ==="
           grep -E '^[A-Z_][A-Z0-9_]*=.+' .env | cut -d= -f1 || echo "(없음)"
-          echo "================================"
+          echo "========================="
 
-      # ── 5. 로그 디렉토리 준비 ──────────────────────────────
+      # ── 5. VARIABLES → $GITHUB_ENV 주입 ────────────────────
+      # vars context는 자동으로 OS 환경변수가 되지 않으므로 명시적 전달 필요
+      # VARIABLES 값이 dotenv 포맷(KEY=VALUE 멀티라인)이면 SECRETS와 동일 방식으로 파싱
+      - name: Inject variables into environment
+        env:
+          VARS_CONTENT: ${{ vars.VARIABLES }}
+        run: |
+          if [ -n "$VARS_CONTENT" ]; then
+            printf '%s\n' "$VARS_CONTENT" > .vars_tmp
+            grep -E '^[A-Z_][A-Z0-9_]*=.+' .vars_tmp >> $GITHUB_ENV || true
+            echo "=== VARIABLES 로드된 키 ==="
+            grep -E '^[A-Z_][A-Z0-9_]*=.+' .vars_tmp | cut -d= -f1 || echo "(없음)"
+            echo "=========================="
+            rm -f .vars_tmp
+          else
+            echo "[WARN] vars.VARIABLES 비어있음 — 개별 vars 방식으로 fallback"
+          fi
+
+      # ── 6. 로그 디렉토리 준비 ──────────────────────────────
       - name: Prepare log directory
         run: mkdir -p logs
 
-      # ── 6. 발행 파이프라인 실행 ─────────────────────────────
+      # ── 7. 발행 파이프라인 실행 ─────────────────────────────
       - name: Run publish pipeline
+        env:
+          TIMEZONE:               ${{ vars.TIMEZONE || 'Asia/Seoul' }}
+          SCRAPE_INTERVAL_MINUTES: ${{ vars.SCRAPE_INTERVAL_MINUTES || '60' }}
         run: python scripts/publish_daily.py
 
-      # ── 7. 로그 artifact 업로드 (항상 실행) ────────────────
+      # ── 8. 로그 artifact 업로드 (항상 실행) ────────────────
       - name: Upload logs artifact
         if: always()
         uses: actions/upload-artifact@v4
