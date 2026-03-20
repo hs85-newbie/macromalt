@@ -32,7 +32,7 @@ jobs:
     name: Publish Post1 + Post2
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: 'Configure GitHub Actions'
+    environment: 'GitHub Actions'
 
     steps:
       # ── 1. 코드 체크아웃 ────────────────────────────────────

@@ -28,7 +28,7 @@ jobs:
     name: Generate Phase 20 Weekly Report
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: 'Configure GitHub Actions'   # Environment 참조 (artifact 조회용 GITHUB_TOKEN은 자동 주입)
+    environment: 'GitHub Actions'   # Environment 참조 (artifact 조회용 GITHUB_TOKEN은 자동 주입)
 
     steps:
       # ── 1. 코드 체크아웃 ────────────────────────────────────
