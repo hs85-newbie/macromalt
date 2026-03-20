@@ -53,8 +53,12 @@ jobs:
       # ── 4. .env 파일 복원 ───────────────────────────────────
       # ENV secret에 .env 파일 전체 내용이 저장되어 있음
       # python-dotenv가 load_dotenv()로 이 파일을 자동 로드함
+      # ※ printf 방식 사용: echo "${{ ... }}" 직접 치환 시 $기호가
+      #   쉘 변수로 해석되어 API 키 값이 깨지는 문제 방지
       - name: Restore .env from secret
-        run: echo "${{ secrets.ENV }}" > .env
+        env:
+          ENV_CONTENT: ${{ secrets.ENV }}
+        run: printf '%s' "$ENV_CONTENT" > .env
 
       # ── 5. 로그 디렉토리 준비 ──────────────────────────────
       - name: Prepare log directory
