@@ -4,6 +4,7 @@
  *
  * DESIGN TRACK: Step04 - Seasonal Layer Refinement [Merged]
  * PHASE 20: Technical SEO Baseline + Monetization Architecture
+ * 
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -104,7 +105,7 @@ function macromalt_customize_read_more() {
 
 // 3.1 Deterministic Seasonal Class (WP Timezone)
 add_filter( 'body_class', function( $classes ) {
-    // WordPress 로컬 타임존 기반 월 식별 (jan, feb...)
+    // WordPress 로컬 타임존 기반 월 식별 [jan, feb...]
     $month = strtolower( current_time( 'M' ) ); 
     $classes[] = 'mm-season-' . $month;
     return $classes;
