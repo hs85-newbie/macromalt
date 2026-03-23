@@ -244,7 +244,7 @@ def main() -> None:
 
     logger.info("▶ [Step 2C] 이미지 준비")
     post1_media_id, post1_img_url, post1_attribution = attach_post1_image(post1.get("theme", ""))
-    post2_media_id, post2_img_html                   = attach_post2_image(post2.get("picks", []) if post2 else [])
+    post2_media_id, post2_img_html, post2_chart_src  = attach_post2_image(post2.get("picks", []) if post2 else [])
     logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
 
     # Post 1: 본문에 Unsplash 이미지 삽입 (</h1> 직후 = 메인 제목 바로 아래)
@@ -282,8 +282,9 @@ def main() -> None:
                 post2["content"],
                 _url_m.group(1),
                 _alt_m.group(1) if _alt_m else "",
+                source=post2_chart_src,
             )
-            logger.info("   차트 본문 삽입 완료 (⭐ 메인 픽 h3 직후)")
+            logger.info(f"   차트 본문 삽입 완료 (⭐ 메인 픽 h3 직후) [출처: {post2_chart_src}]")
 
     try:
         # ── Step 3A: Post 1 발행 ─────────────────────
