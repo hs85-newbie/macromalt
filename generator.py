@@ -4166,30 +4166,78 @@ def _fetch_naver_price(ticker: str) -> Optional[str]:
     return None
 
 
+def _fetch_krx_price(ticker: str) -> Optional[str]:
+    """
+    pykrx로 한국 종목 최신 종가를 조회합니다. (API 키 불필요)
+    반환: '₩84,500 (2026-03-21 기준, KRX)' 또는 None
+    """
+    import re as _re
+    from datetime import datetime, timedelta
+
+    code = _re.sub(r"\.(KS|KQ|KT)$", "", ticker, flags=_re.IGNORECASE)
+    if not code.isdigit() or len(code) != 6:
+        return None
+
+    try:
+        from pykrx import stock
+        end_dt   = datetime.now()
+        start_dt = end_dt - timedelta(days=7)
+        df = stock.get_market_ohlcv(
+            start_dt.strftime("%Y%m%d"),
+            end_dt.strftime("%Y%m%d"),
+            code,
+        )
+        if df is None or df.empty:
+            return None
+
+        close_col = "종가" if "종가" in df.columns else ("Close" if "Close" in df.columns else None)
+        if not close_col:
+            return None
+
+        price      = float(df[close_col].iloc[-1])
+        price_date = df.index[-1].strftime("%Y-%m-%d")
+        logger.info(f"pykrx 종가 조회 성공: {ticker} = ₩{price:,.0f}")
+        return f"₩{price:,.0f} ({price_date} 기준, KRX)"
+
+    except Exception as e:
+        logger.warning(f"pykrx 종가 조회 실패 ({ticker}): {e}")
+        return None
+
+
 def fetch_stock_prices(tickers: list) -> dict:
     """
     티커 리스트의 최신 종가를 조회합니다.
-    - 성공 시: '$184.77 (2026-03-11 기준)' 형식 반환
-    - yfinance N/A → 네이버 금융 폴백
-    - 모두 실패 시: 'N/A' 반환
+    한국 종목: yfinance → KRX Open API → 네이버금융
+    해외 종목: yfinance → 네이버금융
+    모두 실패 시: 'N/A' 반환
     """
     prices = {}
     for ticker_str in tickers:
+        is_korean = bool(re.search(r"\.(KS|KQ|KT)$", ticker_str, re.IGNORECASE)) or \
+                    (ticker_str.isdigit() and len(ticker_str) == 6)
         try:
             t = yf.Ticker(ticker_str)
             hist = t.history(period="1d")
             if not hist.empty:
                 price = round(hist["Close"].iloc[-1], 2)
                 price_date = hist.index[-1].strftime("%Y-%m-%d")
-                prices[ticker_str] = f"${price:,.2f} ({price_date} 기준)"
-            else:
-                logger.info(f"{ticker_str} yfinance N/A → 네이버금융 폴백 시도")
-                naver = _fetch_naver_price(ticker_str)
-                prices[ticker_str] = naver if naver else "N/A"
+                prices[ticker_str] = f"₩{price:,.0f} ({price_date} 기준)" if is_korean else f"${price:,.2f} ({price_date} 기준)"
+                continue
         except Exception as e:
-            logger.warning(f"{ticker_str} yfinance 조회 실패: {e} → 네이버금융 폴백 시도")
-            naver = _fetch_naver_price(ticker_str)
-            prices[ticker_str] = naver if naver else "N/A"
+            logger.warning(f"{ticker_str} yfinance 조회 실패: {e}")
+
+        # 한국 종목: KRX 폴백
+        if is_korean:
+            logger.info(f"{ticker_str} yfinance N/A → KRX 폴백 시도")
+            krx = _fetch_krx_price(ticker_str)
+            if krx:
+                prices[ticker_str] = krx
+                continue
+
+        # 공통 최종 폴백: 네이버금융
+        logger.info(f"{ticker_str} → 네이버금융 폴백 시도")
+        naver = _fetch_naver_price(ticker_str)
+        prices[ticker_str] = naver if naver else "N/A"
 
     logger.info(f"종가 조회 완료: {prices}")
     return prices

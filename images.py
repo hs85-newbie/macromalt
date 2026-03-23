@@ -248,6 +248,47 @@ def _setup_korean_font() -> None:
     logger.warning("  [images] 한글 폰트 없음 — 폰트 깨짐 가능")
 
 
+def _fetch_krx_chart_data(ticker: str):
+    """
+    pykrx로 한국 종목 일별 시세를 가져옵니다. (API 키 불필요)
+    KOSPI/KOSDAQ 6자리 코드 자동 추출.
+    Returns: pandas DataFrame(index=날짜, columns=["Close"]) 또는 None
+    """
+    import re as _re
+    from datetime import datetime, timedelta
+
+    code = _re.sub(r"\.(KS|KQ|KT)$", "", ticker, flags=_re.IGNORECASE)
+    if not code.isdigit() or len(code) != 6:
+        return None
+
+    end_dt   = datetime.now()
+    start_dt = end_dt - timedelta(days=14)  # 영업일 7일 확보용
+
+    try:
+        from pykrx import stock
+        df = stock.get_market_ohlcv(
+            start_dt.strftime("%Y%m%d"),
+            end_dt.strftime("%Y%m%d"),
+            code,
+        )
+        if df is None or df.empty:
+            return None
+
+        # 컬럼 정규화: 종가 → Close
+        if "종가" in df.columns:
+            df = df[["종가"]].rename(columns={"종가": "Close"})
+        elif "Close" not in df.columns:
+            return None
+
+        df = df.tail(7)
+        logger.info(f"✅ [images] pykrx 차트 데이터 ({code}): {len(df)}행")
+        return df
+
+    except Exception as e:
+        logger.warning(f"⚠ [images] pykrx 차트 데이터 실패 ({ticker}): {e}")
+        return None
+
+
 def _fetch_naver_chart_data(ticker: str):
     """
     네이버 금융에서 한국 종목 일별 시세를 가져옵니다. (yfinance 실패 폴백)
@@ -333,12 +374,17 @@ def generate_ticker_chart(ticker: str, name: str = "") -> Tuple[Optional[bytes],
         df = yf.download(ticker, period="7d", interval="1d", progress=False, auto_adjust=True)
 
         if df.empty or len(df) < 2:
-            logger.info(f"  [images] {ticker} yfinance 실패 → 네이버금융 폴백")
-            df = _fetch_naver_chart_data(ticker)
-            if df is None or df.empty or len(df) < 2:
-                logger.warning(f"⚠ [images] {ticker} 데이터 부족 (yfinance + 네이버 모두 실패)")
-                return None, ""
-            chart_source = "네이버금융"
+            logger.info(f"  [images] {ticker} yfinance 실패 → KRX Open API 폴백")
+            df = _fetch_krx_chart_data(ticker)
+            if df is not None and not df.empty and len(df) >= 2:
+                chart_source = "KRX(한국거래소)"
+            else:
+                logger.info(f"  [images] {ticker} KRX 실패 → 네이버금융 폴백")
+                df = _fetch_naver_chart_data(ticker)
+                if df is None or df.empty or len(df) < 2:
+                    logger.warning(f"⚠ [images] {ticker} 데이터 부족 (yfinance + KRX + 네이버 모두 실패)")
+                    return None, ""
+                chart_source = "네이버금융"
 
         close   = df["Close"].squeeze()
         dates   = close.index
