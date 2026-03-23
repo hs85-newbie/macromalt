@@ -109,13 +109,13 @@ SOURCE_BOX_STYLE = (
     f"border-radius:{BORDER_SOURCE_RADIUS};"
 )
 SOURCE_H_STYLE   = (
-    f"font-size:{FONT_SIZE_SMALL};font-weight:{FONT_WEIGHT_STRONG};"
+    f"font-size:{FONT_SIZE_BODY};font-weight:{FONT_WEIGHT_STRONG};"
     f"color:{COLOR_MUTED};margin:0 0 8px 0;"
 )
-SOURCE_CAT_STYLE = f"font-size:{FONT_SIZE_META};color:{COLOR_SUBTLE};margin:6px 0 2px 0;"
+SOURCE_CAT_STYLE = f"font-size:{FONT_SIZE_BODY};color:{COLOR_SUBTLE};margin:6px 0 2px 0;"
 SOURCE_UL_STYLE  = f"margin:0;padding-left:{PADDING_SOURCE_UL};"
 SOURCE_LI_STYLE  = (
-    f"font-size:{FONT_SIZE_SMALL};line-height:{LINE_HEIGHT_LIST};"
+    f"font-size:{FONT_SIZE_BODY};line-height:{LINE_HEIGHT_LIST};"
     f"color:{COLOR_MUTED};margin:2px 0;"
 )
 
