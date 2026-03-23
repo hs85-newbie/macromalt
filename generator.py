@@ -4578,21 +4578,26 @@ GEMINI_ANALYST_SYSTEM = """
   ],
   "facts": [
     {
+      "id": "fact_1",
       "content": "확인된 사실 내용 (숫자·날짜·기관명 포함)",
       "source": "출처명 (언론사명, 기관명, 리포트명 등)",
       "date": "기준 시점 (YYYY-MM-DD 또는 'YYYY년 Q분기' 등)",
       "tier": "recent",
       "relevance_to_theme": "이 사실이 핵심 테마와 어떻게 연결되는지 한 줄 설명",
-      "why_it_matters": "이 숫자/사실이 왜 중요한지 인과관계 한 줄 설명"
+      "why_it_matters": "이 숫자/사실이 왜 중요한지 인과관계 한 줄 설명",
+      "causal_path": "이 사실이 금융시장으로 전파되는 구체적 인과 경로 (A → B → C 형식)",
+      "confidence": "high | medium | low"
     }
   ],
   "background_facts": [
     {
+      "id": "bg_1",
       "content": "7~30일 자료 — 배경 설명용으로만 사용 가능한 사실",
       "source": "출처명",
       "date": "기준 시점",
       "tier": "extended",
-      "relevance_to_theme": "배경으로서 역할 한 줄"
+      "relevance_to_theme": "배경으로서 역할 한 줄",
+      "usage_rule": "background_only"
     }
   ],
   "auxiliary_context": "핵심 테마와 직접 관련 없지만 독자 이해를 위해 필요한 배경 정보 (1~2문장)",
@@ -4604,10 +4609,36 @@ GEMINI_ANALYST_SYSTEM = """
   "uncertainties": [
     "이 분석에서 불확실한 요소 또는 추가 확인이 필요한 사항"
   ],
-  "writing_notes": "ChatGPT 작성자에게 전달할 주의사항 (과장 금지 항목, 반복 금지 표현, 민감한 표현 등)"
+  "writing_notes": "ChatGPT 작성자에게 전달할 주의사항 (과장 금지 항목, 반복 금지 표현, 민감한 표현 등)",
+
+  "why_now": {
+    "claim": "왜 오늘 하필 이 테마인가 — 오늘의 specific trigger 한 문장 (범용 설명 금지)",
+    "evidence_ids": ["fact_2"],
+    "confidence": "high | medium | low"
+  },
+  "market_gap": {
+    "claim": "시장이 현재 과소평가하거나 오독하고 있는 것 (사실 서술만, 투자 권유 금지)",
+    "evidence_ids": ["fact_4", "fact_5"],
+    "confidence": "high | medium | low"
+  },
+  "analyst_surprise": {
+    "level": "none | mild | strong",
+    "claim": "예상 외로 중요하거나 비자명한 사실 (level=none이면 claim 생략 가능)",
+    "evidence_ids": ["fact_3"],
+    "confidence": "high | medium | low"
+  },
+  "stance_type": "consensus_miss | underpriced_risk | overread | low_confidence | neutral",
+  "stance_evidence_ids": ["fact_2", "fact_5"],
+  "risk_of_overstatement": [
+    {
+      "text": "과장 위험이 있는 주장",
+      "reason": "근거 부족 또는 전망 비약"
+    }
+  ]
 }
 
 facts는 반드시 5개 이상 10개 이하 (핵심 테마와 직접 관련된 최근 7일 자료 중심).
+facts의 id는 "fact_1", "fact_2" 순서로 부여한다. background_facts의 id는 "bg_1", "bg_2" 순서로 부여한다.
 background_facts는 있는 경우만 포함, 없으면 빈 배열 [].
 핵심 테마와 무관한 사실은 facts에 포함하지 말고 auxiliary_context에 한 줄로 요약.
 
@@ -4616,6 +4647,20 @@ background_facts는 있는 경우만 포함, 없으면 빈 배열 [].
 - 예: 핵심 테마가 "AI 반도체 수요 급증"이라면 유가·지정학·금리 관련 사실은 facts에서 제외하고 auxiliary_context로 이동.
 - relevance_to_theme 항목이 "간접적 영향" 또는 "배경" 수준이면 background_facts로 분류한다.
 - facts에는 핵심 테마와 직접 인과관계를 가진 항목만 남긴다.
+
+[perspective fields 규칙 — Phase 20]
+- why_now.claim은 반드시 "오늘의 specific trigger"여야 한다.
+  좋은 예: "3/19 FOMC 점도표가 금리인하 횟수를 3→2로 하향한 것이 오늘의 핵심 트리거"
+  나쁜 예: "글로벌 금융시장의 불확실성이 높아지고 있다"
+- why_now.evidence_ids는 반드시 위 facts 배열의 실제 id와 일치해야 한다. 일치하지 않으면 why_now 전체를 생략하라.
+- market_gap.claim은 투자 권유가 되면 안 된다. "시장이 아직 X를 반영하지 않았다"는 사실 서술이어야 한다.
+- market_gap.evidence_ids도 반드시 facts 배열의 실제 id와 일치해야 한다. 일치하지 않으면 market_gap 전체를 생략하라.
+- analyst_surprise.level=none이면 claim과 evidence_ids를 생략하고 {"level": "none"}만 출력해도 된다.
+- stance_type은 아래 5개 값 중 하나만 허용한다: consensus_miss | underpriced_risk | overread | low_confidence | neutral
+  근거가 없으면 반드시 "neutral"로 설정한다.
+- stance_evidence_ids가 비어있으면 stance_type은 강제로 "neutral"이다.
+- risk_of_overstatement는 why_now 또는 market_gap이 존재할 때 반드시 1개 이상 작성한다.
+  why_now와 market_gap이 모두 없으면 빈 배열 []로 출력해도 된다.
 """
 
 GEMINI_ANALYST_USER = """
@@ -4629,6 +4674,294 @@ GEMINI_ANALYST_USER = """
 {news_text}
 
 {dart_text}
+"""
+
+
+# ─── Step 1.5: Editorial Planner 프롬프트 (Phase 20) ──────────────────────────
+
+GEMINI_PLANNER_POST1_SYSTEM = """
+너는 매크로몰트 Post1 Editorial Planner다.
+Step1 분석 재료를 받아 Post1(심층분석) 편집 계획을 JSON으로 출력한다.
+
+Post1의 역할:
+- 거시 메커니즘과 전파 경로 중심 (macro mechanism / transmission path)
+- 정책·구조·글로벌 연결 논리
+- 종목 픽 없음. macro 레이어만.
+
+[section roles — Post1 전용 허용 집합]
+sec_1: macro_mechanism   — 거시 변수가 왜 지금 작동하는가
+sec_2: transmission_path — 한국/아시아 시장으로 전파되는 경로
+sec_3: market_structure  — 구조적 배경 또는 선행 지표
+sec_4: counterpoint      — 이번 thesis에 특화된 반대 해석 (필수)
+
+[필수 결정 사항]
+1. lead_angle: facts에서 evidence_ids 지정. 정확히 1개.
+2. secondary_support: lead를 강화하는 전파 경로 메커니즘. 최대 2개.
+3. background_or_drop: 강등 또는 제외 대상. drop_ids 최소 1개 필수.
+4. stance: Step1의 stance_type 중 하나. evidence_ids 필수.
+5. narrative_shape: conclusion_first | contradiction_first | question_first
+6. section_plan: 4개 섹션. word_budget_ratio 합 ≤ 1.0. lead 섹션 ≥ 0.35.
+
+[슬롯별 opener_strategy]
+- morning:   어젯밤 미국장 결과가 오늘 macro 테마에 미치는 직접 결과
+- afternoon: 국내장 중 나타나는 섹터 차별화 또는 예상 대비 해석
+- evening:   오늘 세션 실제 결과 vs 장 시작 전 예상 경로 비교
+- default:   현재 살아있는 핵심 변수 또는 시장 오독
+
+[금지]
+- facts 전체를 section_plan에 균등 분배하지 말 것.
+- counterpoint를 "다양한 리스크 존재" 수준으로 처리 금지.
+- 근거 없는 lead_angle 생성 금지.
+- pick_trigger / stock_sensitivity / selection_logic을 section role로 사용 금지.
+- word_budget_ratio lead 섹션이 0.35 미만이면 재편성.
+
+[출력 JSON 구조]
+{
+  "lead_angle": {
+    "claim": "이 글의 유일한 중심 논거 한 문장",
+    "evidence_ids": ["fact_2", "fact_5"],
+    "reason_selected": "이 각도가 다른 후보를 제치고 선택된 이유"
+  },
+  "secondary_support": [
+    {
+      "claim": "리드를 강화하는 2차 메커니즘",
+      "evidence_ids": ["fact_1", "fact_4"]
+    }
+  ],
+  "background_or_drop": {
+    "background_ids": ["fact_6", "bg_1"],
+    "drop_ids": ["fact_8"],
+    "reason": "배경 처리 또는 제외 이유"
+  },
+  "stance": {
+    "type": "consensus_miss | underpriced_risk | overread | low_confidence | neutral",
+    "confidence": "high | medium | low",
+    "evidence_ids": ["fact_2", "fact_5"]
+  },
+  "narrative_shape": "conclusion_first | contradiction_first | question_first",
+  "opener_strategy": "슬롯 기반 opener 지침 결과 한 줄",
+  "counterpoint_priority": "strong | moderate | light",
+  "section_plan": [
+    {
+      "section_id": "sec_1",
+      "role": "macro_mechanism",
+      "goal": "이 섹션이 논거에서 하는 역할",
+      "evidence_ids": ["fact_2", "fact_5"],
+      "word_budget_ratio": 0.40,
+      "must_include": ["date anchor", "mechanism sentence", "specific market relevance"],
+      "must_avoid": ["generic macro filler", "equal-weight fact review"]
+    },
+    {
+      "section_id": "sec_2",
+      "role": "transmission_path",
+      "goal": "리드 논거의 전파 경로",
+      "evidence_ids": ["fact_1", "fact_4"],
+      "word_budget_ratio": 0.25
+    },
+    {
+      "section_id": "sec_3",
+      "role": "market_structure",
+      "goal": "구조적 배경으로 thesis 강화",
+      "evidence_ids": ["fact_7"],
+      "word_budget_ratio": 0.20
+    },
+    {
+      "section_id": "sec_4",
+      "role": "counterpoint",
+      "goal": "thesis를 무력화하지 않는 최강의 반대 논거",
+      "evidence_ids": ["fact_9"],
+      "word_budget_ratio": 0.15
+    }
+  ]
+}
+
+반드시 JSON 하나만 출력. 설명 없음. 마크다운 없음.
+"""
+
+GEMINI_PLANNER_POST2_SYSTEM = """
+너는 매크로몰트 Post2 Editorial Planner다.
+Step1 분석 재료를 받아 Post2(캐시의 픽) 편집 계획을 JSON으로 출력한다.
+
+Post2의 역할:
+- 종목/섹터 민감도와 트리거 논리 중심 (pick trigger / stock sensitivity / selection logic)
+- "왜 지금 이 종목인가" pick-angle이 opener
+- 거시 배경은 pick trigger를 설명하기 위한 수단으로만 사용
+
+[section roles — Post2 전용 허용 집합]
+sec_1: pick_trigger      — 왜 지금 이 종목/섹터인가 (오늘의 specific trigger)
+sec_2: stock_sensitivity — 핵심 변수가 이 종목에 미치는 민감도와 노출 경로
+sec_3: selection_logic   — 다른 종목/섹터 대비 이 픽을 선택한 근거
+sec_4: counterpoint      — 이번 pick thesis에 특화된 반대 해석 (필수)
+
+[필수 결정 사항]
+1. lead_angle: 메인 픽 또는 섹터의 pick trigger. evidence_ids 지정. 정확히 1개.
+2. secondary_support: 민감도 또는 선택 근거 강화용. 최대 2개.
+3. background_or_drop: 강등 또는 제외 대상. drop_ids 최소 1개 필수.
+4. stance: Step1의 stance_type. evidence_ids 필수.
+5. narrative_shape: 픽 논거에 맞는 shape 선택.
+6. section_plan: 4개 섹션. lead ≥ 0.35.
+
+[금지]
+- macro_mechanism / transmission_path를 section role로 설정 금지.
+- pick_trigger 없이 시장 배경 설명으로 opener 시작 금지 (Phase 17 규칙 유지).
+- counterpoint를 범용 리스크 나열로 처리 금지.
+- word_budget_ratio lead 섹션이 0.35 미만이면 재편성.
+
+[출력 JSON 구조]
+{
+  "lead_angle": {
+    "claim": "이 글의 유일한 중심 논거 — 메인 픽 또는 섹터의 핵심 trigger",
+    "evidence_ids": ["fact_3", "fact_6"],
+    "reason_selected": "이 각도가 다른 후보를 제치고 선택된 이유"
+  },
+  "secondary_support": [
+    {
+      "claim": "민감도 또는 선택 근거 강화",
+      "evidence_ids": ["fact_1", "fact_5"]
+    }
+  ],
+  "background_or_drop": {
+    "background_ids": ["fact_7", "bg_1"],
+    "drop_ids": ["fact_9"],
+    "reason": "배경 처리 또는 제외 이유"
+  },
+  "stance": {
+    "type": "consensus_miss | underpriced_risk | overread | low_confidence | neutral",
+    "confidence": "high | medium | low",
+    "evidence_ids": ["fact_3", "fact_6"]
+  },
+  "narrative_shape": "conclusion_first | contradiction_first | question_first",
+  "opener_strategy": "픽 논거 기반 opener 지침 한 줄",
+  "counterpoint_priority": "strong | moderate | light",
+  "section_plan": [
+    {
+      "section_id": "sec_1",
+      "role": "pick_trigger",
+      "goal": "왜 지금 이 종목/섹터인가 확립",
+      "evidence_ids": ["fact_3", "fact_6"],
+      "word_budget_ratio": 0.40,
+      "must_include": ["픽명 또는 섹터명", "오늘의 specific trigger", "핵심 변수 1개"],
+      "must_avoid": ["거시 배경 설명으로 시작", "generic macro filler"]
+    },
+    {
+      "section_id": "sec_2",
+      "role": "stock_sensitivity",
+      "goal": "핵심 변수가 이 종목에 미치는 민감도",
+      "evidence_ids": ["fact_1", "fact_5"],
+      "word_budget_ratio": 0.25
+    },
+    {
+      "section_id": "sec_3",
+      "role": "selection_logic",
+      "goal": "다른 종목 대비 선택 근거",
+      "evidence_ids": ["fact_2"],
+      "word_budget_ratio": 0.20
+    },
+    {
+      "section_id": "sec_4",
+      "role": "counterpoint",
+      "goal": "pick thesis에 특화된 반대 해석",
+      "evidence_ids": ["fact_8"],
+      "word_budget_ratio": 0.15
+    }
+  ]
+}
+
+반드시 JSON 하나만 출력. 설명 없음. 마크다운 없음.
+"""
+
+GEMINI_PLANNER_USER = """
+아래 Step1 분석 재료와 슬롯 정보를 바탕으로 편집 계획을 JSON으로 출력하라.
+
+[슬롯]
+{slot}
+
+[최근 발행 이력 제약]
+{history_constraints}
+
+[Step1 분석 재료]
+{step1_json}
+"""
+
+# ─── Phase 20: Writer Contract 소비 블록 ─────────────────────────────────────
+# gpt_write_analysis / gpt_write_picks의 user_msg 최상단에 prepend됨 (planner 성공 시)
+
+_P20_POST1_CONTRACT_BLOCK = """
+[Phase 20 — Editorial Planner Contract — 최우선 준수]
+
+너는 중립적 요약자가 아니다.
+planner가 선택한 lead_angle 논거를 중심으로 독자에게
+"왜 오늘 이 macro 테마가 중요한가"를 설득하는 밀도 높은 분석 브리프를 작성한다.
+
+[4-tier 사실 처리 규칙 — 절대 준수]
+- lead_facts: 이 글의 중심축. sec_1(lead section)의 핵심 근거로만 사용.
+  lead section 분량이 다른 모든 섹션보다 명확히 무거워야 한다.
+- secondary_facts: lead 논거를 강화하는 2차 근거. lead보다 분량이 적어야 한다.
+- background_facts: usage_rule=context_only. 배경 언급만 허용. 논거로 인용 절대 금지.
+- disallowed_fact_ids: 이 id 목록의 사실은 본문에 절대 등장하지 않는다.
+
+[section_plan 준수]
+- 각 섹션의 role / goal / evidence_ids / word_budget_ratio를 따른다.
+- 모든 섹션에 "claim → support → implication" 동형 구조를 반복하지 말 것.
+  lead 이후 섹션은 다른 수사 구조를 써라.
+- counterpoint 섹션은 section_plan.evidence_ids 기반으로만. 범용 리스크 나열 금지.
+
+[stance 표명 규칙]
+- stance.type에 따라 논리적 입장을 선택한다:
+  * consensus_miss: "시장이 아직 반영하지 않은 X가 있다" 구조
+  * underpriced_risk: "이 리스크가 현재 가격에 충분히 반영되지 않았다" 구조
+  * overread: "시장 반응이 실제 변화보다 과장됐다" 구조
+  * low_confidence: 조건부 서술 강화, 단정 금지
+  * neutral: 기존 방식 유지
+- stance 표명은 lead_facts / secondary_facts 기반 사실에서만 도출. 근거 없는 확신 금지.
+
+[narrative_shape 준수]
+- conclusion_first: lead section 첫 문단에서 핵심 결론부터
+- contradiction_first: lead section 첫 문단에서 시장 예상과 실제의 간극부터
+- question_first: lead section 첫 문단에서 핵심 질문부터
+
+[출력 끝에 필수 포함 — 누락 시 오류]
+<!-- macromalt:evidence_ids_used=[fact_2,fact_5,...] -->
+본문 작성에 실제로 사용한 fact/bg id 목록을 기재. 형식 엄수.
+
+[이번 글의 편집 계획 (writer_contract)]
+{writer_contract_json}
+"""
+
+_P20_POST2_CONTRACT_BLOCK = """
+[Phase 20 — Editorial Planner Contract — 최우선 준수]
+
+너는 중립적 요약자가 아니다.
+planner가 선택한 pick_trigger 논거를 중심으로 독자에게
+"왜 지금 이 종목/섹터인가"를 설득하는 밀도 높은 종목 브리프를 작성한다.
+
+[4-tier 사실 처리 규칙 — 절대 준수]
+- lead_facts: sec_1(pick_trigger section)의 핵심 근거.
+  lead section 분량이 다른 모든 섹션보다 명확히 무거워야 한다.
+- secondary_facts: 민감도/선택 근거 강화용. lead보다 분량이 적어야 한다.
+- background_facts: usage_rule=context_only. 배경 언급만. 픽 논거로 인용 절대 금지.
+- disallowed_fact_ids: 이 id 목록의 사실은 본문에 절대 등장하지 않는다.
+
+[section_plan 준수]
+- sec_1(pick_trigger): opener는 반드시 메인 픽명 또는 핵심 섹터명으로 시작.
+  거시 배경 설명으로 시작 금지 (Phase 17 규칙 유지).
+- 모든 섹션에 동형 구조 반복 금지. 각 섹션은 다른 수사 구조를 써라.
+- counterpoint 섹션은 section_plan.evidence_ids 기반으로만. 범용 리스크 나열 금지.
+
+[stance 표명 규칙 — Post1과 동일]
+- stance.type에 따라 논리적 입장을 선택한다.
+- 근거 없는 확신 표명 금지.
+
+[narrative_shape 준수]
+- conclusion_first / contradiction_first / question_first 중 선택.
+- pick_trigger 섹션의 opener 구조에 반영.
+
+[출력 끝에 필수 포함 — 누락 시 오류]
+<!-- macromalt:evidence_ids_used=[fact_3,fact_6,...] -->
+본문 작성에 실제로 사용한 fact/bg id 목록을 기재. 형식 엄수.
+
+[이번 글의 편집 계획 (writer_contract)]
+{writer_contract_json}
 """
 
 
@@ -5214,13 +5547,238 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
     return result
 
 
-def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default") -> str:
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION: Phase 20 — Step 1.5 Editorial Planner
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _validate_planner_evidence_ids(planner: dict, step1: dict) -> dict:
+    """planner의 evidence_ids가 step1 facts/bg의 실제 id와 일치하는지 검증.
+    불일치 id를 제거하고, lead_angle.evidence_ids가 비면 planner를 None으로 반환."""
+    valid_ids = set()
+    for f in step1.get("facts", []):
+        if f.get("id"):
+            valid_ids.add(f["id"])
+    for f in step1.get("background_facts", []):
+        if f.get("id"):
+            valid_ids.add(f["id"])
+
+    def clean_ids(ids: list) -> list:
+        return [i for i in (ids or []) if i in valid_ids]
+
+    # lead_angle
+    la = planner.get("lead_angle", {})
+    la["evidence_ids"] = clean_ids(la.get("evidence_ids", []))
+    if not la["evidence_ids"]:
+        logger.warning("[Phase 20] planner lead_angle evidence_ids 검증 실패 — fallback")
+        return None
+
+    # secondary_support
+    for ss in planner.get("secondary_support", []):
+        ss["evidence_ids"] = clean_ids(ss.get("evidence_ids", []))
+
+    # background_or_drop
+    bod = planner.get("background_or_drop", {})
+    bod["background_ids"] = clean_ids(bod.get("background_ids", []))
+    bod["drop_ids"]       = clean_ids(bod.get("drop_ids", []))
+
+    # stance
+    st = planner.get("stance", {})
+    st["evidence_ids"] = clean_ids(st.get("evidence_ids", []))
+    if not st["evidence_ids"]:
+        st["type"] = "neutral"
+
+    # section_plan
+    for sec in planner.get("section_plan", []):
+        sec["evidence_ids"] = clean_ids(sec.get("evidence_ids", []))
+
+    return planner
+
+
+def _call_editorial_planner(
+    step1: dict,
+    post_type: str,
+    slot: str,
+    run_id: str,
+    history_constraints: Optional[str] = None,
+) -> Optional[dict]:
+    """Step 1.5: Editorial Planner 호출 (Phase 20).
+
+    Args:
+        step1:               gemini_analyze() 결과
+        post_type:           "post1" | "post2"
+        slot:                발행 슬롯
+        run_id:              로그용 run_id
+        history_constraints: 최근 이력 제약 텍스트 (없으면 "없음")
+
+    Returns:
+        planner dict 또는 None (실패 시 fallback)
+    """
+    system_prompt = (
+        GEMINI_PLANNER_POST1_SYSTEM if post_type == "post1"
+        else GEMINI_PLANNER_POST2_SYSTEM
+    )
+    user_msg = GEMINI_PLANNER_USER.format(
+        slot=slot,
+        history_constraints=history_constraints or "없음",
+        step1_json=json.dumps(step1, ensure_ascii=False, indent=2),
+    )
+
+    raw = _call_gemini(
+        system_prompt, user_msg,
+        f"Step1.5:EditorialPlanner:{post_type}",
+        temperature=0.1,
+    )
+    planner = _parse_json_response(raw) if raw else None
+
+    if not planner or not isinstance(planner, dict):
+        logger.warning(
+            f"[Phase 20] planner FAILED | run_id={run_id} | post_type={post_type} | "
+            f"planner_used=False | fallback=step1_only"
+        )
+        return None
+
+    # evidence_ids 검증 — 불일치 id 제거, lead 비면 None
+    planner = _validate_planner_evidence_ids(planner, step1)
+    if planner is None:
+        logger.warning(
+            f"[Phase 20] planner evidence_ids validation FAILED | run_id={run_id} | "
+            f"post_type={post_type} | planner_used=False | fallback=step1_only"
+        )
+        return None
+
+    # word_budget_ratio lead 섹션 최소값 보정
+    section_plan = planner.get("section_plan", [])
+    if section_plan:
+        lead_ratio = section_plan[0].get("word_budget_ratio", 0)
+        if lead_ratio < 0.35:
+            logger.warning(
+                f"[Phase 20] lead word_budget_ratio={lead_ratio} < 0.35 — 0.40으로 보정"
+            )
+            section_plan[0]["word_budget_ratio"] = 0.40
+
+    # 로그
+    bod = planner.get("background_or_drop", {})
+    logger.info(
+        f"[Phase 20] editorial planner OK | run_id={run_id} | slot={slot} | "
+        f"post_type={post_type} | planner_used=True | "
+        f"stance_type={planner.get('stance', {}).get('type', 'N/A')} | "
+        f"narrative_shape={planner.get('narrative_shape', 'N/A')} | "
+        f"lead_angle_evidence_ids={planner.get('lead_angle', {}).get('evidence_ids', [])} | "
+        f"background_ids={bod.get('background_ids', [])} | "
+        f"drop_ids={bod.get('drop_ids', [])}"
+    )
+    return planner
+
+
+def _build_writer_contract(
+    step1: dict,
+    planner: dict,
+    slot: str,
+    history_constraints: Optional[dict] = None,
+) -> dict:
+    """planner 결과를 소비해 GPT writer에게 넘길 4-tier 구조 contract를 생성 (Phase 20).
+
+    lead_facts / secondary_facts / background_facts / disallowed_fact_ids로 분리.
+    GPT는 원본 step1 facts 배열을 받지 않는다 — contract만 받는다.
+
+    Returns:
+        writer_contract dict
+    """
+    all_facts: dict = {f["id"]: f for f in step1.get("facts", []) if f.get("id")}
+    all_bg:    dict = {f["id"]: f for f in step1.get("background_facts", []) if f.get("id")}
+
+    bod            = planner.get("background_or_drop", {})
+    background_ids = set(bod.get("background_ids", []))
+    drop_ids       = set(bod.get("drop_ids", []))
+
+    # lead_fact_ids: lead_angle + secondary_support evidence_ids 합집합
+    lead_ids = set(planner.get("lead_angle", {}).get("evidence_ids", []))
+    secondary_ids: set = set()
+    for ss in planner.get("secondary_support", []):
+        secondary_ids.update(ss.get("evidence_ids", []))
+    # secondary는 lead와 중복되지 않도록
+    secondary_ids -= lead_ids
+
+    def pick(id_set: set, src: dict) -> list:
+        """id_set에서 src dict에 있는 항목만 추출 (순서: id 정렬)."""
+        return [src[i] for i in sorted(id_set) if i in src]
+
+    lead_facts       = pick(lead_ids, all_facts)
+    secondary_facts  = pick(secondary_ids, all_facts)
+
+    # background_facts: planner background_ids + step1 bg_facts (drop 제외)
+    bg_fact_ids = background_ids & set(all_facts.keys())
+    bg_bg_ids   = (set(all_bg.keys()) | (background_ids & set(all_bg.keys()))) - drop_ids
+    background_facts = pick(bg_fact_ids, all_facts) + pick(bg_bg_ids, all_bg)
+
+    # 나머지 facts (lead/secondary/background/drop 미포함) → background로 추가
+    accounted = lead_ids | secondary_ids | background_ids | drop_ids
+    remainder = set(all_facts.keys()) - accounted
+    background_facts += pick(remainder, all_facts)
+
+    # background_facts에 usage_rule 명시
+    for f in background_facts:
+        f["usage_rule"] = "context_only"
+
+    # perspective 필드 (evidence_ids 검증된 것만)
+    perspective: dict = {}
+    wn = step1.get("why_now")
+    if wn and isinstance(wn, dict) and wn.get("claim"):
+        perspective["why_now"] = wn["claim"]
+    mg = step1.get("market_gap")
+    if mg and isinstance(mg, dict) and mg.get("claim"):
+        perspective["market_gap"] = mg["claim"]
+    asur = step1.get("analyst_surprise", {})
+    perspective["analyst_surprise_level"] = asur.get("level", "none")
+
+    contract = {
+        "theme":         step1.get("theme", ""),
+        "slot":          slot,
+        "stance":        planner.get("stance", {"type": "neutral", "confidence": "low"}),
+        "narrative_shape": planner.get("narrative_shape", "conclusion_first"),
+        "opener_strategy": planner.get("opener_strategy", ""),
+        "counterpoint_priority": planner.get("counterpoint_priority", "moderate"),
+        "lead_facts":      lead_facts,
+        "secondary_facts": secondary_facts,
+        "background_facts": background_facts,
+        "disallowed_fact_ids": sorted(drop_ids),
+        "perspective":   perspective,
+        "section_plan":  planner.get("section_plan", []),
+        "recent_history_constraints": history_constraints or {},
+        "html_output_rules": {
+            "format":               "HTML only",
+            "no_markdown":          True,
+            "evidence_ids_comment": True,
+        },
+    }
+    return contract
+
+
+def _parse_writer_evidence_ids(html: str) -> list:
+    """writer 출력 HTML에서 <!-- macromalt:evidence_ids_used=[...] --> 주석을 파싱.
+    파싱 실패 시 [] 반환 (파이프라인 차단 없음).
+    """
+    import re as _re
+    m = _re.search(r"<!--\s*macromalt:evidence_ids_used=\[([^\]]*)\]\s*-->", html or "")
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    if not raw:
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default",
+                       writer_contract: Optional[dict] = None,
+                       run_id: str = "") -> str:
     """
     Step 2a: GPT 작성 엔진 — Post 1 심층 분석.
     Gemini 분석 재료를 HTML 형식의 심층 분석 글로 작성합니다.
 
     Args:
-        slot: 발행 슬롯 — Phase 10 슬롯별 작성 방향 힌트 삽입
+        slot:            발행 슬롯 — Phase 10 슬롯별 작성 방향 힌트 삽입
+        writer_contract: Phase 20 editorial planner contract (없으면 기존 방식 fallback)
+        run_id:          로그용 run_id
 
     반환: HTML 문자열 (마크다운 없음, 인라인 스타일 포함)
     """
@@ -5235,8 +5793,16 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
     run_date_str_now = datetime.now().strftime("%Y-%m-%d")
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
 
+    # Phase 20: writer_contract 존재 시 contract 블록을 최우선으로 prepend
+    p20_block = ""
+    if writer_contract:
+        p20_block = _P20_POST1_CONTRACT_BLOCK.format(
+            writer_contract_json=json.dumps(writer_contract, ensure_ascii=False, indent=2)
+        )
+
     user_msg = (
-        _P16H_POST1_HEDGE_REDUCTION         # Phase 16H Track A: factual spine 헤징 절제
+        p20_block                           # Phase 20: contract 소비 (최우선, 있을 때만)
+        + _P16H_POST1_HEDGE_REDUCTION       # Phase 16H Track A: factual spine 헤징 절제
         + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
         + source_norm_block                 # Phase 14 Track A: 소스 정규화
@@ -5256,12 +5822,23 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
         temperature=0.7,
         max_tokens=5000,  # Phase 4.3: 4000 → 5000 (심층분석 밀도 복원)
     )
+
+    # Phase 20: writer_used_evidence_ids 로그
+    if writer_contract and draft:
+        used_ids = _parse_writer_evidence_ids(draft)
+        logger.info(
+            f"[Phase 20] writer evidence | run_id={run_id} | post_type=post1 | "
+            f"writer_used_evidence_ids={used_ids}"
+        )
+
     return draft
 
 
 def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: str,
                     slot: str = "default", post1_spine: str = "",
-                    same_theme_hint: str = "") -> str:
+                    same_theme_hint: str = "",
+                    writer_contract: Optional[dict] = None,
+                    run_id: str = "") -> str:
     """
     Step 2b: GPT 작성 엔진 — Post 2 종목 리포트.
     분석 재료 + 종목 + 실제 가격 데이터로 종목 리포트 HTML을 작성합니다.
@@ -5272,6 +5849,8 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         same_theme_hint: Phase 16J Track B — 동일 theme 연속 시 opener 강화 프롬프트 주입.
                          _p16j_check_theme_repeat() 결과가 is_repeat=True인 경우 주입.
                          is_repeat=False이면 빈 문자열 — 동작 변화 없음.
+        writer_contract: Phase 20 editorial planner contract (없으면 기존 방식 fallback)
+        run_id:          로그용 run_id
 
     반환: HTML 문자열 ({PRICE_PLACEHOLDER} 포함, PICKS JSON 주석 포함)
     """
@@ -5312,9 +5891,17 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
     run_date_str_now = datetime.now().strftime("%Y-%m-%d")
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
 
+    # Phase 20: writer_contract 존재 시 contract 블록을 최우선으로 prepend
+    p20_block = ""
+    if writer_contract:
+        p20_block = _P20_POST2_CONTRACT_BLOCK.format(
+            writer_contract_json=json.dumps(writer_contract, ensure_ascii=False, indent=2)
+        )
+
     user_msg = (
-        _P17_POST2_OPENER_ENFORCEMENT       # Phase 17: opener pick-angle 강제 ★★ (최우선)
-        + _P15C_POST2_LABEL_BAN               # Phase 15C: 내부 파이프라인 레이블 차단
+        p20_block                           # Phase 20: contract 소비 (최우선, 있을 때만)
+        + _P17_POST2_OPENER_ENFORCEMENT     # Phase 17: opener pick-angle 강제 ★★
+        + _P15C_POST2_LABEL_BAN             # Phase 15C: 내부 파이프라인 레이블 차단
         + _P16D_POST2_CONTINUITY_HARDENING  # Phase 16D: Track A — 매크로 배경 재서술 억제
         + _P16D_POST2_BRIDGE_REQUIREMENT    # Phase 16D: Track B — 픽-테마 브릿지 강제
         + same_theme_hint                   # Phase 16J: 동일 theme 연속 시 opener 강화 (조건부)
@@ -5341,6 +5928,15 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         temperature=0.65,
         max_tokens=6000,  # Phase 4.3: 3000 → 6000 (종목 리포트 밀도 복원)
     )
+
+    # Phase 20: writer_used_evidence_ids 로그
+    if writer_contract and draft:
+        used_ids = _parse_writer_evidence_ids(draft)
+        logger.info(
+            f"[Phase 20] writer evidence | run_id={run_id} | post_type=post2 | "
+            f"writer_used_evidence_ids={used_ids}"
+        )
+
     return draft
 
 
@@ -5750,8 +6346,31 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
                                slot=slot, history_context=history_ctx)
     theme = materials.get("theme", "글로벌 경제 주요 이슈")
 
+    # ── Step 1.5: Editorial Planner (Phase 20) ─────────────────────────────
+    _p20_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _p20_post1_planner = None
+    _p20_post1_contract = None
+    try:
+        _p20_post1_planner = _call_editorial_planner(
+            step1=materials,
+            post_type="post1",
+            slot=slot,
+            run_id=_p20_run_id,
+            history_constraints=history_ctx[:400] if history_ctx else None,
+        )
+        if _p20_post1_planner:
+            _p20_post1_contract = _build_writer_contract(
+                step1=materials,
+                planner=_p20_post1_planner,
+                slot=slot,
+            )
+    except Exception as _p20_e:
+        logger.warning(f"[Phase 20] Post1 planner 예외 — fallback | {_p20_e}")
+
     # ── Step 2: GPT 심층 분석 초고 작성 ───────────────────────────────────
-    draft = gpt_write_analysis(materials, context_text, slot=slot)
+    draft = gpt_write_analysis(materials, context_text, slot=slot,
+                               writer_contract=_p20_post1_contract,
+                               run_id=_p20_run_id)
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
@@ -6000,10 +6619,32 @@ def generate_stock_picks_report(
         _P16J_POST2_SAME_THEME_OPENER if _p16j_theme_diag["is_repeat"] else ""
     )
 
+    # ── Step 1.5: Editorial Planner (Phase 20) ─────────────────────────────
+    _p20_post2_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _p20_post2_planner = None
+    _p20_post2_contract = None
+    try:
+        _p20_post2_planner = _call_editorial_planner(
+            step1=materials,
+            post_type="post2",
+            slot=slot,
+            run_id=_p20_post2_run_id,
+        )
+        if _p20_post2_planner:
+            _p20_post2_contract = _build_writer_contract(
+                step1=materials,
+                planner=_p20_post2_planner,
+                slot=slot,
+            )
+    except Exception as _p20_e2:
+        logger.warning(f"[Phase 20] Post2 planner 예외 — fallback | {_p20_e2}")
+
     # ── Step 2: GPT 종목 리포트 작성 ──────────────────────────────────────
     draft = gpt_write_picks(materials, picks, prices, context_text, slot=slot,
                             post1_spine=post1_spine,
-                            same_theme_hint=_p16j_same_theme_hint)  # Phase 16J: theme repeat hint
+                            same_theme_hint=_p16j_same_theme_hint,
+                            writer_contract=_p20_post2_contract,
+                            run_id=_p20_post2_run_id)
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
