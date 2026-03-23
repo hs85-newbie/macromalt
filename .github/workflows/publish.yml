@@ -33,6 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: 'GitHub Actions'
+    # KST 고정 — datetime.now() / 로그 타임스탬프 / 슬롯 감지 모두 KST 기준
+    env:
+      TZ: Asia/Seoul
 
     steps:
       # ── 1. 코드 체크아웃 ────────────────────────────────────

@@ -112,10 +112,28 @@ add_filter( 'body_class', function( $classes ) {
 } );
 
 /**
- * 4. Enqueue Parent Styles
+ * 4. Enqueue Parent Styles & Fonts
  */
 add_action( 'wp_enqueue_scripts', function() {
+    // 4.1 Parent Theme Style
     wp_enqueue_style( 'generatepress-style', get_template_directory_uri() . '/style.css' );
+
+    // 4.2 Macromalt Typography System [Step05]
+    // STRATEGY: Phase 1 - CDN (Performance/Ease), Phase 2 - Self-host ready
+    
+    /* [OPTION A: CDN - Active] */
+    // Pretendard Variable (d2.naver.com)
+    wp_enqueue_style( 'mm-font-pretendard', 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css', array(), '1.3.9' );
+    
+    // Noto Serif KR (Google Fonts)
+    wp_enqueue_style( 'mm-font-noto-serif', 'https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@700&display=swap', array(), null );
+
+    /* [OPTION B: Self-host - Standby]
+    // To switch to self-hosting:
+    // 1. Download font files to theme-folder/fonts/
+    // 2. Uncomment the following and comment out Option A above
+    wp_enqueue_style( 'mm-fonts-local', get_stylesheet_directory_uri() . '/styles/fonts.css', array(), '1.0.0' );
+    */
 }, 1 );
 
 /**
