@@ -125,15 +125,15 @@ def _theme_to_query(theme: str) -> str:
     return _UNSPLASH_FALLBACK_QUERY
 
 
-def fetch_unsplash_image(theme: str) -> Optional[bytes]:
+def fetch_unsplash_image(theme: str) -> Tuple[Optional[bytes], str]:
     """
     Unsplash API에서 테마 관련 이미지를 가져옵니다.
-    Returns: JPEG 바이트 또는 None
+    Returns: (JPEG 바이트, 출처 문자열) 또는 (None, "")
     """
     access_key = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
     if not access_key:
         logger.warning("⚠ [images] UNSPLASH_ACCESS_KEY 미설정 — 대표 이미지 건너뜀")
-        return None
+        return None, ""
 
     query = _theme_to_query(theme)
     logger.info(f"  [images] Unsplash 검색: '{theme[:40]}...' → query='{query}'")
@@ -146,36 +146,57 @@ def fetch_unsplash_image(theme: str) -> Optional[bytes]:
             timeout=15,
         )
         resp.raise_for_status()
-        image_url = resp.json().get("urls", {}).get("regular")
+        data = resp.json()
+        image_url = data.get("urls", {}).get("regular")
         if not image_url:
             logger.warning("⚠ [images] Unsplash 응답에 image URL 없음")
-            return None
+            return None, ""
+
+        # 사진작가 정보 추출
+        photographer = data.get("user", {}).get("name", "Unsplash")
+        photo_link   = data.get("links", {}).get("html", "https://unsplash.com")
+        attribution  = f'Unsplash / <a href="{photo_link}" target="_blank" rel="noopener">{photographer}</a>'
 
         img_resp = requests.get(image_url, timeout=20)
         img_resp.raise_for_status()
-        logger.info(f"✅ [images] Unsplash 이미지 다운로드 완료 ({len(img_resp.content):,} bytes)")
-        return img_resp.content
+        logger.info(f"✅ [images] Unsplash 이미지 다운로드 완료 ({len(img_resp.content):,} bytes) — {photographer}")
+        return img_resp.content, attribution
 
     except Exception as e:
         logger.warning(f"⚠ [images] Unsplash 이미지 조회 실패 (비치명): {e}")
-        return None
+        return None, ""
 
 
 # ──────────────────────────────────────────────
 # 3. Post 2 — 종목 1주 차트 이미지
 # ──────────────────────────────────────────────
 
-def _get_korean_font() -> str:
-    """환경별 한글 폰트 이름 반환 (macOS → Apple SD Gothic Neo, Linux → NanumGothic)"""
-    try:
-        import matplotlib.font_manager as fm
-        available = {f.name for f in fm.fontManager.ttflist}
-        for name in ["Apple SD Gothic Neo", "AppleGothic", "NanumGothic", "Malgun Gothic"]:
-            if name in available:
-                return name
-    except Exception:
-        pass
-    return "DejaVu Sans"
+_KOREAN_FONT_PATHS = [
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",   # macOS
+    "/System/Library/Fonts/Supplemental/AppleGothic.ttf",  # macOS fallback
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",      # Ubuntu
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Ubuntu fallback
+]
+
+def _setup_korean_font() -> None:
+    """한글 폰트를 matplotlib에 직접 등록하고 설정합니다 (파일 경로 기반, 확실한 방법)."""
+    import os as _os
+    import matplotlib.font_manager as fm
+
+    for path in _KOREAN_FONT_PATHS:
+        if _os.path.exists(path):
+            try:
+                fm.fontManager.addfont(path)
+                prop = fm.FontProperties(fname=path)
+                import matplotlib
+                matplotlib.rcParams["font.family"] = prop.get_name()
+                matplotlib.rcParams["axes.unicode_minus"] = False
+                logger.info(f"  [images] 한글 폰트 설정: {prop.get_name()} ({path})")
+                return
+            except Exception as e:
+                logger.warning(f"  [images] 폰트 로드 실패 ({path}): {e}")
+
+    logger.warning("  [images] 한글 폰트 없음 — 폰트 깨짐 가능")
 
 
 def generate_ticker_chart(ticker: str, name: str = "") -> Optional[bytes]:
@@ -190,9 +211,7 @@ def generate_ticker_chart(ticker: str, name: str = "") -> Optional[bytes]:
         import matplotlib.dates as mdates
         import yfinance as yf
 
-        font_name = _get_korean_font()
-        matplotlib.rcParams["font.family"] = font_name
-        matplotlib.rcParams["axes.unicode_minus"] = False
+        _setup_korean_font()
 
     except ImportError as e:
         logger.warning(f"⚠ [images] 차트 패키지 없음: {e}")
@@ -271,7 +290,9 @@ def inject_chart_into_content(content: str, img_url: str, alt_text: str = "") ->
     img_html = (
         f'\n<figure class="mm-chart-figure" style="margin:2em 0;text-align:center;">'
         f'<img src="{img_url}" alt="{alt_text}" style="max-width:100%;height:auto;border:1px solid #eee;" />'
-        f'<figcaption style="font-size:11px;color:#888;margin-top:6px;">{alt_text}</figcaption>'
+        f'<figcaption style="font-size:11px;color:#888;margin-top:6px;">'
+        f'{alt_text} &nbsp;|&nbsp; [출처: Yahoo Finance]'
+        f'</figcaption>'
         f'</figure>\n'
     )
 
@@ -289,18 +310,18 @@ def inject_chart_into_content(content: str, img_url: str, alt_text: str = "") ->
 # 5. 파이프라인 헬퍼
 # ──────────────────────────────────────────────
 
-def attach_post1_image(theme: str) -> Optional[int]:
+def attach_post1_image(theme: str) -> Tuple[Optional[int], str]:
     """
-    Post 1(심층분석): Unsplash → WP 업로드 → media_id 반환
+    Post 1(심층분석): Unsplash → WP 업로드 → (media_id, attribution) 반환
+    attribution: 본문 하단 출처 표기용 HTML 문자열
     """
-    img_bytes = fetch_unsplash_image(theme)
+    img_bytes, attribution = fetch_unsplash_image(theme)
     if not img_bytes:
-        return None
+        return None, ""
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in theme)[:40]
-    # 파일명은 ASCII만 허용 (latin-1 인코딩 오류 방지)
-    safe_ascii = safe.encode("ascii", errors="ignore").decode()[:40] or "theme"
+    safe_ascii = safe.encode("ascii", errors="ignore").decode() or "theme"
     media_id, _ = upload_to_wp_media(img_bytes, f"macromalt_{safe_ascii}.jpg", alt_text=theme)
-    return media_id
+    return media_id, attribution
 
 
 def attach_post2_image(picks: list) -> Tuple[Optional[int], Optional[str]]:

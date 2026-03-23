@@ -243,9 +243,18 @@ def main() -> None:
     import re as _re
 
     logger.info("▶ [Step 2C] 이미지 준비")
-    post1_media_id = attach_post1_image(post1.get("theme", ""))
-    post2_media_id, post2_img_html = attach_post2_image(post2.get("picks", []) if post2 else [])
+    post1_media_id, post1_attribution = attach_post1_image(post1.get("theme", ""))
+    post2_media_id, post2_img_html    = attach_post2_image(post2.get("picks", []) if post2 else [])
     logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
+
+    # Post 1: 본문 하단에 Unsplash 출처 표기
+    if post1_attribution:
+        post1["content"] = post1.get("content", "") + (
+            f'\n<p class="mm-image-credit" style="font-size:11px;color:#aaa;text-align:right;margin-top:2em;">'
+            f'[출처: {post1_attribution}]'
+            f'</p>'
+        )
+        logger.info("   Post1 이미지 출처 표기 추가")
 
     # Post 2: h1 먼저 제거 → 차트를 메인 픽 h2 직후에 삽입 (featured_media 미사용 — 본문 삽입만)
     if post2 and post2_img_html:
