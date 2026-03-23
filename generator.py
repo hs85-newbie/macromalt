@@ -5801,16 +5801,23 @@ def _parse_writer_evidence_ids(html: str) -> list:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
-def _check_p20_lead_drift(
+def _check_p20_lead_metrics(
     writer_contract: dict,
     writer_used_ids: list,
     run_id: str,
     post_type: str,
 ) -> None:
-    """Phase 20 lead drift 체크: writer가 lead_facts를 실제로 소비했는지 검사.
+    """Phase 20 lead quality 이중 지표 측정 (파이프라인 차단 없음).
 
-    lead_facts evidence_ids 중 writer_used_evidence_ids에서 누락된 비율이
-    임계값(50%)을 초과하면 WARN 로그를 남긴다. 파이프라인 차단 없음.
+    lead_recall: lead_ids 중 writer가 실제로 사용한 비율.
+        낮으면 → planner가 지정한 핵심 근거를 writer가 누락 (lead 누락 문제).
+
+    lead_focus: writer 전체 사용 ids 중 lead_ids의 비율.
+        낮으면 → writer가 lead보다 secondary/background에 집중 (강조 희석 문제).
+
+    WARN 임계값:
+        lead_recall < 0.5  → lead 사실 절반 이상 미사용
+        lead_focus  < 0.25 → 사용 사실 중 lead 비중 25% 미만 (균등 배분 회귀)
     """
     try:
         lead_ids = set()
@@ -5819,21 +5826,33 @@ def _check_p20_lead_drift(
                 lead_ids.add(f["id"])
         if not lead_ids:
             return
+
         used_ids = set(writer_used_ids)
-        missing = lead_ids - used_ids
-        coverage = len(lead_ids - missing) / len(lead_ids)
+        hit       = lead_ids & used_ids
+        missing   = lead_ids - used_ids
+
+        lead_recall = len(hit) / len(lead_ids)
+        lead_focus  = len(hit) / len(used_ids) if used_ids else 0.0
+
         logger.info(
-            f"[Phase 20] lead_drift_check | run_id={run_id} | post_type={post_type} | "
+            f"[Phase 20] lead_metrics | run_id={run_id} | post_type={post_type} | "
             f"lead_ids={sorted(lead_ids)} | writer_used_ids={sorted(used_ids)} | "
-            f"missing_lead_ids={sorted(missing)} | lead_coverage={coverage:.2f}"
+            f"missing_lead_ids={sorted(missing)} | "
+            f"lead_recall={lead_recall:.2f} | lead_focus={lead_focus:.2f}"
         )
-        if coverage < 0.5:
+
+        warns = []
+        if lead_recall < 0.5:
+            warns.append(f"lead_recall={lead_recall:.2f} — lead_ids 절반 이상 미사용")
+        if lead_focus < 0.25:
+            warns.append(f"lead_focus={lead_focus:.2f} — 사용 facts 중 lead 비중 25% 미만 (강조 희석)")
+        if warns:
             logger.warning(
-                f"[Phase 20] WARN lead_drift | run_id={run_id} | post_type={post_type} | "
-                f"lead_coverage={coverage:.2f} — writer가 lead_facts를 50% 미만 사용"
+                f"[Phase 20] WARN lead_metrics | run_id={run_id} | post_type={post_type} | "
+                + " | ".join(warns)
             )
     except Exception as _e:
-        logger.debug(f"[Phase 20] lead_drift_check 예외 (무시) | {_e}")
+        logger.debug(f"[Phase 20] lead_metrics 예외 (무시) | {_e}")
 
 
 def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default",
@@ -5898,7 +5917,7 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
             f"[Phase 20] writer evidence | run_id={run_id} | post_type=post1 | "
             f"writer_used_evidence_ids={used_ids}"
         )
-        _check_p20_lead_drift(writer_contract, used_ids, run_id, "post1")
+        _check_p20_lead_metrics(writer_contract, used_ids, run_id, "post1")
 
     return draft
 
@@ -6005,7 +6024,7 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
             f"[Phase 20] writer evidence | run_id={run_id} | post_type=post2 | "
             f"writer_used_evidence_ids={used_ids}"
         )
-        _check_p20_lead_drift(writer_contract, used_ids, run_id, "post2")
+        _check_p20_lead_metrics(writer_contract, used_ids, run_id, "post2")
 
     return draft
 
