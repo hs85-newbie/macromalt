@@ -37,16 +37,19 @@
     color: #aaa;
     margin-bottom: 8px;
     text-align: center;
+    /* Not a navigation element — clear visual de-emphasis */
 }
 
 /* ── Mid-Article Slot ───────────────────────────────────────── */
 .mm-ad-mid {
+    /* Between paragraphs: keep readable breathing room */
     margin: 48px 0;
     min-height: 100px;
 }
 
 /* ── End-of-Article Slot ────────────────────────────────────── */
 .mm-ad-end {
+    /* After article body, before related posts */
     margin: 40px 0 32px;
     min-height: 90px;
 }
@@ -74,7 +77,12 @@
     }
 }
 
-/* ── Exclusion guards: disclosure box must not be directly adjacent ── */
+/* ── Excluded zones: ensure no slot appears adjacent to trust elements ── */
+/*
+ * These rules are enforced in PHP (functions.php Section 6).
+ * CSS below adds visual guard as secondary protection.
+ * Disclosure box and source blocks must not be directly adjacent to ads.
+ */
 .editorial-disclosure-box + .mm-ad-slot,
 .mm-ad-slot + .editorial-disclosure-box {
     margin-top: 60px;
