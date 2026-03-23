@@ -4,6 +4,7 @@
  *
  * DESIGN TRACK: Step04 - Seasonal Layer Refinement [Merged]
  * PHASE 20: Technical SEO Baseline + Monetization Architecture
+ * 
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -104,7 +105,8 @@ function macromalt_customize_read_more() {
 
 // 3.1 Deterministic Seasonal Class (WP Timezone)
 add_filter( 'body_class', function( $classes ) {
-    $month     = strtolower( current_time( 'M' ) );
+    // WordPress 로컬 타임존 기반 월 식별 [jan, feb...]
+    $month = strtolower( current_time( 'M' ) ); 
     $classes[] = 'mm-season-' . $month;
     return $classes;
 } );
@@ -289,8 +291,8 @@ add_action( 'wp_head', function() {
         echo '<script type="application/ld+json">' . wp_json_encode( $article, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . '</script>' . "\n";
 
         // BreadcrumbList
-        $cats  = get_the_category( $post->ID );
-        $items = [ [ '@type' => 'ListItem', 'position' => 1, 'name' => 'Macromalt', 'item' => home_url( '/' ) ] ];
+        $cats   = get_the_category( $post->ID );
+        $items  = [ [ '@type' => 'ListItem', 'position' => 1, 'name' => 'Macromalt', 'item' => home_url( '/' ) ] ];
         if ( ! empty( $cats ) ) {
             $items[] = [ '@type' => 'ListItem', 'position' => 2, 'name' => $cats[0]->name, 'item' => get_category_link( $cats[0]->term_id ) ];
             $items[] = [ '@type' => 'ListItem', 'position' => 3, 'name' => get_the_title( $post->ID ), 'item' => get_permalink( $post->ID ) ];
@@ -333,6 +335,7 @@ add_action( 'wp_head', function() {
     if ( ! MACROMALT_ADSENSE_ACTIVE ) {
         return;
     }
+    // Excluded: about, privacy, terms, disclosure pages and author archives
     if ( is_page( [ 'about', 'privacy-policy', 'terms', 'advertising-policy', 'disclosure' ] ) || is_author() ) {
         return;
     }
