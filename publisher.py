@@ -74,14 +74,20 @@ def _strip_leading_h1(content: str) -> str:
     )
 
 
-def publish_draft(title: str, content: str, category_ids: list = None) -> dict:
+def publish_draft(
+    title: str,
+    content: str,
+    category_ids: list = None,
+    featured_media_id: int = None,
+) -> dict:
     """
     마크다운 콘텐츠를 WordPress에 임시저장(Draft)으로 업로드합니다.
 
     Args:
-        title:        포스팅 제목
-        content:      마크다운 본문 전체
-        category_ids: WordPress 카테고리 ID 목록 (None이면 .env의 WP_CATEGORY_DEFAULT 또는 [2] 사용)
+        title:             포스팅 제목
+        content:           마크다운 본문 전체
+        category_ids:      WordPress 카테고리 ID 목록 (None이면 .env의 WP_CATEGORY_DEFAULT 또는 [2] 사용)
+        featured_media_id: WordPress 미디어 ID (None이면 대표 이미지 미설정)
 
     반환값:
         {
@@ -122,6 +128,10 @@ def publish_draft(title: str, content: str, category_ids: list = None) -> dict:
         "comment_status": "open",
         "categories": category_ids,
     }
+
+    if featured_media_id:
+        payload["featured_media"] = featured_media_id
+        logger.info(f"   대표 이미지 설정: media_id={featured_media_id}")
 
     logger.info(f"WordPress 업로드 시작 | 제목: '{title}'")
 

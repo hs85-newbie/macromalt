@@ -48,3 +48,7 @@ markdown>=3.9
 
 # [PDF 파싱] 증권사 리포트 PDF 본문 추출 (Phase 5-B)
 pdfplumber>=0.11
+
+# [이미지] Post 1 대표 이미지(Unsplash) + Post 2 차트 생성
+matplotlib>=3.8
+Pillow>=10.0

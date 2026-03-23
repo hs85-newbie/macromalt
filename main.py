@@ -171,7 +171,7 @@ def step_generate_picks(post1: dict, news: list[dict], research: list[dict], slo
     return post2
 
 
-def step_publish(post: dict, category_ids: list, step_label: str) -> dict:
+def step_publish(post: dict, category_ids: list, step_label: str, featured_media_id: int = None) -> dict:
     """Step 3A/3B: WordPress Draft 업로드"""
     from publisher import publish_draft
 
@@ -180,6 +180,7 @@ def step_publish(post: dict, category_ids: list, step_label: str) -> dict:
         title=post["title"],
         content=post["content"],
         category_ids=category_ids,
+        featured_media_id=featured_media_id,
     )
     logger.info(f"✅ [{step_label}] 업로드 완료: Post ID {result['post_id']}")
     return result
@@ -236,9 +237,17 @@ def main() -> None:
         logger.error(f"   원인: {e}")
         post2 = None
 
+    # ── Step 2C: 이미지 준비 (비치명 — 실패해도 발행 계속) ───
+    from images import attach_post1_image, attach_post2_image
+
+    logger.info("▶ [Step 2C] 이미지 준비")
+    post1_media_id = attach_post1_image(post1.get("theme", ""))
+    post2_media_id = attach_post2_image(post2.get("picks", []) if post2 else [])
+    logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
+
     try:
         # ── Step 3A: Post 1 발행 ─────────────────────
-        post1_result = step_publish(post1, cat_analysis, "Step 3A")
+        post1_result = step_publish(post1, cat_analysis, "Step 3A", featured_media_id=post1_media_id)
 
     except Exception as e:
         logger.error(f"❌ [Step 3A] Post 1 발행 실패 [run_id: {run_id}]")
@@ -248,7 +257,7 @@ def main() -> None:
     if post2 is not None:
         try:
             # ── Step 3B: Post 2 발행 ─────────────────
-            post2_result = step_publish(post2, cat_picks, "Step 3B")
+            post2_result = step_publish(post2, cat_picks, "Step 3B", featured_media_id=post2_media_id)
 
         except Exception as e:
             logger.error(f"⚠ [Step 3B] Post 2 발행 실패")
