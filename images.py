@@ -275,10 +275,10 @@ def inject_chart_into_content(content: str, img_url: str, alt_text: str = "") ->
         f'</figure>\n'
     )
 
-    # 첫 번째 <h2> 앞에 삽입
-    match = re.search(r"<h2[\s>]", content)
+    # 첫 번째 </h2> 직후에 삽입 (메인 픽 제목 바로 아래)
+    match = re.search(r"</h2>", content)
     if match:
-        pos = match.start()
+        pos = match.end()
         return content[:pos] + img_html + content[pos:]
 
     # <h2> 없으면 본문 맨 앞

@@ -238,26 +238,27 @@ def main() -> None:
         post2 = None
 
     # ── Step 2C: 이미지 준비 (비치명 — 실패해도 발행 계속) ───
-    from images import attach_post1_image, attach_post2_image
+    from images import attach_post1_image, attach_post2_image, inject_chart_into_content
+    from publisher import _strip_leading_h1
+    import re as _re
 
     logger.info("▶ [Step 2C] 이미지 준비")
     post1_media_id = attach_post1_image(post1.get("theme", ""))
     post2_media_id, post2_img_html = attach_post2_image(post2.get("picks", []) if post2 else [])
     logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
 
-    # Post 2 본문에 차트 삽입
+    # Post 2: h1 먼저 제거 → 차트를 메인 픽 h2 직후에 삽입 (featured_media 미사용 — 본문 삽입만)
     if post2 and post2_img_html:
-        import re as _re
         _url_m = _re.search(r'src="([^"]+)"', post2_img_html)
         _alt_m = _re.search(r'alt="([^"]+)"', post2_img_html)
         if _url_m:
-            from images import inject_chart_into_content
+            post2["content"] = _strip_leading_h1(post2["content"])
             post2["content"] = inject_chart_into_content(
                 post2["content"],
                 _url_m.group(1),
                 _alt_m.group(1) if _alt_m else "",
             )
-            logger.info("   차트 본문 삽입 완료")
+            logger.info("   차트 본문 삽입 완료 (메인 픽 h2 직후)")
 
     try:
         # ── Step 3A: Post 1 발행 ─────────────────────
@@ -270,8 +271,8 @@ def main() -> None:
 
     if post2 is not None:
         try:
-            # ── Step 3B: Post 2 발행 ─────────────────
-            post2_result = step_publish(post2, cat_picks, "Step 3B", featured_media_id=post2_media_id)
+            # ── Step 3B: Post 2 발행 (featured_media 없음 — 차트는 본문에만)
+            post2_result = step_publish(post2, cat_picks, "Step 3B", featured_media_id=None)
 
         except Exception as e:
             logger.error(f"⚠ [Step 3B] Post 2 발행 실패")
