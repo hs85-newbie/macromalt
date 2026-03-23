@@ -48,3 +48,10 @@ markdown>=3.9
 
 # [PDF 파싱] 증권사 리포트 PDF 본문 추출 (Phase 5-B)
 pdfplumber>=0.11
+
+# [한국 주식 데이터] KRX(한국거래소) 종목 시세 (API 키 불필요)
+pykrx>=1.0.47
+
+# [이미지 처리] Unsplash 이미지 + 차트 생성
+matplotlib>=3.8
+Pillow>=10.0
