@@ -5281,6 +5281,28 @@ GEMINI_VERIFIER_SYSTEM = """
     연결되지 않는 경우 (경미하면 issues 기재)
 ※ 20~22번 위반 시 반드시 pass=false. 위반 문장을 issues에 정확히 인용할 것.
 
+★ Phase 20 편집 구조 점검 (26~30번):
+26. [섹션 동형 반복] 연속된 2개 이상의 h3 섹션이 "주장(1문장) → 수치 근거(1~2문장) → 시장 시사(1문장)"
+    동일 3단 구조를 거의 그대로 반복하는가 — opener 표현만 다르고 수사 구조가 동형이면 해당
+    (2섹션 이상 연속 동형 시 pass=false. 위반 섹션 제목을 issues에 인용할 것.)
+27. [강조 분산] 전체 h3 섹션들이 분량·수사 비중 면에서 거의 균등한가 — 명확히 무거운 lead 섹션이
+    없고 모든 섹션이 비슷한 역할(요약형 서술)로 처리된 경우
+    (3개 이상 섹션 균등 배분 시 pass=false)
+28. [리드 드리프트] 도입부 또는 첫 h3에서 제시한 핵심 논거·각도가 중반 이후 섹션에서 사라지고,
+    각 섹션이 독립적인 사실 묶음으로 전개되는가 — 전반부에서 내세운 "왜 지금"이 후반부에서
+    재등장하거나 강화되지 않고 방치되는 패턴
+    (뚜렷한 드리프트 시 pass=false. 드리프트 지점 문장을 issues에 인용할 것.)
+29. [일반 문장 과잉] 숫자·날짜·인과관계·출처·포지션 값 중 하나도 포함하지 않은 문장(일반 연결 문장 제외)이
+    전체 서술 문장의 40% 이상인가 — "~에 주목할 필요가 있다", "~로 분석된다", "시장에 영향을 줄 수 있다"
+    류 내용 없는 문장이 과도하게 반복되는 경우
+    (40% 이상 시 pass=false)
+30. [근거 없는 분석 단정] "시장이 과소평가했다", "아직 반영되지 않았다", "시장 컨센서스와 달리",
+    "예상보다 강하다/약하다", "시장의 인식과 괴리" 등 consensus_miss/underpriced_risk 계열의
+    분석 판단이 구체적 수치·날짜·대비 사건 없이 단독 주장으로 서술되는가
+    (구체 근거 없는 단정 1회 이상 시 pass=false. 해당 문장을 issues에 정확히 인용할 것.)
+※ 26~30번은 구조적 문제이므로 심각하면 pass=false. 경미하면 pass=true + issues 기재.
+※ 26번(섹션 동형 반복)과 28번(리드 드리프트)은 AI 기계적 서술의 핵심 지표 — 엄격히 적용.
+
 [출력 JSON — pass/issues만 출력, revised_content 없음]
 {
   "pass": true 또는 false,
@@ -5372,6 +5394,17 @@ GEMINI_REVISER_SYSTEM = """
    ❌ 금지: "2024년 5월 20일 기준 KOSPI는 2,724.62pt를 기록하고 있습니다"
    ❌ 금지: "2024년 4월 15일 기준으로 전일 대비 0.48% 하락하며"
    ✅ 허용: "KOSPI는 전일 대비 하락 마감했습니다" / "당시 KOSPI는 하락 마감했습니다"
+11. [★ Phase 20 — 섹션 동형 반복 보정]
+   연속된 섹션이 "주장→근거→시사" 동일 구조를 반복하는 경우 — 두 번째 반복 섹션부터 opener를 교체:
+   - 평서형 opener → 역접형("그러나 ~", "반면 ~")이나 인과형("이 때문에 ~") 또는 질문형으로 교체
+   - opener 표현만 교체 — 해당 섹션의 수치·논리는 반드시 원문 그대로 보존
+   - 교체 후 섹션 길이가 원문보다 짧아지지 않도록 할 것
+12. [★ Phase 20 — 리드 논거 약화 보정]
+   도입부 또는 첫 섹션에서 제시된 핵심 각도(lead 논거)가 후반 섹션에서 재등장하지 않는 경우:
+   - 마지막 핵심 분석 섹션(counterpoint 직전) 끝에 lead 논거와의 연결 문장 1개 추가
+     예: "이러한 흐름은 앞서 제시한 [핵심 각도]의 연장선에서 해석할 수 있다"
+   - 날짜·수치 발명 금지 — 기존 본문에 있는 사실만 참조할 것
+   - 추가 문장은 1개로 제한
 """
 
 GEMINI_REVISER_USER = """
@@ -5768,6 +5801,41 @@ def _parse_writer_evidence_ids(html: str) -> list:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _check_p20_lead_drift(
+    writer_contract: dict,
+    writer_used_ids: list,
+    run_id: str,
+    post_type: str,
+) -> None:
+    """Phase 20 lead drift 체크: writer가 lead_facts를 실제로 소비했는지 검사.
+
+    lead_facts evidence_ids 중 writer_used_evidence_ids에서 누락된 비율이
+    임계값(50%)을 초과하면 WARN 로그를 남긴다. 파이프라인 차단 없음.
+    """
+    try:
+        lead_ids = set()
+        for f in writer_contract.get("lead_facts", []):
+            if isinstance(f, dict) and f.get("id"):
+                lead_ids.add(f["id"])
+        if not lead_ids:
+            return
+        used_ids = set(writer_used_ids)
+        missing = lead_ids - used_ids
+        coverage = len(lead_ids - missing) / len(lead_ids)
+        logger.info(
+            f"[Phase 20] lead_drift_check | run_id={run_id} | post_type={post_type} | "
+            f"lead_ids={sorted(lead_ids)} | writer_used_ids={sorted(used_ids)} | "
+            f"missing_lead_ids={sorted(missing)} | lead_coverage={coverage:.2f}"
+        )
+        if coverage < 0.5:
+            logger.warning(
+                f"[Phase 20] WARN lead_drift | run_id={run_id} | post_type={post_type} | "
+                f"lead_coverage={coverage:.2f} — writer가 lead_facts를 50% 미만 사용"
+            )
+    except Exception as _e:
+        logger.debug(f"[Phase 20] lead_drift_check 예외 (무시) | {_e}")
+
+
 def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default",
                        writer_contract: Optional[dict] = None,
                        run_id: str = "") -> str:
@@ -5823,13 +5891,14 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
         max_tokens=5000,  # Phase 4.3: 4000 → 5000 (심층분석 밀도 복원)
     )
 
-    # Phase 20: writer_used_evidence_ids 로그
+    # Phase 20: writer_used_evidence_ids 로그 + lead drift 체크
     if writer_contract and draft:
         used_ids = _parse_writer_evidence_ids(draft)
         logger.info(
             f"[Phase 20] writer evidence | run_id={run_id} | post_type=post1 | "
             f"writer_used_evidence_ids={used_ids}"
         )
+        _check_p20_lead_drift(writer_contract, used_ids, run_id, "post1")
 
     return draft
 
@@ -5929,13 +5998,14 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         max_tokens=6000,  # Phase 4.3: 3000 → 6000 (종목 리포트 밀도 복원)
     )
 
-    # Phase 20: writer_used_evidence_ids 로그
+    # Phase 20: writer_used_evidence_ids 로그 + lead drift 체크
     if writer_contract and draft:
         used_ids = _parse_writer_evidence_ids(draft)
         logger.info(
             f"[Phase 20] writer evidence | run_id={run_id} | post_type=post2 | "
             f"writer_used_evidence_ids={used_ids}"
         )
+        _check_p20_lead_drift(writer_contract, used_ids, run_id, "post2")
 
     return draft
 
