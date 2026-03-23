@@ -116,13 +116,62 @@ _THEME_KEYWORD_MAP = {
 _UNSPLASH_FALLBACK_QUERY = "financial market economy"
 
 
-def _theme_to_query(theme: str) -> str:
-    """한국어 테마 문자열 → Unsplash 영문 검색어 (항상 영문 반환)"""
+def _theme_to_query_rule(theme: str) -> str:
+    """규칙 기반 폴백: 한국어 테마 → Unsplash 영문 키워드"""
     theme_lower = theme.lower()
     for kor, eng in _THEME_KEYWORD_MAP.items():
         if kor in theme_lower:
             return eng
     return _UNSPLASH_FALLBACK_QUERY
+
+
+def _theme_to_query(theme: str) -> str:
+    """
+    GPT-4o-mini로 테마 전체 맥락을 읽고 Unsplash 검색어를 생성합니다.
+    API 실패 시 규칙 기반 폴백 사용.
+
+    목표: 단일 키워드 리터럴 매핑이 아닌, 기사 분위기/개념을 담은 3~5단어 영문 쿼리.
+    예) '중동 지정학 + 화장품 미국 성장' → 'global beauty market momentum' (낙타 사진 X)
+    """
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "").strip())
+
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You suggest Unsplash photo search keywords for Korean financial blog articles. "
+                        "Return ONLY 3-5 English words — no explanation, no punctuation. "
+                        "Pick a concept that is visually sophisticated and emotionally resonant with the article's "
+                        "core message. Do NOT be overly literal about geographic locations or named subjects. "
+                        "Think about mood, scale, and what the article is fundamentally about.\n"
+                        "Examples:\n"
+                        "- '반도체 공급망 재편' → 'microchip manufacturing precision'\n"
+                        "- '미국 소비 둔화 우려' → 'empty shopping mall dusk'\n"
+                        "- '중동 리스크 속 화장품 미국 수출 성장' → 'korean beauty global expansion'\n"
+                        "- '연준 금리 동결' → 'federal building city morning'\n"
+                        "- '원유 가격 급등' → 'industrial pipeline twilight'"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Article theme (Korean): {theme[:200]}",
+                },
+            ],
+            max_tokens=20,
+            temperature=0.4,
+        )
+        query = resp.choices[0].message.content.strip().strip('"').strip("'")
+        if query and len(query) > 3:
+            logger.info(f"  [images] GPT Unsplash 쿼리: '{query}'")
+            return query
+    except Exception as e:
+        logger.warning(f"  [images] GPT 쿼리 생성 실패, 규칙 기반 폴백: {e}")
+
+    return _theme_to_query_rule(theme)
 
 
 def fetch_unsplash_image(theme: str) -> Tuple[Optional[bytes], str]:
@@ -259,10 +308,11 @@ def _fetch_naver_chart_data(ticker: str):
         return None
 
 
-def generate_ticker_chart(ticker: str, name: str = "") -> Optional[bytes]:
+def generate_ticker_chart(ticker: str, name: str = "") -> Tuple[Optional[bytes], str]:
     """
     yfinance 1주 데이터 → matplotlib 라인 차트 PNG 생성.
-    Returns: PNG 바이트 또는 None
+    Returns: (PNG 바이트, 출처 레이블) — 실패 시 (None, "")
+    출처 레이블: "Yahoo Finance" 또는 "네이버금융" (실제 데이터 소스에 따라)
     """
     try:
         import matplotlib
@@ -275,10 +325,11 @@ def generate_ticker_chart(ticker: str, name: str = "") -> Optional[bytes]:
 
     except ImportError as e:
         logger.warning(f"⚠ [images] 차트 패키지 없음: {e}")
-        return None
+        return None, ""
 
     try:
         logger.info(f"  [images] 차트 생성: {ticker} ({name})")
+        chart_source = "Yahoo Finance"
         df = yf.download(ticker, period="7d", interval="1d", progress=False, auto_adjust=True)
 
         if df.empty or len(df) < 2:
@@ -286,7 +337,8 @@ def generate_ticker_chart(ticker: str, name: str = "") -> Optional[bytes]:
             df = _fetch_naver_chart_data(ticker)
             if df is None or df.empty or len(df) < 2:
                 logger.warning(f"⚠ [images] {ticker} 데이터 부족 (yfinance + 네이버 모두 실패)")
-                return None
+                return None, ""
+            chart_source = "네이버금융"
 
         close   = df["Close"].squeeze()
         dates   = close.index
@@ -331,23 +383,29 @@ def generate_ticker_chart(ticker: str, name: str = "") -> Optional[bytes]:
         buf.seek(0)
         chart_bytes = buf.read()
 
-        logger.info(f"✅ [images] 차트 생성 완료: {ticker} ({len(chart_bytes):,} bytes)")
-        return chart_bytes
+        logger.info(f"✅ [images] 차트 생성 완료: {ticker} ({len(chart_bytes):,} bytes) [출처: {chart_source}]")
+        return chart_bytes, chart_source
 
     except Exception as e:
         logger.warning(f"⚠ [images] 차트 생성 실패 (비치명): {e}")
-        return None
+        return None, ""
 
 
 # ──────────────────────────────────────────────
 # 4. 본문 내 차트 삽입
 # ──────────────────────────────────────────────
 
-def inject_chart_into_content(content: str, img_url: str, alt_text: str = "") -> str:
+def inject_chart_into_content(
+    content: str,
+    img_url: str,
+    alt_text: str = "",
+    source: str = "Yahoo Finance",
+) -> str:
     """
     Post 2 본문에 차트 이미지를 삽입합니다.
     '⭐ 메인 픽' h3 헤더 직후에 삽입 (없으면 본문 맨 앞).
     Post 2 구조는 h1/h3만 사용하고 h2는 없으므로 h3 패턴으로 탐지.
+    source: 실제 데이터 소스 ("Yahoo Finance" | "네이버금융")
     """
     import re
 
@@ -355,7 +413,7 @@ def inject_chart_into_content(content: str, img_url: str, alt_text: str = "") ->
         f'\n<figure class="mm-chart-figure" style="margin:2em 0;text-align:center;">'
         f'<img src="{img_url}" alt="{alt_text}" style="max-width:100%;height:auto;border:1px solid #eee;" />'
         f'<figcaption style="font-size:11px;color:#888;margin-top:6px;">'
-        f'{alt_text} &nbsp;|&nbsp; [출처: Yahoo Finance]'
+        f'{alt_text} &nbsp;|&nbsp; [출처: {source}]'
         f'</figcaption>'
         f'</figure>\n'
     )
@@ -400,15 +458,15 @@ def attach_post1_image(theme: str) -> Tuple[Optional[int], Optional[str], str]:
     return media_id, source_url, attribution
 
 
-def attach_post2_image(picks: list) -> Tuple[Optional[int], Optional[str]]:
+def attach_post2_image(picks: list) -> Tuple[Optional[int], Optional[str], str]:
     """
-    Post 2(캐시의 픽): 첫 번째 ticker 차트 → WP 업로드 → (media_id, img_html) 반환
-    img_html은 본문 삽입용 <figure> 태그.
-    실패 시 (None, None) 반환.
+    Post 2(캐시의 픽): 첫 번째 ticker 차트 → WP 업로드 → (media_id, img_html, chart_source) 반환
+    chart_source: "Yahoo Finance" | "네이버금융" (figcaption 출처 표기용)
+    실패 시 (None, None, "") 반환.
     """
     if not picks:
         logger.warning("⚠ [images] picks 비어있음 — 차트 건너뜀")
-        return None, None
+        return None, None, ""
 
     first  = picks[0]
     ticker = first.get("ticker", "")
@@ -416,11 +474,11 @@ def attach_post2_image(picks: list) -> Tuple[Optional[int], Optional[str]]:
 
     if not ticker:
         logger.warning("⚠ [images] ticker 없음 — 차트 건너뜀")
-        return None, None
+        return None, None, ""
 
-    chart_bytes = generate_ticker_chart(ticker, name)
+    chart_bytes, chart_source = generate_ticker_chart(ticker, name)
     if not chart_bytes:
-        return None, None
+        return None, None, ""
 
     safe_ticker = ticker.replace(".", "_")
     alt_text    = f"{name} 1주 차트"
@@ -432,7 +490,7 @@ def attach_post2_image(picks: list) -> Tuple[Optional[int], Optional[str]]:
     )
 
     if not source_url:
-        return media_id, None
+        return media_id, None, chart_source
 
-    img_html = inject_chart_into_content("", source_url, alt_text).strip()
-    return media_id, img_html
+    img_html = inject_chart_into_content("", source_url, alt_text, source=chart_source).strip()
+    return media_id, img_html, chart_source
