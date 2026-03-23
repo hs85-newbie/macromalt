@@ -310,6 +310,11 @@ add_filter( 'wp_sitemaps_taxonomies', function( $taxonomies ) {
     return $taxonomies;
 } );
 
+// 5.6b Sitemap: exclude users
+add_filter( 'wp_sitemaps_add_provider', function( $provider, $name ) {
+    return $name === 'users' ? false : $provider;
+}, 10, 2 );
+
 // 5.7 robots.txt: append Macromalt crawl policy and sitemap pointer
 add_filter( 'robots_txt', function( $output, $public ) {
     $output .= "\n# Macromalt SEO Policy\n";
