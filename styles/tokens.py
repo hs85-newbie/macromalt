@@ -25,17 +25,17 @@ COLOR_BG_SOURCE = "#f9f9f9"   # 참고 출처 박스 배경
 COLOR_RULE      = "#eee"      # <hr> 색상
 
 # ─── 타이포그래피 ────────────────────────────────────────────────────────────
-FONT_SIZE_H1    = "2em"
-FONT_SIZE_H3    = "1.4em"
-FONT_SIZE_BODY  = "15px"
-FONT_SIZE_SMALL = "13px"
-FONT_SIZE_META  = "12px"
+FONT_SIZE_H1    = "var(--fs-h1)"
+FONT_SIZE_H3    = "var(--fs-h3)"
+FONT_SIZE_BODY  = "var(--fs-body)"
+FONT_SIZE_SMALL = "var(--fs-source)"
+FONT_SIZE_META  = "var(--fs-meta)"
 
-FONT_WEIGHT_BOLD   = "800"
-FONT_WEIGHT_STRONG = "700"
+FONT_WEIGHT_BOLD   = "var(--fw-bold)"
+FONT_WEIGHT_STRONG = "var(--fw-semibold)"
 
-LINE_HEIGHT_BODY = "1.9"
-LINE_HEIGHT_LIST = "1.8"
+LINE_HEIGHT_BODY = "var(--lh-body)"
+LINE_HEIGHT_LIST = "var(--lh-source)"
 
 # ─── 스페이싱 ────────────────────────────────────────────────────────────────
 MARGIN_H1_BOTTOM    = "30px"

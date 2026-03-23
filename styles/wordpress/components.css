@@ -15,8 +15,10 @@
   background-color: var(--mm-badge-bg);
   color: var(--mm-badge-text);
   padding: 2px 8px;
-  font-size: 10px;
-  font-weight: 800;
+  font-family: var(--font-body);
+  font-size: var(--fs-label);
+  line-height: 1.2;
+  font-weight: var(--fw-semibold);
   border-radius: 2px;
   display: inline-block;
   vertical-align: middle;
@@ -53,6 +55,27 @@
   margin-bottom: 30px !important;
 }
 
+/* Archive Card Typography [Section 9] */
+.archive .entry-title,
+.search-results .entry-title,
+.blog .entry-title {
+  font-family: var(--font-body);
+  font-size: var(--fs-card-title);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  margin-bottom: 12px;
+}
+
+.archive .entry-summary,
+.search-results .entry-summary,
+.blog .entry-summary {
+  font-family: var(--font-body);
+  font-size: var(--fs-card-excerpt);
+  line-height: 1.68;
+  font-weight: var(--fw-regular);
+  color: var(--mm-ink-soft);
+}
+
 .archive .inside-article:last-child,
 .search-results .inside-article:last-child {
   border-bottom: none;
@@ -66,20 +89,22 @@
   margin-bottom: 15px;
 }
 
-/* 5. Disclosure & Methodology Box */
+/* 5. Disclosure & Methodology Box (Source/Reference Base) */
 .editorial-disclosure-box {
   background-color: var(--mm-bg-alt);
   border: 1px solid var(--mm-rule);
   padding: 20px 25px;
   margin-bottom: 40px;
-  font-size: 13px;
-  line-height: 1.6;
+  font-family: var(--font-body);
+  font-size: var(--fs-source);
+  line-height: var(--lh-source);
+  font-weight: var(--fw-regular);
 }
 
 .disclosure-heading {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
+  font-family: var(--font-body);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
   color: var(--mm-accent);
   display: block;
   margin-bottom: 8px;
@@ -135,11 +160,13 @@
 }
 
 .search-results-label {
-  font-size: 13px;
-  font-weight: 700;
+  font-family: var(--font-body);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-bold);
   margin-bottom: 40px;
   border-bottom: 2px solid var(--mm-accent);
   display: inline-block;
   padding-bottom: 5px;
   color: var(--mm-accent);
+  text-transform: uppercase;
 }

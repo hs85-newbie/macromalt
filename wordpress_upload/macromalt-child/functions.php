@@ -4,6 +4,7 @@
  *
  * DESIGN TRACK: Step04 - Seasonal Layer Refinement [Merged]
  * PHASE 20: Technical SEO Baseline + Monetization Architecture
+ * 
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -104,16 +105,35 @@ function macromalt_customize_read_more() {
 
 // 3.1 Deterministic Seasonal Class (WP Timezone)
 add_filter( 'body_class', function( $classes ) {
-    $month     = strtolower( current_time( 'M' ) );
+    // WordPress 로컬 타임존 기반 월 식별 [jan, feb...]
+    $month = strtolower( current_time( 'M' ) ); 
     $classes[] = 'mm-season-' . $month;
     return $classes;
 } );
 
 /**
- * 4. Enqueue Parent Styles
+ * 4. Enqueue Parent Styles & Fonts
  */
 add_action( 'wp_enqueue_scripts', function() {
+    // 4.1 Parent Theme Style
     wp_enqueue_style( 'generatepress-style', get_template_directory_uri() . '/style.css' );
+
+    // 4.2 Macromalt Typography System [Step05]
+    // STRATEGY: Phase 1 - CDN (Performance/Ease), Phase 2 - Self-host ready
+    
+    /* [OPTION A: CDN - Active] */
+    // Pretendard Variable (d2.naver.com)
+    wp_enqueue_style( 'mm-font-pretendard', 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css', array(), '1.3.9' );
+    
+    // Noto Serif KR (Google Fonts)
+    wp_enqueue_style( 'mm-font-noto-serif', 'https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@700&display=swap', array(), null );
+
+    /* [OPTION B: Self-host - Standby]
+    // To switch to self-hosting:
+    // 1. Download font files to theme-folder/fonts/
+    // 2. Uncomment the following and comment out Option A above
+    wp_enqueue_style( 'mm-fonts-local', get_stylesheet_directory_uri() . '/styles/fonts.css', array(), '1.0.0' );
+    */
 }, 1 );
 
 /**
@@ -289,8 +309,8 @@ add_action( 'wp_head', function() {
         echo '<script type="application/ld+json">' . wp_json_encode( $article, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . '</script>' . "\n";
 
         // BreadcrumbList
-        $cats  = get_the_category( $post->ID );
-        $items = [ [ '@type' => 'ListItem', 'position' => 1, 'name' => 'Macromalt', 'item' => home_url( '/' ) ] ];
+        $cats   = get_the_category( $post->ID );
+        $items  = [ [ '@type' => 'ListItem', 'position' => 1, 'name' => 'Macromalt', 'item' => home_url( '/' ) ] ];
         if ( ! empty( $cats ) ) {
             $items[] = [ '@type' => 'ListItem', 'position' => 2, 'name' => $cats[0]->name, 'item' => get_category_link( $cats[0]->term_id ) ];
             $items[] = [ '@type' => 'ListItem', 'position' => 3, 'name' => get_the_title( $post->ID ), 'item' => get_permalink( $post->ID ) ];
@@ -333,6 +353,7 @@ add_action( 'wp_head', function() {
     if ( ! MACROMALT_ADSENSE_ACTIVE ) {
         return;
     }
+    // Excluded: about, privacy, terms, disclosure pages and author archives
     if ( is_page( [ 'about', 'privacy-policy', 'terms', 'advertising-policy', 'disclosure' ] ) || is_author() ) {
         return;
     }
