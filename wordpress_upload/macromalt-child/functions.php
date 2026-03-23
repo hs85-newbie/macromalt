@@ -320,7 +320,6 @@ add_filter( 'robots_txt', function( $output, $public ) {
     $output .= "\n# Macromalt SEO Policy\n";
     $output .= "Disallow: /?s=\n";
     $output .= "Disallow: /search/\n";
-    $output .= "\nSitemap: " . home_url( '/wp-sitemap.xml' ) . "\n";
     return $output;
 }, 10, 2 );
 
