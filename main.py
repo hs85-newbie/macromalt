@@ -242,8 +242,22 @@ def main() -> None:
 
     logger.info("▶ [Step 2C] 이미지 준비")
     post1_media_id = attach_post1_image(post1.get("theme", ""))
-    post2_media_id = attach_post2_image(post2.get("picks", []) if post2 else [])
+    post2_media_id, post2_img_html = attach_post2_image(post2.get("picks", []) if post2 else [])
     logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
+
+    # Post 2 본문에 차트 삽입
+    if post2 and post2_img_html:
+        import re as _re
+        _url_m = _re.search(r'src="([^"]+)"', post2_img_html)
+        _alt_m = _re.search(r'alt="([^"]+)"', post2_img_html)
+        if _url_m:
+            from images import inject_chart_into_content
+            post2["content"] = inject_chart_into_content(
+                post2["content"],
+                _url_m.group(1),
+                _alt_m.group(1) if _alt_m else "",
+            )
+            logger.info("   차트 본문 삽입 완료")
 
     try:
         # ── Step 3A: Post 1 발행 ─────────────────────
