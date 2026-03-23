@@ -243,9 +243,25 @@ def main() -> None:
     import re as _re
 
     logger.info("▶ [Step 2C] 이미지 준비")
-    post1_media_id, post1_attribution = attach_post1_image(post1.get("theme", ""))
-    post2_media_id, post2_img_html    = attach_post2_image(post2.get("picks", []) if post2 else [])
+    post1_media_id, post1_img_url, post1_attribution = attach_post1_image(post1.get("theme", ""))
+    post2_media_id, post2_img_html                   = attach_post2_image(post2.get("picks", []) if post2 else [])
     logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
+
+    # Post 1: 본문에 Unsplash 이미지 삽입 (</h1> 직후 = 메인 제목 바로 아래)
+    if post1_img_url:
+        _img_figure = (
+            f'\n<figure class="mm-featured-figure" style="margin:1.5em 0;text-align:center;">'
+            f'<img src="{post1_img_url}" alt="{post1.get("theme","")}" '
+            f'style="max-width:100%;height:auto;" />'
+            f'</figure>\n'
+        )
+        _h1_match = _re.search(r"</h1>", post1.get("content", ""))
+        if _h1_match:
+            _pos = _h1_match.end()
+            post1["content"] = post1["content"][:_pos] + _img_figure + post1["content"][_pos:]
+        else:
+            post1["content"] = _img_figure + post1.get("content", "")
+        logger.info("   Post1 이미지 본문 삽입 완료 (h1 직후)")
 
     # Post 1: 본문 하단에 Unsplash 출처 표기
     if post1_attribution:
@@ -267,7 +283,7 @@ def main() -> None:
                 _url_m.group(1),
                 _alt_m.group(1) if _alt_m else "",
             )
-            logger.info("   차트 본문 삽입 완료 (메인 픽 h2 직후)")
+            logger.info("   차트 본문 삽입 완료 (⭐ 메인 픽 h3 직후)")
 
     try:
         # ── Step 3A: Post 1 발행 ─────────────────────
