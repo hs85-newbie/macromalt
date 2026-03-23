@@ -297,7 +297,9 @@ def attach_post1_image(theme: str) -> Optional[int]:
     if not img_bytes:
         return None
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in theme)[:40]
-    media_id, _ = upload_to_wp_media(img_bytes, f"macromalt_{safe}.jpg", alt_text=theme)
+    # 파일명은 ASCII만 허용 (latin-1 인코딩 오류 방지)
+    safe_ascii = safe.encode("ascii", errors="ignore").decode()[:40] or "theme"
+    media_id, _ = upload_to_wp_media(img_bytes, f"macromalt_{safe_ascii}.jpg", alt_text=theme)
     return media_id
 
 
