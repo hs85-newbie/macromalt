@@ -1,6 +1,6 @@
 {
   "_comment": "macromalt 자동화 시스템 - 뉴스 데이터 소스 정의 파일",
-  "_updated": "2026-03-12 (글로벌마켓 소스 추가)",
+  "_updated": "2026-03-23 (이데일리·딜사이트·연합인포맥스 추가)",
   "_schema_version": "2.0",
   "_weight_guide": "1=일반뉴스, 3=공개리서치, 5=인증컨센서스",
   "sources": [
@@ -68,6 +68,45 @@
       "fetch_limit": 10,
       "weight": 1,
       "notes": "인베스팅 닷컴 미국(영문) Market Overview RSS. 한국어판 웹크롤링은 403 차단으로 폐기. /rss/news.rss(일반뉴스)·/rss/market_overview.rss(시장개요) 둘 다 정상"
+    },
+    {
+      "id": "einfomax",
+      "name": "연합인포맥스",
+      "name_en": "Yonhap Infomax",
+      "type": "RSS",
+      "url": "https://news.einfomax.co.kr/rss/allArticle.xml",
+      "category": "금융/시황",
+      "language": "ko",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 1,
+      "notes": "연합뉴스 계열 금융정보 전문 매체. 주식·채권·외환·글로벌 금융 시황 전문. RSS 50건 확인."
+    },
+    {
+      "id": "edaily",
+      "name": "이데일리",
+      "name_en": "Edaily",
+      "type": "RSS",
+      "url": "http://rss.edaily.co.kr/edaily_news.xml",
+      "category": "경제/금융",
+      "language": "ko",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 1,
+      "notes": "이데일리 전체 뉴스 RSS (경제·증권 중심, 비금융 기사는 GPT 필터 처리). edaily.co.kr RSS는 동작 안 함, rss.edaily.co.kr 사용."
+    },
+    {
+      "id": "dealsite",
+      "name": "딜사이트",
+      "name_en": "Dealsite",
+      "type": "WEB_DEALSITE",
+      "url": "https://dealsite.co.kr",
+      "category": "M&A/딜/기업금융",
+      "language": "ko",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 2,
+      "notes": "M&A·IPO·채권·기업금융 전문. 무료공개 기사만 수집 (lock_clock/회원전용 없는 기사). a[href^='/articles/'] + span.mbsh-news-tit 패턴. fetch_dealsite() 함수로 처리."
     },
     {
       "id": "naver_research",
