@@ -37,9 +37,9 @@ body {
 }
 
 .masthead-title {
-  font-family: var(--font-heading);
-  font-size: 84px;
-  font-weight: 900;
+  font-family: var(--font-display);
+  font-size: 84px; /* Special hero size remains, but font changes */
+  font-weight: var(--fw-bold);
   letter-spacing: -0.04em;
   margin: 0;
   line-height: 1;
@@ -50,7 +50,7 @@ body {
 .masthead-tagline {
   font-family: var(--font-mono);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.3em;
   margin-top: 20px;
   color: var(--mm-ink-soft);

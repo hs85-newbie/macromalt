@@ -4,28 +4,100 @@
  */
 
 :root {
-  /* ─── Typography SSOT (Step02) ─── */
-  --font-heading: "Georgia", "Times New Roman", serif;
-  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  
-  --font-size-base: 15px;
-  --font-size-meta: 12px;
-  --font-size-nav: 13px;
-  --font-size-hero: 84px;
+  /* ─── Macromalt Typography System [v1.0] ─── */
+  --font-body: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-display: "Noto Serif KR", "Noto Serif CJK KR", Georgia, serif;
+  --font-doc: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --fs-h1: 34px;
+  --fs-h2: 26px;
+  --fs-h3: 21px;
+  --fs-body: 18px;
+  --fs-intro: 19px;
+  --fs-meta: 13px;
+  --fs-source: 14px;
+  --fs-caption: 12.5px;
+  --fs-label: 12px;
+  --fs-table: 14px;
+  --fs-card-title: 20px;
+  --fs-card-excerpt: 15px;
+
+  --lh-h1: 1.28;
+  --lh-h2: 1.40;
+  --lh-h3: 1.50;
+  --lh-body: 1.78;
+  --lh-intro: 1.80;
+  --lh-source: 1.75;
+  --lh-caption: 1.65;
+  --lh-table: 1.55;
+
+  --fw-regular: 450;
+  --fw-medium: 500;
+  --fw-semibold: 650;
+  --fw-bold: 700;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --fs-h1: 28px;
+    --fs-h2: 22px;
+    --fs-h3: 18px;
+    --fs-body: 16.5px;
+    --fs-intro: 17px;
+    --fs-meta: 12.5px;
+    --fs-source: 13px;
+    --fs-caption: 12px;
+    --fs-label: 11.5px;
+    --fs-table: 13px;
+    --fs-card-title: 18px;
+    --fs-card-excerpt: 14px;
+  }
 }
 
 /* 1. Global Hierarchy */
-h1, h2, h3, h4, .main-title {
-  font-family: var(--font-heading);
-  color: var(--color-ink);
-  line-height: 1.25;
+h1, .main-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-h1);
+  line-height: var(--lh-h1);
+  font-weight: var(--fw-bold);
+  color: var(--mm-accent);
+}
+
+h2 {
+  font-family: var(--font-body);
+  font-size: var(--fs-h2);
+  line-height: var(--lh-h2);
+  font-weight: var(--fw-semibold);
+}
+
+h3 {
+  font-family: var(--font-body);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-h3);
+  font-weight: var(--fw-semibold);
 }
 
 body {
   font-family: var(--font-body);
-  font-size: var(--font-size-base);
-  line-height: 1.85;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: var(--fw-regular);
+}
+
+/* 1.1 Intro Paragraph Rule */
+.entry-content > p:first-of-type,
+.intro-paragraph {
+  font-size: var(--fs-intro);
+  line-height: var(--lh-intro);
+  font-weight: var(--fw-medium);
+}
+
+/* 1.2 Selective Editorial Pull Quote */
+.pull-quote {
+  font-family: var(--font-display);
+  font-size: 1.25em;
+  font-style: italic;
 }
 
 /* 2. Navigation & Utility IA Style (LOCKED mono-type) */
