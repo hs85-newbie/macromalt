@@ -287,7 +287,8 @@ def main() -> None:
 
     try:
         # ── Step 3A: Post 1 발행 ─────────────────────
-        post1_result = step_publish(post1, cat_analysis, "Step 3A", featured_media_id=post1_media_id)
+        # featured_media 미사용 — 본문 </h1> 직후 삽입 방식으로만 표시 (테마 중복 렌더링 방지)
+        post1_result = step_publish(post1, cat_analysis, "Step 3A", featured_media_id=None)
 
     except Exception as e:
         logger.error(f"❌ [Step 3A] Post 1 발행 실패 [run_id: {run_id}]")
