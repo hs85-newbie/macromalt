@@ -63,6 +63,23 @@ try:
 except ImportError:
     _KB_AVAILABLE = False
 
+# ── Phase C: 편집 철학 모듈 ───────────────────────────────────────────────────
+try:
+    from editorial_config import (
+        DISCLAIMER_OPENING_HTML, DISCLAIMER_CLOSING_HTML,
+        _PC_GEMINI_SECTOR_RULES,
+        _PC_POST1_EDITORIAL_RULES,
+        _PC_POST2_EDITORIAL_RULES,
+    )
+    _EDITORIAL_CONFIG_AVAILABLE = True
+except ImportError:
+    _EDITORIAL_CONFIG_AVAILABLE = False
+    DISCLAIMER_OPENING_HTML = ""
+    DISCLAIMER_CLOSING_HTML = ""
+    _PC_GEMINI_SECTOR_RULES = ""
+    _PC_POST1_EDITORIAL_RULES = ""
+    _PC_POST2_EDITORIAL_RULES = ""
+
 load_dotenv()
 
 logger = logging.getLogger("macromalt")
@@ -1262,6 +1279,21 @@ def _check_numeric_sanity(content: str) -> dict:
         logger.info("[Phase 14] 수치 합리성: 이슈 없음")
 
     return result
+
+
+def _inject_disclaimer(content: str) -> str:
+    """Phase C: 면책 문구를 h1 태그 직후(opening) + 본문 말미(closing)에 자동 삽입."""
+    if not content or not DISCLAIMER_OPENING_HTML:
+        return content
+    # Opening: 첫 번째 </h1> 직후 삽입
+    content = re.sub(
+        r'(</h1>)',
+        r'\1' + DISCLAIMER_OPENING_HTML,
+        content, count=1,
+    )
+    # Closing: 콘텐츠 맨 마지막에 추가
+    content = content + DISCLAIMER_CLOSING_HTML
+    return content
 
 
 def _check_macro_facts(content: str, macro_snapshot: dict) -> dict:
@@ -5696,7 +5728,7 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
         research_text=research_text,
         news_text=news_text,
         dart_text=dart_text,
-    ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES + _P13_GEMINI_SPINE_HINT
+    ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES + _P13_GEMINI_SPINE_HINT + _PC_GEMINI_SECTOR_RULES
     raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
     result = _parse_json_response(raw) if raw else None
 
@@ -6028,6 +6060,7 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
 
     user_msg = (
         p20_block                           # Phase 20: contract 소비 (최우선, 있을 때만)
+        + _PC_POST1_EDITORIAL_RULES         # Phase C: 편집 철학 (독자·의견강도·시계·품질비율)
         + _P16H_POST1_HEDGE_REDUCTION       # Phase 16H Track A: factual spine 헤징 절제
         + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + _P14_POST1_ENFORCEMENT_BLOCK      # Phase 14: few-shot + spine + hedge 금지
@@ -6127,6 +6160,7 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
 
     user_msg = (
         p20_block                           # Phase 20: contract 소비 (최우선, 있을 때만)
+        + _PC_POST2_EDITORIAL_RULES         # Phase C: 편집 철학 (독자·의견강도·시계·리스크섹션)
         + _P17_POST2_OPENER_ENFORCEMENT     # Phase 17: opener pick-angle 강제 ★★
         + _P15C_POST2_LABEL_BAN             # Phase 15C: 내부 파이프라인 레이블 차단
         + _P16D_POST2_CONTINUITY_HARDENING  # Phase 16D: Track A — 매크로 배경 재서술 억제
@@ -6754,6 +6788,9 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     # key_data: facts의 content 목록 (Post 2 전달용)
     key_data = [f.get("content", "") for f in materials.get("facts", [])[:5]]
 
+    # ── Phase C: 면책 문구 자동 주입 ────────────────────────────────────────
+    final_content = _inject_disclaimer(final_content)
+
     logger.info(f"Post1 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
     # ── Phase B: 지식베이스 저장 ────────────────────────────────────────────
@@ -7072,6 +7109,9 @@ def generate_stock_picks_report(
             "theme_repeat_diag":    _p16j_theme_diag,   # [Phase 16J Track B]: 동일 theme 연속 진단
         },
     }
+
+    # ── Phase C: 면책 문구 자동 주입 ────────────────────────────────────────
+    final_content = _inject_disclaimer(final_content)
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
 
