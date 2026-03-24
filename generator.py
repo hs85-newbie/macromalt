@@ -49,6 +49,20 @@ from scraper import (
     run_dart_annual_report_sections,
 )
 
+# ── Phase A: 거시지표 모듈 ─────────────────────────────────────────────────────
+try:
+    from macro_data import get_macro_snapshot, format_macro_for_prompt
+    _MACRO_DATA_AVAILABLE = True
+except ImportError:
+    _MACRO_DATA_AVAILABLE = False
+
+# ── Phase B: 지식베이스 모듈 ──────────────────────────────────────────────────
+try:
+    from knowledge_base import retrieve_context as kb_retrieve, save_article as kb_save
+    _KB_AVAILABLE = True
+except ImportError:
+    _KB_AVAILABLE = False
+
 load_dotenv()
 
 logger = logging.getLogger("macromalt")
@@ -1248,6 +1262,83 @@ def _check_numeric_sanity(content: str) -> dict:
         logger.info("[Phase 14] 수치 합리성: 이슈 없음")
 
     return result
+
+
+def _check_macro_facts(content: str, macro_snapshot: dict) -> dict:
+    """Phase D: 본문 기준금리·환율 수치를 BOK/FRED 실제값과 교차 검증.
+
+    _check_numeric_sanity()가 "범위 내인가"를 검사한다면,
+    이 함수는 "실제 현재값과 일치하는가"를 검사합니다.
+
+    허용 오차:
+        기준금리(한국): ±0.15%p
+        기준금리(미국): ±0.15%p
+        달러/원 환율:   ±50원
+
+    반환:
+        {"status": "PASS"|"WARN"|"FAIL", "flags": list[str]}
+    """
+    flags = []
+    plain = re.sub(r"<[^>]+>", " ", content)
+    floats = macro_snapshot.get("floats", {}) if macro_snapshot else {}
+
+    bok_rate = floats.get("bok_rate")
+    fed_rate = floats.get("fed_rate")
+    usdkrw   = floats.get("usdkrw")
+
+    # 한국 기준금리 교차검증
+    if bok_rate is not None:
+        for m in re.finditer(r"(?:한국|국내).{0,15}기준금리.{0,20}?([\d]+\.[\d]+)\s*%", plain):
+            try:
+                mentioned = float(m.group(1))
+                if abs(mentioned - bok_rate) > 0.15:
+                    flags.append(
+                        f"KR_RATE_MISMATCH: 본문 {mentioned}% vs 실제 {bok_rate}% "
+                        f"(오차 {abs(mentioned - bok_rate):.2f}%p)"
+                    )
+            except ValueError:
+                pass
+
+    # 미국 기준금리 교차검증
+    if fed_rate is not None:
+        for m in re.finditer(r"(?:연준|미국|Fed).{0,15}(?:기준)?금리.{0,20}?([\d]+\.[\d]+)\s*%", plain):
+            try:
+                mentioned = float(m.group(1))
+                if abs(mentioned - fed_rate) > 0.15:
+                    flags.append(
+                        f"FED_RATE_MISMATCH: 본문 {mentioned}% vs 실제 {fed_rate}% "
+                        f"(오차 {abs(mentioned - fed_rate):.2f}%p)"
+                    )
+            except ValueError:
+                pass
+
+    # 달러/원 환율 교차검증
+    if usdkrw is not None:
+        candidates = (
+            re.findall(r"달러당\s*([\d,]+)\s*원", plain)
+            + re.findall(r"([\d,]+)\s*원[/\s]*달러", plain)
+            + re.findall(r"달러[/\s]*원\s*[\=:]\s*([\d,]+)", plain)
+        )
+        for n_str in candidates:
+            try:
+                mentioned = float(n_str.replace(",", ""))
+                if 900 < mentioned < 3000 and abs(mentioned - usdkrw) > 50:
+                    flags.append(
+                        f"USDKRW_MISMATCH: 본문 {mentioned:.0f}원 vs 실제 {usdkrw:.0f}원 "
+                        f"(오차 {abs(mentioned - usdkrw):.0f}원)"
+                    )
+            except ValueError:
+                pass
+
+    status = "FAIL" if len(flags) >= 2 else "WARN" if flags else "PASS"
+    if flags:
+        logger.warning(f"[Phase D] 거시지표 불일치 {len(flags)}건 감지")
+        for f in flags[:4]:
+            logger.warning(f"  ⚠ {f}")
+    else:
+        logger.info("[Phase D] 거시지표 교차검증: 이슈 없음")
+
+    return {"status": status, "flags": flags[:6]}
 
 
 def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
@@ -6478,6 +6569,28 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     if numeric_highlight:
         history_ctx = history_ctx + numeric_highlight  # 기존 이력 컨텍스트 뒤에 추가
 
+    # ── Phase A: 거시지표 스냅샷 조회 + history_ctx 주입 ─────────────────
+    _p21_macro_snap = {}
+    if _MACRO_DATA_AVAILABLE:
+        try:
+            _p21_macro_snap = get_macro_snapshot()
+            _p21_macro_text = format_macro_for_prompt(_p21_macro_snap)
+            if _p21_macro_text:
+                history_ctx = history_ctx + _p21_macro_text
+                logger.info(f"[Phase A] 거시지표 스냅샷 주입 완료 ({len(_p21_macro_text)}자)")
+        except Exception as _p21_e:
+            logger.warning(f"[Phase A] 거시지표 조회 실패 (비치명): {_p21_e}")
+
+    # ── Phase B: 지식베이스 — 관련 과거 글 검색 + history_ctx 주입 ────────
+    if _KB_AVAILABLE:
+        try:
+            _kb_ctx = kb_retrieve(query_theme="", query_news_text=news_text[:500])
+            if _kb_ctx:
+                history_ctx = history_ctx + _kb_ctx
+                logger.info(f"[Phase B] KB 컨텍스트 주입 완료 ({len(_kb_ctx)}자)")
+        except Exception as _kb_e:
+            logger.warning(f"[Phase B] KB 검색 실패 (비치명): {_kb_e}")
+
     # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
     materials = gemini_analyze(news_text, research_text, dart_text=dart_text,
                                slot=slot, history_context=history_ctx)
@@ -6551,6 +6664,8 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     p13_closure  = _check_verifier_closure(
         verify_result.get("issues", []), draft, final_content
     )
+    # ── Phase D: 거시지표 교차검증 ────────────────────────────────────────
+    p_d_macro = _check_macro_facts(final_content, _p21_macro_snap)
 
     # ── Phase 14I Track C: weak_interp OR hedge_overuse FAIL 시 타겟 블록 교체 ─
     weak_hits   = p13_interp.get("weak_interp_hits", 0)
@@ -6603,6 +6718,7 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
         "interpretation":   p13_interp,
         "temporal":         p13_temporal,
         "numeric":          p13_numeric,
+        "macro_facts":      p_d_macro,         # Phase D: 거시지표 교차검증
         "closure":          p13_closure,
         "tense":            p15_tense_diag,   # Phase 15: 완료 연도 시제 진단
         "jeonmang_strip":   {"stripped_count": len(_p15d_log), "log": _p15d_log},  # Phase 15D
@@ -6639,6 +6755,13 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     key_data = [f.get("content", "") for f in materials.get("facts", [])[:5]]
 
     logger.info(f"Post1 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
+
+    # ── Phase B: 지식베이스 저장 ────────────────────────────────────────────
+    if _KB_AVAILABLE:
+        try:
+            kb_save("post1", theme, title, final_content, tickers=None, slot=slot)
+        except Exception as _kb_e:
+            logger.warning(f"[KB] Post1 저장 실패 (무시): {_kb_e}")
 
     return {
         "title":          title,
@@ -6696,6 +6819,28 @@ def generate_stock_picks_report(
         f"[Phase 16] Post2 시제 SSOT 주입: 완료 연도={_p2_p16_ssot['completed_years']}, "
         f"완료 월={_p2_p16_ssot['completed_months_this_year']}"
     )
+
+    # ── Phase A: 거시지표 스냅샷 주입 (Post2) ─────────────────────────────
+    _p21_macro_snap_p2: dict = {}
+    if _MACRO_DATA_AVAILABLE:
+        try:
+            _p21_macro_snap_p2 = get_macro_snapshot()
+            _p21_macro_text_p2 = format_macro_for_prompt(_p21_macro_snap_p2)
+            if _p21_macro_text_p2:
+                context_text = context_text + _p21_macro_text_p2
+                logger.info("[Phase A] Post2 거시지표 스냅샷 주입 완료")
+        except Exception as _macro_e2:
+            logger.warning(f"[Phase A] Post2 거시지표 조회 실패 (무시): {_macro_e2}")
+
+    # ── Phase B: 지식베이스 컨텍스트 주입 (Post2) ─────────────────────────
+    if _KB_AVAILABLE:
+        try:
+            _kb_ctx_p2 = kb_retrieve(query_theme=theme, query_news_text=news_text[:500])
+            if _kb_ctx_p2:
+                context_text = context_text + _kb_ctx_p2
+                logger.info("[Phase B] Post2 KB 컨텍스트 주입 완료")
+        except Exception as _kb_e2:
+            logger.warning(f"[Phase B] Post2 KB 검색 실패 (무시): {_kb_e2}")
 
     # ── Step 1: 분석 재료 (재사용 or 재생성) ──────────────────────────────
     if materials is None:
@@ -6839,6 +6984,7 @@ def generate_stock_picks_report(
     p13_interp     = _score_interpretation_quality(final_content, label="Post2")
     p13_temporal   = _check_temporal_sanity(final_content, _run_date_str)
     p13_numeric    = _check_numeric_sanity(final_content)
+    p_d_macro_p2   = _check_macro_facts(final_content, _p21_macro_snap_p2)  # Phase D
     p13_closure    = _check_verifier_closure(
         verify_result.get("issues", []), draft, raw_content
     )
@@ -6905,6 +7051,7 @@ def generate_stock_picks_report(
         "interpretation":   p13_interp,
         "temporal":         p13_temporal,
         "numeric":          p13_numeric,
+        "macro_facts":      p_d_macro_p2,          # Phase D: 거시지표 교차검증
         "closure":          p13_closure,
         "continuity":       p13_continuity,
         "tense":            p15_tense_diag_p2,   # Phase 15: 완료 연도 시제 진단
@@ -6927,6 +7074,14 @@ def generate_stock_picks_report(
     }
 
     logger.info(f"Post2 생성 완료 | 제목: '{title}' | HTML {len(final_content)}자")
+
+    # ── Phase B: 지식베이스 저장 ────────────────────────────────────────────
+    if _KB_AVAILABLE:
+        try:
+            _p2_tickers = [p.get("ticker", "") for p in parsed_picks if p.get("ticker")]
+            kb_save("post2", theme, title, final_content, tickers=_p2_tickers, slot=slot)
+        except Exception as _kb_e:
+            logger.warning(f"[KB] Post2 저장 실패 (무시): {_kb_e}")
 
     return {
         "title":                title,
