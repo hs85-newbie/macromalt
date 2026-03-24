@@ -1032,6 +1032,16 @@ _P13_WEAK_INTERP_PATTERNS: list = [
 _P13_COUNTERPOINT_CONDITION_MARKERS: list = [
     "만약", "만일", "한다면", "발생 시", "경우", "하향 시", "상향 시",
     "지속 시", "현실화", "실제로", "봉쇄", "시나리오", "하락 전환",
+    # Phase 18: 한국어 리스크 서술에서 자주 쓰이는 조건부 어미·패턴 추가
+    "될 경우",      # "악화될 경우", "지속될 경우", "급락할 경우"
+    "할 경우",      # "현실화할 경우", "심화할 경우"
+    "강화될",       # "규제가 강화될", "경쟁이 강화될"
+    "악화될",       # "업황이 악화될"
+    "약화될",       # "수요가 약화될"
+    "지연될",       # "회복이 지연될"
+    "심화될",       # "갈등이 심화될"
+    "하락할",       # "주가가 하락할"
+    "급락할",       # 급격한 하락 시나리오
 ]
 
 # ── Track B: 수치 합리성 범위 (2024-2027 추정, 넓게 설정) ────────────────
@@ -1401,9 +1411,18 @@ def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
 
     # Phase 16H Track B: 스타일/구조 이슈 키워드 — 이 키워드가 포함된 미해소 이슈는
     # 사실 오류가 아닌 writing quality 문제이므로 closure FAIL 판정에서 제외.
+    # [Phase 18] 해석·분석 품질 이슈 패턴 추가:
+    # Gemini verifier가 [1] 카테고리로 플래그해도, 설명 텍스트에 아래 패턴이 포함된 이슈는
+    # 시간/수치 사실 오류가 아닌 analytical quality 문제이므로 style_residual로 분류.
     STYLE_RESIDUAL_KW = [
         "완충 문장", "4요소", "헤징", "비유", "마크다운", "숫자가 없는 문단",
         "구체적인 근거 없이", "스타일", "문단 구조", "소제목",
+        # Phase 18 신규: 해석·분석 품질 이슈 (temporal/numeric 사실 오류 아님)
+        "구체적 근거가 없",      # "구체적 근거가 없습니다" — 근거 부족 지적
+        "실현 가능성에 대한",    # 조건부 시나리오의 근거 없음 지적
+        "조건으로 제시",         # 조건부 전제 구조 지적 (시나리오→결론 논리 문제)
+        "근거 없이 단정",        # 사실 단정 없이 결론 서술 지적
+        "논리적 근거",           # 논리 흐름 품질 지적
     ]
 
     high_risk = [
@@ -1499,13 +1518,22 @@ def _check_verifier_closure(issues: list, draft: str, revised: str) -> dict:
 def _check_post_continuity(post1_content: str, post2_content: str) -> dict:
     """Phase 13 Track A-5: Post2 도입부가 Post1 도입부를 반복하는지 진단.
 
+    [Phase 18 신규] h1 블록(제목 + 면책문구) 스킵:
+    Phase C _inject_disclaimer()가 </h1> 직후에 면책문구를 주입하면서
+    두 글 모두 도입부 앞 400/600자 안에 동일한 면책문구 텍스트가 포함됨.
+    이로 인해 실제 내용 중복이 없어도 n-gram 이 대량 일치(19개)하는 오탐이 발생.
+    → 첫 <h2> 또는 <h3> 이후 본문부터 비교 구간으로 사용.
+
     Returns:
         {status, ngram_overlap_count, bg_repeat_count, sample_overlaps}
     """
     import re as _re
 
     def _text(html: str, limit: int = 400) -> str:
-        return _re.sub(r"<[^>]+>", " ", html)[:limit]
+        # h1 블록(제목 + 면책문구) 건너뛰기: 첫 h2/h3 이후부터 추출
+        m = _re.search(r"<h[23][^>]*>", html, _re.IGNORECASE)
+        body = html[m.start():] if m else html
+        return _re.sub(r"<[^>]+>", " ", body)[:limit]
 
     p1_intro = _text(post1_content)
     p2_intro = _text(post2_content, 600)
@@ -5638,6 +5666,12 @@ GEMINI_REVISER_SYSTEM = """
    - 메인 픽/핵심 섹터명이 첫 문장에 누락된 경우 → 첫 문장 앞에 즉시 삽입
    - Post1과 중복된 거시 배경 서술 → 시장 배경 축소 후 종목 연결 문장으로 치환
    - 보정 과정에서 새 절대 날짜를 발명하거나 삽입하지 않는다
+   - [Phase 18 신규] 본문(h3 섹션 내) "오늘" 시점 표현 교체:
+     "오늘 분석의 전제" → "이번 분석의 전제"
+     "오늘 분석에서" → "이번 분석에서"
+     "오늘 논의" → "이번 논의"
+     "오늘의 핵심" → "이번의 핵심"
+     ※ opener H3 교체 규칙(위)과 별개로, h3 헤딩 및 본문 모두에 적용할 것
    opener 검수 출력 형식 (issues에 포함할 것):
    - opener 구조: 적합 / 부적합
    - 문제 문장: (인용)
@@ -6521,7 +6555,12 @@ def verify_draft(draft: str, *, slot: str = "unknown", post_type: str = "unknown
             "FAILED_NO_REVISION과 달리 수정 시도 없이 즉시 통과 처리."
         )
         # Phase 17/19: 구조화된 PARSE_FAILED 런타임 로그 기록
-        # Phase 19 T1-1: slot/post_type을 verify_draft() 파라미터로 수신하여 전달
+        # Phase 18: TYPE별 발행 차단 정책 적용
+        #   TYPE_A (구조 전무) / TYPE_B (금지 패턴) / TYPE_C (HTML 파손) → 차단
+        #   TYPE_D (PICKS 주석 누락) / TYPE_E (reviser 과도 축소) / TYPE_UNKNOWN → 허용
+        _pf_type = _classify_parse_failed(raw or "")
+        _BLOCK_TYPES = {"TYPE_A", "TYPE_B", "TYPE_C"}
+        _pf_blocked = _pf_type in _BLOCK_TYPES
         _log_parse_failed_event(
             run_id=datetime.now().strftime("%Y%m%d_%H%M%S"),
             slot=slot,
@@ -6530,10 +6569,24 @@ def verify_draft(draft: str, *, slot: str = "unknown", post_type: str = "unknown
             parse_stage="Step3:verifier:json_parse",
             failed_section_name="verifier_response",
             fallback_used=True,
-            publish_blocked=False,
+            publish_blocked=_pf_blocked,
         )
+        if _pf_blocked:
+            logger.error(
+                f"[Phase 18] PARSE_FAILED {_pf_type} — 발행 차단 유형 감지 "
+                f"(TYPE_A/B/C 정책: 구조 파손·금지 패턴·HTML 파손). "
+                f"draft 무결성 불확실 → 발행 중단."
+            )
+        else:
+            logger.warning(
+                f"[Phase 18] PARSE_FAILED {_pf_type} — 허용 유형 "
+                f"(TYPE_D/E/UNKNOWN 정책). GPT 초안 원본 발행 경로 유지."
+            )
         return {"pass": True, "issues": [], "revised_content": None,
-                "step3_status": "PARSE_FAILED"}  # Phase 16B/16J: status 추적
+                "step3_status": "PARSE_FAILED",
+                "parse_failed_type": _pf_type,        # Phase 18
+                "parse_failed_blocked": _pf_blocked,  # Phase 18
+                }  # Phase 16B/16J: status 추적
 
     passed = result.get("pass", True)
     issues = result.get("issues", [])
@@ -6753,6 +6806,13 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
     draft_len = len(draft)
     verify_result = verify_draft(draft, slot=slot, post_type="post1")
     _p1_step3_status = verify_result.get("step3_status", "PASS")  # Phase 16B
+    # Phase 18: PARSE_FAILED 차단 유형(TYPE_A/B/C) 감지 시 발행 중단
+    if verify_result.get("parse_failed_blocked", False):
+        _pf_t = verify_result.get("parse_failed_type", "UNKNOWN")
+        raise RuntimeError(
+            f"[Phase 18] PARSE_FAILED {_pf_t} — Post1 발행 차단 유형. "
+            f"파이프라인을 중단합니다."
+        )
     if not verify_result["pass"] and verify_result.get("revised_content"):
         logger.info("Step3 검수 실패 — 수정본 채택")
         final_content = verify_result["revised_content"]
@@ -6854,6 +6914,7 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
             # PASS / REVISED / FAILED_NO_REVISION / PARSE_FAILED
             "fallback_triggered":      _p1_step3_status == "FAILED_NO_REVISION",
             "parse_failed":            _p1_step3_status == "PARSE_FAILED",  # [Phase 16J]
+            "parse_failed_type":       verify_result.get("parse_failed_type", None),  # [Phase 18]
             "emergency_polish":        _p16b_polish_log,
             "intro_overlap":           None,   # Post1은 단독 — 비교 대상 없음
         },
@@ -7062,6 +7123,14 @@ def generate_stock_picks_report(
     post2_draft_len = len(draft)
     verify_result = verify_draft(draft, slot=slot, post_type="post2")
     _p2_step3_status = verify_result.get("step3_status", "PASS")  # Phase 16B
+    # Phase 18: PARSE_FAILED 차단 유형(TYPE_A/B/C) 감지 시 Post2 생성 중단
+    # Post2 차단은 RuntimeError로 전파 → main.py에서 post2=None으로 처리
+    if verify_result.get("parse_failed_blocked", False):
+        _pf_t2 = verify_result.get("parse_failed_type", "UNKNOWN")
+        raise RuntimeError(
+            f"[Phase 18] PARSE_FAILED {_pf_t2} — Post2 발행 차단 유형. "
+            f"Post2 생성을 중단합니다."
+        )
     if not verify_result["pass"] and verify_result.get("revised_content"):
         logger.info("Post2 Step3 검수 실패 — 수정본 채택")
         raw_content = verify_result["revised_content"]
@@ -7191,6 +7260,7 @@ def generate_stock_picks_report(
             "step3_status":         _p2_step3_status,  # PASS / REVISED / FAILED_NO_REVISION / PARSE_FAILED
             "fallback_triggered":   _p2_step3_status == "FAILED_NO_REVISION",
             "parse_failed":         _p2_step3_status == "PARSE_FAILED",  # [Phase 16J]
+            "parse_failed_type":    verify_result.get("parse_failed_type", None),  # [Phase 18]
             "emergency_polish":     _p2_16b_polish_log,
             "intro_overlap":        _p16b_intro_overlap,
             "bridge_diag":          _p16f_bridge_diag,  # Phase 16F: 브릿지 타입 진단
