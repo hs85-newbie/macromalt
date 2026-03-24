@@ -4108,8 +4108,15 @@ def _call_gpt(system: str, user: str, label: str,
 
 
 def _call_gemini(system: str, user: str, label: str,
-                 temperature: float = 0.3) -> Optional[str]:
-    """Gemini 2.5-flash 호출 + 비용 기록. 실패 시 None 반환."""
+                 temperature: float = 0.3,
+                 response_mime_type: Optional[str] = None) -> Optional[str]:
+    """Gemini 2.5-flash 호출 + 비용 기록. 실패 시 None 반환.
+
+    [Phase 19] response_mime_type 파라미터 추가.
+    JSON 응답이 필요한 호출(verifier, planner, 종목선정 등)에
+    response_mime_type="application/json" 을 전달하면 Gemini API 레벨에서
+    유효한 JSON만 반환되도록 강제한다 — 프롬프트 지시만으로는 불충분한 경우 방어.
+    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.warning(f"GEMINI_API_KEY 없음 — {label} 건너뜀")
@@ -4124,9 +4131,14 @@ def _call_gemini(system: str, user: str, label: str,
                 f"[DEBUG_LLM] Gemini payload ({label}) | "
                 f"model=gemini-2.5-flash temperature={temperature} "
                 f"max_output_tokens=3000 thinking_budget=0 "
+                f"response_mime_type={response_mime_type!r} "
                 f"system_len={len(system)} user_len={len(user)}"
             )
 
+        _config_extra = (
+            {"response_mime_type": response_mime_type}
+            if response_mime_type else {}
+        )
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=user.strip(),
@@ -4135,6 +4147,7 @@ def _call_gemini(system: str, user: str, label: str,
                 max_output_tokens=3000,
                 temperature=temperature,
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                **_config_extra,
             ),
         )
 
@@ -5860,7 +5873,8 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
         news_text=news_text,
         dart_text=dart_text,
     ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES + _P13_GEMINI_SPINE_HINT + _PC_GEMINI_SECTOR_RULES
-    raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2)
+    raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2,
+                       response_mime_type="application/json")  # [Phase 19] JSON 강제
     result = _parse_json_response(raw) if raw else None
 
     if not result or not isinstance(result, dict):
@@ -5962,6 +5976,7 @@ def _call_editorial_planner(
         system_prompt, user_msg,
         f"Step1.5:EditorialPlanner:{post_type}",
         temperature=0.1,
+        response_mime_type="application/json",  # [Phase 19] JSON 강제
     )
     planner = _parse_json_response(raw) if raw else None
 
@@ -6341,12 +6356,19 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
 # TYPE_E: reviser 수정 후 구조 재파손
 # TYPE_UNKNOWN: 위 분류로 설명되지 않는 실패
 
-def _classify_parse_failed(raw: str, normalized: Optional[str] = None) -> str:
-    """Phase 17: PARSE_FAILED 발생 원인을 TYPE_A~TYPE_E 또는 TYPE_UNKNOWN으로 분류."""
+def _classify_parse_failed(raw: str, normalized: Optional[str] = None,
+                           *, is_html_context: bool = True) -> str:
+    """Phase 17: PARSE_FAILED 발생 원인을 TYPE_A~TYPE_E 또는 TYPE_UNKNOWN으로 분류.
+
+    [Phase 19] is_html_context 파라미터 추가:
+    - is_html_context=True (기본): HTML 본문에서 h2/h3 부재 시 TYPE_A
+    - is_html_context=False: verifier JSON 응답 컨텍스트 — h2/h3 부재는 정상이므로 TYPE_A 제외.
+      JSON 파싱 자체 실패는 TYPE_UNKNOWN으로 분류해 차단하지 않음.
+    """
     if raw is None:
         return "TYPE_UNKNOWN"
-    # TYPE_A: H2/H3 구조 이상 또는 섹션 순서 불일치 → JSON에 h2/h3/section 키워드 부재
-    if re.search(r"<h[23][^>]*>", raw) is None:
+    # TYPE_A: H2/H3 구조 이상 — HTML 컨텍스트에서만 적용 (verifier JSON 응답에는 미적용)
+    if is_html_context and re.search(r"<h[23][^>]*>", raw) is None:
         return "TYPE_A"
     # TYPE_B: opener 금지 패턴 존재 → 후처리 불일치 가능
     opener_banned = ["오늘 이 테마를 보는 이유", "오늘 시장을 보는 이유",
@@ -6555,6 +6577,7 @@ def verify_draft(draft: str, *, slot: str = "unknown", post_type: str = "unknown
         user_msg,
         "Step3:팩트체크",
         temperature=0.1,
+        response_mime_type="application/json",  # [Phase 19] JSON 강제 — PARSE_FAILED TYPE_A 방지
     )
     result = _parse_json_response(raw) if raw else None
 
@@ -6568,7 +6591,9 @@ def verify_draft(draft: str, *, slot: str = "unknown", post_type: str = "unknown
         # Phase 18: TYPE별 발행 차단 정책 적용
         #   TYPE_A (구조 전무) / TYPE_B (금지 패턴) / TYPE_C (HTML 파손) → 차단
         #   TYPE_D (PICKS 주석 누락) / TYPE_E (reviser 과도 축소) / TYPE_UNKNOWN → 허용
-        _pf_type = _classify_parse_failed(raw or "")
+        # [Phase 19] is_html_context=False: verifier 응답은 JSON이므로 h2/h3 부재를
+        #   HTML 구조 전무로 오분류(TYPE_A)하지 않음 → TYPE_UNKNOWN으로 처리(허용)
+        _pf_type = _classify_parse_failed(raw or "", is_html_context=False)
         _BLOCK_TYPES = {"TYPE_A", "TYPE_B", "TYPE_C"}
         _pf_blocked = _pf_type in _BLOCK_TYPES
         _log_parse_failed_event(
@@ -6684,7 +6709,8 @@ def gemini_select_tickers_v2(theme: str, materials: dict, research_text: str) ->
         uncertainties="; ".join(materials.get("uncertainties", [])),
         research_text=research_text,
     )
-    raw = _call_gemini(GEMINI_TICKER_V2_SYSTEM, user_msg, "Post2-Step1:종목선정", temperature=0.2)
+    raw = _call_gemini(GEMINI_TICKER_V2_SYSTEM, user_msg, "Post2-Step1:종목선정", temperature=0.2,
+                       response_mime_type="application/json")  # [Phase 19] JSON 강제
     result = _parse_json_response(raw) if raw else None
 
     if not result or not isinstance(result, list):
