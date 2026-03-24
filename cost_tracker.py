@@ -5,8 +5,8 @@ API 호출 토큰 수를 기반으로 예상 비용을 계산하고,
 월간 예산 한도 접근 시 macOS 알림을 전송합니다.
 
 예산:
-  - OpenAI GPT-4o : $10.00 / 월
-  - Gemini 2.5-flash : ₩15,000 / 월
+  - OpenAI GPT-4o : $40.00 / 월
+  - Gemini 2.5-flash : ₩14,000 / 월
 """
 
 import json
@@ -24,12 +24,12 @@ logger = logging.getLogger("macromalt")
 # OpenAI GPT-4o
 OPENAI_INPUT_PRICE_PER_M = 2.50    # USD / 1M input tokens
 OPENAI_OUTPUT_PRICE_PER_M = 10.00  # USD / 1M output tokens
-OPENAI_LIMIT_USD = 10.00           # 월 상한선
+OPENAI_LIMIT_USD = 40.00           # 월 상한선
 
 # Gemini 2.5-flash (thinking OFF, ≤200K context)
 GEMINI_INPUT_PRICE_PER_M = 0.075   # USD / 1M input tokens
 GEMINI_OUTPUT_PRICE_PER_M = 0.30   # USD / 1M output tokens
-GEMINI_LIMIT_KRW = 15_000          # 월 상한선 (원)
+GEMINI_LIMIT_KRW = 14_000          # 월 상한선 (원)
 USD_TO_KRW = 1_380                 # 환율 (수동 관리, 월 1회 업데이트 권장)
 
 # 알림 임계값
