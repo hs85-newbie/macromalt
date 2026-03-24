@@ -4416,12 +4416,100 @@ def _fetch_korean_stock_price(ticker_kr: str) -> str:
 
 
 def _get_price_for_ticker(ticker: str) -> str:
-    """티커 형식에 따라 한국(.KS/.KQ) 또는 미국 주식 가격을 조회합니다."""
-    if ticker.endswith(".KS") or ticker.endswith(".KQ"):
-        return _fetch_korean_stock_price(ticker)
+    """
+    종가 조회 — 다단계 폴백 체인.
+
+    한국 종목 (6자리 숫자 코드 또는 .KS/.KQ 접미사):
+      1. yfinance  코드.KS
+      2. yfinance  코드.KQ
+      3. pykrx (KRX 직접 조회)
+      4. 네이버금융 종목 페이지 (/item/main)
+      5. 네이버금융 해외주식 페이지 (글로벌 상장 종목 대비)
+
+    미국/글로벌 종목:
+      1. yfinance  (원본 티커)
+      2. 네이버금융 해외주식 페이지 (.O / .N 접미사)
+
+    모두 실패 시: 'N/A' 반환
+    """
+    # 한국 종목 판별: 순수 6자리 숫자 or .KS/.KQ/.KT 접미사
+    _kr_suffix_re = re.compile(r"\.(KS|KQ|KT)$", re.IGNORECASE)
+    raw_code = _kr_suffix_re.sub("", ticker)
+    is_korean = raw_code.isdigit() and len(raw_code) == 6
+
+    if is_korean:
+        # ── 1. yfinance .KS ──────────────────────────────────────────────
+        for suffix in [".KS", ".KQ"]:
+            try:
+                t = yf.Ticker(raw_code + suffix)
+                hist = t.history(period="7d")
+                if not hist.empty:
+                    price = round(hist["Close"].iloc[-1], 0)
+                    date_str = hist.index[-1].strftime("%Y-%m-%d")
+                    logger.info(f"[가격] yfinance({suffix}) 성공: {raw_code} = ₩{int(price):,}")
+                    return f"₩{int(price):,} ({date_str} 기준)"
+            except Exception as e:
+                logger.debug(f"[가격] yfinance({raw_code}{suffix}) 실패: {e}")
+
+        # ── 2. pykrx (KRX 직접) ──────────────────────────────────────────
+        krx = _fetch_krx_price(raw_code)
+        if krx:
+            return krx
+
+        # ── 3. 네이버금융 종목 페이지 (/item/main) ────────────────────────
+        try:
+            url = f"https://finance.naver.com/item/main.nhn?code={raw_code}"
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://finance.naver.com/",
+            }
+            resp = requests.get(url, headers=headers, timeout=8)
+            resp.encoding = "utf-8"
+            soup = BeautifulSoup(resp.text, "html.parser")
+            price_elem = (
+                soup.select_one(".today .blind")
+                or soup.select_one("p.no_today em")
+                or soup.select_one("#chart_area .rate_info .today")
+            )
+            if price_elem:
+                raw_txt = re.sub(r"[^\d]", "", price_elem.get_text(strip=True))
+                if raw_txt:
+                    date_str = datetime.now().strftime("%Y-%m-%d")
+                    logger.info(f"[가격] 네이버종목페이지 성공: {raw_code} = ₩{int(raw_txt):,}")
+                    return f"₩{int(raw_txt):,} ({date_str} 기준, 네이버금융)"
+        except Exception as e:
+            logger.debug(f"[가격] 네이버종목페이지({raw_code}) 실패: {e}")
+
+        # ── 4. 네이버금융 해외주식 폴백 (.K 접미사) ──────────────────────
+        naver = _fetch_naver_price(raw_code)
+        if naver:
+            return naver
+
+        logger.warning(f"[가격] {ticker} 종가 조회 모두 실패 — N/A 반환")
+        return "N/A"
+
     else:
-        prices = fetch_stock_prices([ticker])
-        return prices.get(ticker, "N/A")
+        # ── 미국/글로벌: yfinance → 네이버금융 해외주식 ──────────────────
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="7d")
+            if not hist.empty:
+                price = round(hist["Close"].iloc[-1], 2)
+                date_str = hist.index[-1].strftime("%Y-%m-%d")
+                logger.info(f"[가격] yfinance 성공: {ticker} = ${price:,.2f}")
+                return f"${price:,.2f} ({date_str} 기준)"
+        except Exception as e:
+            logger.debug(f"[가격] yfinance({ticker}) 실패: {e}")
+
+        naver = _fetch_naver_price(ticker)
+        if naver:
+            return naver
+
+        logger.warning(f"[가격] {ticker} 종가 조회 모두 실패 — N/A 반환")
+        return "N/A"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
