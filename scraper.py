@@ -93,7 +93,13 @@ def fetch_rss(source: dict) -> list:
         feed = feedparser.parse(url)
 
         if feed.bozo and feed.bozo_exception:
-            raise ValueError(f"RSS 파싱 경고: {feed.bozo_exception}")
+            # CharacterEncodingOverride 등 비치명적 경고는 entries가 있으면 계속 진행
+            exc_type = type(feed.bozo_exception).__name__
+            if not feed.entries or exc_type not in (
+                "CharacterEncodingOverride", "CharacterEncodingUnknown"
+            ):
+                raise ValueError(f"RSS 파싱 경고: {feed.bozo_exception}")
+            logger.warning(f"[{name}] RSS 인코딩 경고 무시 ({exc_type}): {len(feed.entries)}건 처리 계속")
 
         skipped_old = 0
         for entry in feed.entries:
@@ -221,6 +227,110 @@ def fetch_web(source: dict) -> list:
 
 
 # ──────────────────────────────────────────────
+# 4-B. 딜사이트 전용 수집 함수
+# ──────────────────────────────────────────────
+def fetch_dealsite(source: dict) -> list:
+    """
+    딜사이트(dealsite.co.kr) 무료공개 기사를 수집합니다.
+
+    - a[href^="/articles/{숫자}"] 패턴의 링크를 수집
+    - lock_clock / 회원전용 표시가 없는 기사만 포함 (무료공개 필터)
+    - 중복 href 제거
+    - 제목은 span.mbsh-news-tit 또는 link의 title 속성 우선
+
+    반환값:
+        [{"source": "딜사이트", "title": "...", "summary": "", "url": "...", ...}]
+    """
+    results = []
+    name = source["name"]
+    base_url = source["url"].rstrip("/")
+    limit = source.get("fetch_limit", 10)
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://dealsite.co.kr/",
+    }
+
+    try:
+        resp = requests.get(base_url, headers=headers, timeout=15)
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen_hrefs = set()
+
+        for link in soup.select('a[href^="/articles/"]'):
+            if len(results) >= limit:
+                break
+
+            href = link.get("href", "")
+            # 숫자 ID만 처리 (이미지 전용 링크, 태그 링크 등 제외)
+            if not re.match(r"^/articles/\d+$", href):
+                continue
+            if href in seen_hrefs:
+                continue
+
+            # 유료(회원전용) 기사 필터링: 상위 컨테이너 탐색
+            is_paid = False
+            parent = link
+            for _ in range(6):
+                parent = parent.parent
+                if parent is None:
+                    break
+                parent_str = str(parent)
+                if "lock_clock" in parent_str or "회원전용" in parent_str:
+                    is_paid = True
+                    break
+                # 충분히 큰 컨테이너에 도달하면 중단
+                if len(parent_str) > 5000:
+                    break
+
+            if is_paid:
+                continue
+
+            # 제목 추출: span.mbsh-news-tit > link title 속성 > link 텍스트
+            title_el = link.select_one("span.mbsh-news-tit")
+            if title_el:
+                title = title_el.get_text(strip=True)
+            else:
+                title = link.get("title", "") or link.get_text(strip=True)
+            title = title.strip()
+
+            if not title or len(title) < 8:
+                continue
+
+            seen_hrefs.add(href)
+            results.append(
+                {
+                    "source": name,
+                    "type": "Web",
+                    "title": title,
+                    "summary": "",
+                    "url": base_url + href,
+                    "published": "",
+                    "date_tier": "unknown",
+                    "collected_at": datetime.now().isoformat(),
+                }
+            )
+
+        logger.info(f"[{name}] 딜사이트 수집 성공: {len(results)}건 (무료공개)")
+
+    except requests.exceptions.Timeout:
+        logger.error(f"[{name}] 딜사이트 수집 실패: 요청 시간 초과 (15초)")
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"[{name}] 딜사이트 수집 실패: HTTP {e.response.status_code}")
+    except Exception as e:
+        logger.error(f"[{name}] 딜사이트 수집 실패: {e}")
+
+    return results
+
+
+# ──────────────────────────────────────────────
 # 5. 통합 수집 실행 함수 (뉴스 전용)
 # ──────────────────────────────────────────────
 def run_all_sources() -> list:
@@ -248,6 +358,8 @@ def run_all_sources() -> list:
             articles = fetch_rss(source)
         elif collect_type == "WEB":
             articles = fetch_web(source)
+        elif collect_type == "WEB_DEALSITE":
+            articles = fetch_dealsite(source)
         elif collect_type.startswith("RESEARCH_"):
             # RESEARCH 타입은 run_research_sources()에서 처리 — 조용히 스킵
             continue
