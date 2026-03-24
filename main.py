@@ -194,6 +194,9 @@ def main() -> None:
     run_id = now.strftime("%Y%m%d_%H%M%S")
     slot   = detect_slot(now)
 
+    import cost_tracker as _ct
+    _ct.record_run_start()   # 런 시작 스냅샷 (토큰 델타 계산용)
+
     logger.info("=" * 60)
     logger.info(f"macromalt Phase 15E 파이프라인 시작 [run_id: {run_id}]")
     logger.info(f"[Phase 15E] 슬롯: {slot} | run_id: {run_id}")
@@ -496,6 +499,32 @@ def main() -> None:
         logger.info(f"     상태    : {post2_result['status']} (임시저장)")
     elif post2 is None:
         logger.warning("  ⚠ Post 2 — 생성 또는 발행 실패 (Post 1은 정상)")
+
+    # ── 이번 런 토큰·비용 요약 ────────────────────────────────────────────
+    try:
+        _run = _ct.get_run_summary()
+        if _run:
+            _gpt = _run.get("gpt", {})
+            _gem = _run.get("gemini", {})
+            logger.info("-" * 60)
+            logger.info(f"💰 [토큰 사용량 — 이번 런: {run_id}]")
+            logger.info(
+                f"   🤖 GPT-4o  | {_gpt.get('calls',0)}회 호출 | "
+                f"입력 {_gpt.get('input',0):,}tok / 출력 {_gpt.get('output',0):,}tok | "
+                f"₩{_gpt.get('cost_krw',0):,} (${_gpt.get('cost_usd',0):.4f})"
+            )
+            logger.info(
+                f"   🔵 Gemini  | {_gem.get('calls',0)}회 호출 | "
+                f"입력 {_gem.get('input',0):,}tok / 출력 {_gem.get('output',0):,}tok | "
+                f"₩{_gem.get('cost_krw',0):,}"
+            )
+            logger.info(
+                f"   📌 합계    | ₩{_run.get('total_krw',0):,} (${_run.get('total_usd',0):.4f})"
+            )
+            # 월간 누적 현황도 함께 출력
+            _ct.print_monthly_summary()
+    except Exception as _e:
+        logger.warning(f"⚠ 토큰 요약 출력 실패 (비치명): {_e}")
 
     logger.info("=" * 60)
 
