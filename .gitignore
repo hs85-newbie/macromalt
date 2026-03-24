@@ -39,6 +39,11 @@ logs/
 # [데이터] 수집된 원시 데이터 (선택적 제외)
 data/raw/
 output/
+
+# [Phase A-B] 거시지표 캐시 + 지식베이스 DB (로컬 전용)
+data/macro_cache.json
+data/knowledge_base.db
+!data/.gitkeep
 .claude/
 
 # [비용 추적] 실행마다 변경되는 로컬 전용 파일 (민감 정보 없음이나 노이즈 방지)

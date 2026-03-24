@@ -328,12 +328,16 @@ add_filter( 'wp_sitemaps_taxonomies', function( $taxonomies ) {
     return $taxonomies;
 } );
 
+// 5.6b Sitemap: exclude users
+add_filter( 'wp_sitemaps_add_provider', function( $provider, $name ) {
+    return $name === 'users' ? false : $provider;
+}, 10, 2 );
+
 // 5.7 robots.txt: append Macromalt crawl policy and sitemap pointer
 add_filter( 'robots_txt', function( $output, $public ) {
     $output .= "\n# Macromalt SEO Policy\n";
     $output .= "Disallow: /?s=\n";
     $output .= "Disallow: /search/\n";
-    $output .= "\nSitemap: " . home_url( '/wp-sitemap.xml' ) . "\n";
     return $output;
 }, 10, 2 );
 
@@ -346,7 +350,14 @@ add_filter( 'robots_txt', function( $output, $public ) {
  * ─────────────────────────────────────────────────────────────
  */
 define( 'MACROMALT_ADSENSE_ACTIVE', false );
-// define( 'MACROMALT_ADSENSE_PUBLISHER_ID', 'pub-XXXXXXXXXXXXXXXX' ); // set after approval
+define( 'MACROMALT_ADSENSE_PUBLISHER_ID', 'ca-pub-1322433843760514' );
+
+// 6.0 AdSense site verification script (always on — required for ownership verification)
+add_action( 'wp_head', function() {
+    $pub_id = defined( 'MACROMALT_ADSENSE_PUBLISHER_ID' ) ? MACROMALT_ADSENSE_PUBLISHER_ID : '';
+    if ( ! $pub_id ) return;
+    echo '<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=' . esc_attr( $pub_id ) . '" crossorigin="anonymous"></script>' . "\n";
+}, 20 );
 
 // 6.1 AdSense script loader (fires only when active + page is eligible)
 add_action( 'wp_head', function() {

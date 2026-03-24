@@ -155,6 +155,13 @@ def publish_draft(
     post_id = data.get("id")
     edit_link = data.get("link", "")
 
+    # [Phase 19] WordPress 응답에 post_id가 없는 경우 명시적 오류
+    if post_id is None:
+        raise RuntimeError(
+            f"[Phase 19] WordPress 응답에 post_id(id) 필드 없음. "
+            f"HTTP {response.status_code} | 응답 키: {list(data.keys())}"
+        )
+
     logger.info(f"WordPress 업로드 성공 | Post ID: {post_id} | URL: {edit_link}")
 
     return {
