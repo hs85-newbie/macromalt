@@ -181,6 +181,7 @@ def step_publish(post: dict, category_ids: list, step_label: str, featured_media
         content=post["content"],
         category_ids=category_ids,
         featured_media_id=featured_media_id,
+        seo_title=post.get("seo_title", ""),  # [Phase 21] SEO slug 소스
     )
     logger.info(f"✅ [{step_label}] 업로드 완료: Post ID {result['post_id']}")
     return result
