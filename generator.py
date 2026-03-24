@@ -839,9 +839,18 @@ def _check_post_separation(post1_content: str, post2_content: str) -> dict:
     Returns:
         {"status": "PASS"|"WARN"|"FAIL", "overlap_headings": list, "overlap_count": int}
     """
+    # [Phase 19] 고정 구조 섹션명 제외: Post1/Post2 모두에 항상 존재하는 보일러플레이트 h3
+    # "참고 출처"는 두 글 모두에 구조적으로 포함되므로 비교 대상에서 제외
+    _STRUCTURAL_H3_SKIP = {"참고 출처", "참고출처"}
+
     def _extract_h3s(html: str) -> set:
         raw = re.findall(r"<h3[^>]*>(.*?)</h3>", html, re.DOTALL | re.IGNORECASE)
-        return {re.sub(r"<[^>]+>", "", h).strip() for h in raw if h.strip()}
+        result = set()
+        for h in raw:
+            text = re.sub(r"<[^>]+>", "", h).strip()
+            if text and text not in _STRUCTURAL_H3_SKIP:
+                result.add(text)
+        return result
 
     p1_h3s = _extract_h3s(post1_content)
     p2_h3s = _extract_h3s(post2_content)
@@ -6346,7 +6355,8 @@ def _classify_parse_failed(raw: str, normalized: Optional[str] = None) -> str:
     if any(p in raw for p in opener_banned):
         return "TYPE_B"
     # TYPE_C: HTML 태그 파손 (닫는 태그 누락 또는 중첩 오류 의심)
-    open_tags  = len(re.findall(r"<(?!/)(?!br|hr|!)[a-zA-Z][^>]*>", raw))
+    # [Phase 19] self-closing 요소(img, input, link, meta, br, hr)는 open_tag 카운트 제외
+    open_tags  = len(re.findall(r"<(?!/)(?!br|hr|img|input|link|meta|!)[a-zA-Z][^>]*>", raw))
     close_tags = len(re.findall(r"</[a-zA-Z]+>", raw))
     if abs(open_tags - close_tags) > 5:
         return "TYPE_C"
