@@ -6293,6 +6293,21 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
             post1_spine=post1_spine
         )
 
+    # [Phase 19] Post1 도입부 금지 구절 블록 — post1_post2_continuity FAIL 방지
+    # Post1 실제 도입부 텍스트를 GPT에 전달 → 3어절 이상 재사용 금지 직접 안내
+    _p1_intro_block = ""
+    if post1_content:
+        _m = re.search(r"<h[23][^>]*>", post1_content, re.IGNORECASE)
+        _p1_body = post1_content[_m.start():] if _m else post1_content
+        _p1_intro_text = re.sub(r"<[^>]+>", " ", _p1_body)[:350].strip()
+        if _p1_intro_text:
+            _p1_intro_block = (
+                "\n[Phase 19 — Post1 도입부 금지 구절 ★ 필독]\n"
+                "아래 텍스트는 Post1([심층분석]) 도입부입니다. "
+                "Post2 도입부에서 이 텍스트와 3어절 이상 겹치는 표현을 사용하지 마세요:\n"
+                f"---\n{_p1_intro_text}\n---\n\n"
+            )
+
     # Phase 14 Track A: 소스 정규화
     run_date_str_now = datetime.now().strftime("%Y-%m-%d")
     source_norm_block = _normalize_source_for_generation(materials, run_date_str_now)
@@ -6312,6 +6327,7 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         + _P16D_POST2_CONTINUITY_HARDENING  # Phase 16D: Track A — 매크로 배경 재서술 억제
         + _P16D_POST2_BRIDGE_REQUIREMENT    # Phase 16D: Track B — 픽-테마 브릿지 강제
         + same_theme_hint                   # Phase 16J: 동일 theme 연속 시 opener 강화 (조건부)
+        + _p1_intro_block                   # [Phase 19] Post1 도입부 금지 구절 (동적)
         + _P16B_POST2_ANGLE_DIVERSIFICATION # Phase 16B: 도입부 각도 차별화 (Track B)
         + _P16B_QUALITY_HARDENING_RULES     # Phase 16B: generic 금지 + spine + premium tone
         + continuation_block                # Phase 14: Post1 결론 + 연속성 강제
@@ -6416,7 +6432,16 @@ def _calc_quality_pass_fields(content: str) -> dict:
     opener_pass: bool = _has_pick_angle and not _has_banned_opener
 
     # criteria_5_pass (권유성 표현 부재): 기준5 금지 표현 미포함 여부
-    _criteria5_banned = ["매수", "유망", "담아야", "사야", "투자 추천", "강력 추천"]
+    # [Phase 19] 단순 단어 매칭 → 투자 권유 맥락 패턴으로 좁힘
+    # - "유망", "매수" 단독은 분석 문맥("유망한 CCL 섹터", "매수 물량")에서 오탐 발생
+    # - 실제 투자 권유로 쓰이는 복합 패턴만 감지
+    _criteria5_banned = [
+        "담아야", "사야 할", "사야 한다",   # 직접 매수 권유
+        "투자 추천", "강력 추천",            # 명시적 추천
+        "유망 종목", "유망주",               # 종목 특정 권유
+        "매수하세요", "지금 사야",           # 직접 권유 동사
+        "매수 의견", "목표 주가",            # 증권사 의견 직접 채택형
+    ]
     criteria_5_pass: bool = not any(p in _raw for p in _criteria5_banned)
 
     # criteria_1_pass (시점 혼합 금지 간이 판정): 30일 초과 연월 단독 언급 미포함 여부
@@ -6914,6 +6939,9 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
             final_content, run_year=_run_year_int
         )
         p15_tense_diag["after_correction"] = p15_tense_diag_after
+        # [Phase 19] quality gate가 교정 전 FAIL을 반환하던 버그 수정 — 교정 후 상태로 업데이트
+        p15_tense_diag["pre_correction_status"] = "FAIL"
+        p15_tense_diag["status"] = p15_tense_diag_after["status"]
     else:
         _p15_log = []
 
@@ -7248,6 +7276,9 @@ def generate_stock_picks_report(
             final_content, run_year=_p2_run_year_int
         )
         p15_tense_diag_p2["after_correction"] = p15_tense_diag_p2_after
+        # [Phase 19] quality gate가 교정 전 FAIL을 반환하던 버그 수정
+        p15_tense_diag_p2["pre_correction_status"] = "FAIL"
+        p15_tense_diag_p2["status"] = p15_tense_diag_p2_after["status"]
     else:
         _p15_log_p2 = []
 
