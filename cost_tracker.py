@@ -249,7 +249,78 @@ def record_gemini_usage(
 
 
 # ──────────────────────────────────────────────
-# 5. 공개 API: 현황 요약 출력
+# 5. 런 단위 토큰 추적 (이번 실행 합산)
+# ──────────────────────────────────────────────
+import copy as _copy
+
+_run_start_snapshot: dict = {}
+
+
+def record_run_start() -> None:
+    """파이프라인 시작 시 현재 누적 상태를 스냅샷으로 저장."""
+    global _run_start_snapshot
+    log = _load_log()
+    month = _month_key()
+    _run_start_snapshot = _copy.deepcopy(log.get(month, {}))
+
+
+def get_run_summary() -> dict:
+    """이번 런에서 발생한 토큰·비용 델타를 반환합니다.
+
+    반환 예시:
+        {
+          "gpt":    {"calls": 2, "input": 12000, "output": 8000, "cost_usd": 0.0980},
+          "gemini": {"calls": 3, "input": 40000, "output": 6000, "cost_krw": 18},
+          "total_krw": 153,
+          "total_usd": 0.1111,
+        }
+    """
+    log = _load_log()
+    month = _month_key()
+    if month not in log:
+        return {}
+
+    cur = log[month]
+    st  = _run_start_snapshot
+
+    def _d(model: str, key: str) -> int:
+        return cur.get(model, {}).get(key, 0) - st.get(model, {}).get(key, 0)
+
+    gpt_in   = _d("openai", "input_tokens")
+    gpt_out  = _d("openai", "output_tokens")
+    gpt_call = _d("openai", "calls")
+    gem_in   = _d("gemini", "input_tokens")
+    gem_out  = _d("gemini", "output_tokens")
+    gem_call = _d("gemini", "calls")
+
+    gpt_usd = (gpt_in  * OPENAI_INPUT_PRICE_PER_M  / 1_000_000
+             + gpt_out * OPENAI_OUTPUT_PRICE_PER_M / 1_000_000)
+    gem_usd = (gem_in  * GEMINI_INPUT_PRICE_PER_M  / 1_000_000
+             + gem_out * GEMINI_OUTPUT_PRICE_PER_M / 1_000_000)
+    total_usd = gpt_usd + gem_usd
+
+    return {
+        "gpt": {
+            "calls":    gpt_call,
+            "input":    gpt_in,
+            "output":   gpt_out,
+            "cost_usd": round(gpt_usd, 4),
+            "cost_krw": round(gpt_usd * USD_TO_KRW),
+        },
+        "gemini": {
+            "calls":    gem_call,
+            "input":    gem_in,
+            "output":   gem_out,
+            "cost_usd": round(gem_usd, 6),
+            "cost_krw": round(gem_usd * USD_TO_KRW),
+        },
+        "total_usd": round(total_usd, 4),
+        "total_krw": round(total_usd * USD_TO_KRW),
+    }
+
+
+# ──────────────────────────────────────────────
+# 6. 공개 API: 현황 요약 출력
 # ──────────────────────────────────────────────
 def print_monthly_summary(month: Optional[str] = None) -> None:
     """이번 달 또는 지정 월의 비용 현황을 출력합니다."""
