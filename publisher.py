@@ -79,6 +79,7 @@ def publish_draft(
     content: str,
     category_ids: list = None,
     featured_media_id: int = None,
+    seo_title: str = "",
 ) -> dict:
     """
     마크다운 콘텐츠를 WordPress에 임시저장(Draft)으로 업로드합니다.
@@ -88,6 +89,7 @@ def publish_draft(
         content:           마크다운 본문 전체
         category_ids:      WordPress 카테고리 ID 목록 (None이면 .env의 WP_CATEGORY_DEFAULT 또는 [2] 사용)
         featured_media_id: WordPress 미디어 ID (None이면 대표 이미지 미설정)
+        seo_title:         [Phase 21] SEO 최적화 슬러그 소스 (비어있으면 slug 미설정)
 
     반환값:
         {
@@ -132,6 +134,18 @@ def publish_draft(
     if featured_media_id:
         payload["featured_media"] = featured_media_id
         logger.info(f"   대표 이미지 설정: media_id={featured_media_id}")
+
+    # [Phase 21] SEO slug: GPT가 생성한 SEO_TITLE을 slug로 변환
+    if seo_title:
+        import unicodedata as _ud, re as _re
+        _slug = _ud.normalize("NFC", seo_title.strip())
+        _slug = _slug.replace("—", "-").replace("–", "-")  # em/en dash → hyphen
+        _slug = _re.sub(r"[^\w\s-]", "", _slug)            # 특수문자 제거 (한글·영문·숫자·하이픈 유지)
+        _slug = _re.sub(r"[\s_]+", "-", _slug)             # 공백/언더스코어 → 하이픈
+        _slug = _re.sub(r"-{2,}", "-", _slug).strip("-").lower()
+        if _slug:
+            payload["slug"] = _slug
+            logger.info(f"   SEO slug 설정: '{_slug}'")
 
     logger.info(f"WordPress 업로드 시작 | 제목: '{title}'")
 
