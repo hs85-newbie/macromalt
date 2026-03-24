@@ -6244,7 +6244,8 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
                     slot: str = "default", post1_spine: str = "",
                     same_theme_hint: str = "",
                     writer_contract: Optional[dict] = None,
-                    run_id: str = "") -> str:
+                    run_id: str = "",
+                    post1_intro_text: str = "") -> str:  # [Phase 19] Post1 도입부 금지 구절
     """
     Step 2b: GPT 작성 엔진 — Post 2 종목 리포트.
     분석 재료 + 종목 + 실제 가격 데이터로 종목 리포트 HTML을 작성합니다.
@@ -6294,19 +6295,15 @@ def gpt_write_picks(materials: dict, tickers: list, prices: dict, context_text: 
         )
 
     # [Phase 19] Post1 도입부 금지 구절 블록 — post1_post2_continuity FAIL 방지
-    # Post1 실제 도입부 텍스트를 GPT에 전달 → 3어절 이상 재사용 금지 직접 안내
+    # post1_intro_text 파라미터로 전달받은 Post1 실제 도입부 텍스트를 GPT에 전달
     _p1_intro_block = ""
-    if post1_content:
-        _m = re.search(r"<h[23][^>]*>", post1_content, re.IGNORECASE)
-        _p1_body = post1_content[_m.start():] if _m else post1_content
-        _p1_intro_text = re.sub(r"<[^>]+>", " ", _p1_body)[:350].strip()
-        if _p1_intro_text:
-            _p1_intro_block = (
-                "\n[Phase 19 — Post1 도입부 금지 구절 ★ 필독]\n"
-                "아래 텍스트는 Post1([심층분석]) 도입부입니다. "
-                "Post2 도입부에서 이 텍스트와 3어절 이상 겹치는 표현을 사용하지 마세요:\n"
-                f"---\n{_p1_intro_text}\n---\n\n"
-            )
+    if post1_intro_text:
+        _p1_intro_block = (
+            "\n[Phase 19 — Post1 도입부 금지 구절 ★ 필독]\n"
+            "아래 텍스트는 Post1([심층분석]) 도입부입니다. "
+            "Post2 도입부에서 이 텍스트와 3어절 이상 겹치는 표현을 사용하지 마세요:\n"
+            f"---\n{post1_intro_text}\n---\n\n"
+        )
 
     # Phase 14 Track A: 소스 정규화
     run_date_str_now = datetime.now().strftime("%Y-%m-%d")
@@ -7145,6 +7142,11 @@ def generate_stock_picks_report(
     if post1_spine:
         logger.info(f"[Phase 14] Post2용 Post1 뼈대: {post1_spine[:80]}…")
 
+    # [Phase 19] Post1 도입부 텍스트 추출 (post1_post2_continuity 방지용 금지 구절)
+    _p19_m = re.search(r"<h[23][^>]*>", post1_content, re.IGNORECASE) if post1_content else None
+    _p19_body = post1_content[_p19_m.start():] if _p19_m else (post1_content or "")
+    _p19_post1_intro = re.sub(r"<[^>]+>", " ", _p19_body)[:350].strip()
+
     # ── Phase 16J Track B: 동일 theme 연속 진단 (opener 강화 + 경고) ──────
     _p16j_theme_diag = _p16j_check_theme_repeat(materials.get("theme", theme))
     _p16j_same_theme_hint = (
@@ -7176,7 +7178,8 @@ def generate_stock_picks_report(
                             post1_spine=post1_spine,
                             same_theme_hint=_p16j_same_theme_hint,
                             writer_contract=_p20_post2_contract,
-                            run_id=_p20_post2_run_id)
+                            run_id=_p20_post2_run_id,
+                            post1_intro_text=_p19_post1_intro)  # [Phase 19]
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
