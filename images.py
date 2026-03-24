@@ -349,18 +349,153 @@ def _fetch_naver_chart_data(ticker: str):
         return None
 
 
+def _fetch_stooq_chart_data(ticker: str, is_korean: bool):
+    """
+    Stooq에서 일별 OHLCV를 CSV로 직접 다운로드합니다. (무료, API 키 불필요)
+    한국: 005930.KS / 미국: AAPL.US 형식으로 자동 변환.
+    Returns: DataFrame(index=날짜, columns=["Close"]) 또는 None
+    """
+    import re as _re
+    import pandas as pd
+    from io import StringIO
+    from datetime import datetime, timedelta
+
+    raw_code = _re.sub(r"\.(KS|KQ|KT|US)$", "", ticker, flags=_re.IGNORECASE)
+
+    if is_korean:
+        stooq_sym = f"{raw_code}.KS"
+    else:
+        stooq_sym = f"{raw_code}.US"
+
+    end_dt   = datetime.now()
+    start_dt = end_dt - timedelta(days=14)
+    url = (
+        f"https://stooq.com/q/d/l/?s={stooq_sym}"
+        f"&d1={start_dt.strftime('%Y%m%d')}&d2={end_dt.strftime('%Y%m%d')}&i=d"
+    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200 or "No data" in resp.text[:100]:
+            return None
+        df = pd.read_csv(StringIO(resp.text))
+        if df.empty or "Close" not in df.columns:
+            return None
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.set_index("Date")[["Close"]].dropna().sort_index().tail(7)
+        if len(df) < 2:
+            return None
+        logger.info(f"✅ [images] Stooq 차트 데이터 ({stooq_sym}): {len(df)}행")
+        return df
+    except Exception as e:
+        logger.debug(f"⚠ [images] Stooq 차트 실패 ({stooq_sym}): {e}")
+        return None
+
+
+def _fetch_chart_data_with_fallback(ticker: str):
+    """
+    차트 데이터 다단계 폴백 체인.
+
+    한국 종목 (6자리 숫자 or .KS/.KQ):
+      1. yfinance 코드.KS
+      2. yfinance 코드.KQ
+      3. pykrx (KRX 직접)
+      4. 네이버금융 sise_day 페이지
+      5. Stooq (코드.KS)
+
+    미국/글로벌:
+      1. yfinance (원본 티커)
+      2. Stooq (티커.US)
+
+    Returns: (DataFrame, source_label) 또는 (None, "")
+    """
+    import re as _re
+    import yfinance as yf
+
+    _kr_re = _re.compile(r"\.(KS|KQ|KT)$", _re.IGNORECASE)
+    raw_code = _kr_re.sub("", ticker)
+    is_korean = raw_code.isdigit() and len(raw_code) == 6
+
+    if is_korean:
+        # ── 1. yfinance .KS / .KQ ─────────────────────────────────────────
+        for suffix in [".KS", ".KQ"]:
+            try:
+                df = yf.download(
+                    raw_code + suffix, period="7d", interval="1d",
+                    progress=False, auto_adjust=True,
+                )
+                if not df.empty and len(df) >= 2:
+                    if isinstance(df.columns, __import__("pandas").MultiIndex):
+                        df = df["Close"].to_frame(name="Close")
+                    elif "Close" not in df.columns:
+                        df = df.iloc[:, [0]].rename(columns={df.columns[0]: "Close"})
+                    logger.info(f"✅ [images] yfinance({suffix}) 차트: {raw_code} {len(df)}행")
+                    return df, "Yahoo Finance"
+            except Exception as e:
+                logger.debug(f"[images] yfinance({raw_code}{suffix}) 차트 실패: {e}")
+
+        # ── 2. pykrx ──────────────────────────────────────────────────────
+        df = _fetch_krx_chart_data(raw_code)
+        if df is not None and not df.empty and len(df) >= 2:
+            return df, "KRX(한국거래소)"
+
+        # ── 3. 네이버금융 sise_day ─────────────────────────────────────────
+        df = _fetch_naver_chart_data(raw_code)
+        if df is not None and not df.empty and len(df) >= 2:
+            return df, "네이버금융"
+
+        # ── 4. Stooq ──────────────────────────────────────────────────────
+        df = _fetch_stooq_chart_data(raw_code, is_korean=True)
+        if df is not None and not df.empty and len(df) >= 2:
+            return df, "Stooq"
+
+        logger.warning(f"⚠ [images] {ticker} 차트 데이터 모든 소스 실패")
+        return None, ""
+
+    else:
+        # ── 미국/글로벌: yfinance → Stooq ─────────────────────────────────
+        try:
+            df = yf.download(
+                ticker, period="7d", interval="1d",
+                progress=False, auto_adjust=True,
+            )
+            if not df.empty and len(df) >= 2:
+                if isinstance(df.columns, __import__("pandas").MultiIndex):
+                    df = df["Close"].to_frame(name="Close")
+                elif "Close" not in df.columns:
+                    df = df.iloc[:, [0]].rename(columns={df.columns[0]: "Close"})
+                logger.info(f"✅ [images] yfinance 차트: {ticker} {len(df)}행")
+                return df, "Yahoo Finance"
+        except Exception as e:
+            logger.debug(f"[images] yfinance({ticker}) 차트 실패: {e}")
+
+        df = _fetch_stooq_chart_data(ticker, is_korean=False)
+        if df is not None and not df.empty and len(df) >= 2:
+            return df, "Stooq"
+
+        logger.warning(f"⚠ [images] {ticker} 차트 데이터 모든 소스 실패")
+        return None, ""
+
+
 def generate_ticker_chart(ticker: str, name: str = "") -> Tuple[Optional[bytes], str]:
     """
-    yfinance 1주 데이터 → matplotlib 라인 차트 PNG 생성.
+    차트 데이터 다단계 폴백으로 수집 → matplotlib 라인 차트 PNG 생성.
+
+    한국: yfinance(.KS) → yfinance(.KQ) → pykrx → 네이버금융 → Stooq
+    미국: yfinance → Stooq
+
     Returns: (PNG 바이트, 출처 레이블) — 실패 시 (None, "")
-    출처 레이블: "Yahoo Finance" 또는 "네이버금융" (실제 데이터 소스에 따라)
     """
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
-        import yfinance as yf
 
         _setup_korean_font()
 
@@ -369,22 +504,12 @@ def generate_ticker_chart(ticker: str, name: str = "") -> Tuple[Optional[bytes],
         return None, ""
 
     try:
-        logger.info(f"  [images] 차트 생성: {ticker} ({name})")
-        chart_source = "Yahoo Finance"
-        df = yf.download(ticker, period="7d", interval="1d", progress=False, auto_adjust=True)
+        logger.info(f"  [images] 차트 생성 시작: {ticker} ({name})")
+        df, chart_source = _fetch_chart_data_with_fallback(ticker)
 
-        if df.empty or len(df) < 2:
-            logger.info(f"  [images] {ticker} yfinance 실패 → KRX Open API 폴백")
-            df = _fetch_krx_chart_data(ticker)
-            if df is not None and not df.empty and len(df) >= 2:
-                chart_source = "KRX(한국거래소)"
-            else:
-                logger.info(f"  [images] {ticker} KRX 실패 → 네이버금융 폴백")
-                df = _fetch_naver_chart_data(ticker)
-                if df is None or df.empty or len(df) < 2:
-                    logger.warning(f"⚠ [images] {ticker} 데이터 부족 (yfinance + KRX + 네이버 모두 실패)")
-                    return None, ""
-                chart_source = "네이버금융"
+        if df is None or df.empty or len(df) < 2:
+            logger.warning(f"⚠ [images] {ticker} 차트 데이터 수집 실패 — 차트 건너뜀")
+            return None, ""
 
         close   = df["Close"].squeeze()
         dates   = close.index
