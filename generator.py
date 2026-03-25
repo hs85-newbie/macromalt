@@ -5903,8 +5903,70 @@ def _filter_irrelevant_facts(materials: dict) -> dict:
     return materials
 
 
+# ─── [Phase 22] 다중 테마 선정 ─────────────────────────────────────────────
+_GEMINI_THEME_SELECTOR_SYSTEM = """
+너는 매크로몰트(MacroMalt) 편집장이다.
+오늘 수집된 뉴스·리서치 데이터를 보고 블로그에 게시할 핵심 경제 테마를 최대 {n}개 선정한다.
+
+[선정 규칙]
+- 각 테마는 서로 중복되지 않는 독립적인 주제여야 한다.
+- 가장 많은 출처가 수렴하고 숫자 데이터가 풍부한 테마를 우선 선정한다.
+- 최근 7일 이내 자료에 근거한 테마를 최우선으로 한다.
+- 테마는 구체적이어야 한다 ("글로벌 경제" 같은 추상적 테마 금지).
+- 각 테마는 한 문장으로 표현한다 (예: "SK하이닉스 HBM 수율 개선과 엔비디아 납품 확대").
+- picks_priority: 1=종목 픽 가장 적합, 2=두 번째 적합, 3 이상=심층분석만
+
+[출력 규칙]
+JSON만 출력. 설명 텍스트 금지.
+
+{
+  "themes": [
+    {"priority": 1, "theme": "테마 한 문장", "picks_priority": 1, "reason": "선정 이유 한 줄"},
+    {"priority": 2, "theme": "테마 한 문장", "picks_priority": 2, "reason": "선정 이유 한 줄"},
+    ...
+  ]
+}
+"""
+
+def gemini_select_themes(
+    news_text: str,
+    research_text: str,
+    dart_text: str = "",
+    n: int = 5,
+    slot: str = "default",
+    history_context: str = "",
+) -> list[dict]:
+    """[Phase 22] 오늘의 상위 N개 테마를 Gemini로 선정.
+
+    Returns:
+        [{"priority": 1, "theme": "...", "picks_priority": 1, "reason": "..."}, ...]
+        실패 시 단일 테마 [{"priority": 1, "theme": "글로벌 경제 주요 이슈", ...}] 반환
+    """
+    system = _GEMINI_THEME_SELECTOR_SYSTEM.format(n=n)
+    user_msg = (
+        f"[뉴스 데이터]\n{news_text[:3000]}\n\n"
+        f"[리서치 데이터]\n{research_text[:2000]}\n\n"
+        f"[공시 데이터]\n{dart_text[:500] if dart_text else '없음'}\n\n"
+        f"[발행 슬롯] {slot}\n"
+        f"{history_context[:500] if history_context else ''}\n\n"
+        f"위 데이터에서 오늘 다룰 핵심 테마 {n}개를 선정해줘."
+    )
+    raw = _call_gemini(system, user_msg, "Step0:테마선정", temperature=0.2,
+                       response_mime_type="application/json")
+    result = _parse_json_response(raw) if raw else None
+
+    if result and isinstance(result, dict) and result.get("themes"):
+        themes = result["themes"]
+        logger.info(f"[Phase 22] 테마 {len(themes)}개 선정: {[t.get('theme','')[:30] for t in themes]}")
+        return themes
+
+    logger.warning("[Phase 22] 테마 선정 실패 — 기본 테마 1개로 fallback")
+    return [{"priority": 1, "theme": "글로벌 경제 주요 이슈", "picks_priority": 1, "reason": "fallback"}]
+
+
 def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
-                   slot: str = "default", history_context: str = "") -> dict:
+                   slot: str = "default", history_context: str = "",
+                   forced_theme: str = "") -> dict:
     """
     Step 1: Gemini 분석 엔진.
     뉴스·리서치 데이터를 구조화된 JSON 리포트 재료로 변환합니다.
@@ -5926,6 +5988,13 @@ def gemini_analyze(news_text: str, research_text: str, dart_text: str = "",
         news_text=news_text,
         dart_text=dart_text,
     ) + slot_ctx + history_context + _P12_ANALYST_EVIDENCE_RULES + _P13_GEMINI_SPINE_HINT + _PC_GEMINI_SECTOR_RULES
+    # [Phase 22] 다중 테마 모드: forced_theme이 있으면 프롬프트에 명시
+    if forced_theme:
+        user_msg += (
+            f"\n\n[Phase 22 — 분석 테마 지정]\n"
+            f"오늘 분석할 핵심 테마는 이미 선정됐습니다: '{forced_theme}'\n"
+            f"반드시 이 테마를 'theme' 필드에 그대로 사용하고, 이 테마와 관련된 사실만 facts에 포함하세요."
+        )
     raw = _call_gemini(GEMINI_ANALYST_SYSTEM, user_msg, "Step1:분석재료생성", temperature=0.2,
                        response_mime_type="application/json")  # [Phase 19] JSON 강제
     result = _parse_json_response(raw) if raw else None
@@ -6814,7 +6883,8 @@ def gemini_select_tickers_v2(theme: str, materials: dict, research_text: str) ->
 # SECTION G: Phase 7 — 공개 API (main.py 연결)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def generate_deep_analysis(news: list, research: list, slot: str = "default") -> dict:
+def generate_deep_analysis(news: list, research: list, slot: str = "default",
+                           forced_theme: str = "") -> dict:
     """
     Post 1 — 3단계 심층 경제 분석 생성.
 
@@ -6891,7 +6961,8 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default") ->
 
     # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
     materials = gemini_analyze(news_text, research_text, dart_text=dart_text,
-                               slot=slot, history_context=history_ctx)
+                               slot=slot, history_context=history_ctx,
+                               forced_theme=forced_theme)  # [Phase 22]
     theme = materials.get("theme", "글로벌 경제 주요 이슈")
 
     # ── Step 1.5: Editorial Planner (Phase 20) ─────────────────────────────

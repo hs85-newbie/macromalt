@@ -5,8 +5,10 @@ generator.py가 생성한 마크다운 콘텐츠를
 WordPress REST API를 통해 임시저장(Draft)으로 업로드합니다.
 """
 
+import json as _json
 import logging
 import os
+import os as _os
 import re
 
 import requests
@@ -53,6 +55,92 @@ def _get_wp_config() -> dict:
 # ──────────────────────────────────────────────
 # 2. 마크다운 → WordPress 발행 함수
 # ──────────────────────────────────────────────
+
+_CATEGORY_CACHE_PATH = _os.path.join(_os.path.dirname(__file__), "category_cache.json")
+
+
+def _load_category_cache() -> dict:
+    """로컬 카테고리 캐시 로드."""
+    if _os.path.exists(_CATEGORY_CACHE_PATH):
+        try:
+            with open(_CATEGORY_CACHE_PATH, "r", encoding="utf-8") as f:
+                return _json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_category_cache(cache: dict) -> None:
+    with open(_CATEGORY_CACHE_PATH, "w", encoding="utf-8") as f:
+        _json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def get_or_create_wp_category(theme_name: str, parent_id: int) -> int:
+    """[Phase 22] 테마명으로 WordPress 카테고리 ID를 반환. 없으면 생성.
+
+    Args:
+        theme_name: 테마명 (카테고리 이름으로 사용)
+        parent_id:  부모 카테고리 ID (ANALYSIS=2, PICKS=3)
+
+    Returns:
+        WordPress 카테고리 ID
+    """
+    import requests as _req
+    cache_key = f"{parent_id}:{theme_name}"
+
+    # 캐시 확인
+    cache = _load_category_cache()
+    if cache_key in cache:
+        logger.debug(f"[Phase 22] 카테고리 캐시 히트: '{theme_name}' → ID {cache[cache_key]}")
+        return cache[cache_key]
+
+    config = _get_wp_config()
+    # api_url은 .../wp-json/wp/v2/posts 형태 — base URL 추출
+    base_url = config["api_url"].replace("/wp-json/wp/v2/posts", "")
+    headers = {"Content-Type": "application/json"}
+
+    # 기존 카테고리 검색
+    try:
+        resp = _req.get(
+            f"{base_url}/wp-json/wp/v2/categories",
+            params={"search": theme_name, "parent": parent_id, "per_page": 5},
+            auth=(config["username"], config["password"]),
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            for cat in resp.json():
+                if cat.get("name", "").strip() == theme_name.strip():
+                    cat_id = cat["id"]
+                    cache[cache_key] = cat_id
+                    _save_category_cache(cache)
+                    logger.info(f"[Phase 22] 기존 카테고리 발견: '{theme_name}' → ID {cat_id}")
+                    return cat_id
+    except Exception as e:
+        logger.warning(f"[Phase 22] 카테고리 검색 실패: {e}")
+
+    # 새 카테고리 생성
+    try:
+        resp = _req.post(
+            f"{base_url}/wp-json/wp/v2/categories",
+            headers=headers,
+            json={"name": theme_name, "parent": parent_id},
+            auth=(config["username"], config["password"]),
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            cat_id = resp.json()["id"]
+            cache[cache_key] = cat_id
+            _save_category_cache(cache)
+            logger.info(f"[Phase 22] 카테고리 신규 생성: '{theme_name}' → ID {cat_id}")
+            return cat_id
+        else:
+            logger.warning(f"[Phase 22] 카테고리 생성 실패 ({resp.status_code}) — 부모 ID {parent_id} 사용")
+    except Exception as e:
+        logger.warning(f"[Phase 22] 카테고리 생성 예외: {e} — 부모 ID {parent_id} 사용")
+
+    return parent_id  # fallback: 부모 카테고리 사용
+
+
 def _strip_leading_h1(content: str) -> str:
     """
     WordPress 발행 전 content에서 맨 앞 <h1> 태그를 제거합니다.
@@ -80,6 +168,7 @@ def publish_draft(
     category_ids: list = None,
     featured_media_id: int = None,
     seo_title: str = "",
+    scheduled_at: str = "",
 ) -> dict:
     """
     마크다운 콘텐츠를 WordPress에 임시저장(Draft)으로 업로드합니다.
@@ -90,6 +179,7 @@ def publish_draft(
         category_ids:      WordPress 카테고리 ID 목록 (None이면 .env의 WP_CATEGORY_DEFAULT 또는 [2] 사용)
         featured_media_id: WordPress 미디어 ID (None이면 대표 이미지 미설정)
         seo_title:         [Phase 21] SEO 최적화 슬러그 소스 (비어있으면 slug 미설정)
+        scheduled_at:      [Phase 22] 예약 발행 시각 ISO 8601 KST (예: "2026-04-01T07:00:00"). 비어있으면 즉시 발행.
 
     반환값:
         {
@@ -122,14 +212,18 @@ def publish_draft(
     # 발행 전 content에서 중복 h1 제거 (WordPress가 title을 별도 렌더링하므로)
     content = _strip_leading_h1(content)
 
+    _status = "future" if scheduled_at else "publish"
     payload = {
         "title": title,
         "content": content,
-        "status": "publish",
+        "status": _status,
         "format": "standard",
         "comment_status": "open",
         "categories": category_ids,
     }
+    if scheduled_at:
+        payload["date"] = scheduled_at
+        logger.info(f"   예약 발행 설정: {scheduled_at}")
 
     if featured_media_id:
         payload["featured_media"] = featured_media_id
