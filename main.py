@@ -231,14 +231,16 @@ def main() -> None:
 
     # ── Step 0: 테마 선정 ────────────────────────────────────────
     try:
-        from generator import gemini_select_themes, format_articles_for_prompt, format_research_for_prompt
-        _news_txt = format_articles_for_prompt(news)
-        _res_txt  = format_research_for_prompt(research)
+        from generator import gemini_select_themes, format_articles_for_prompt, format_research_for_prompt, _build_history_context
+        _news_txt    = format_articles_for_prompt(news)
+        _res_txt     = format_research_for_prompt(research)
+        _history_ctx = _build_history_context(slot)   # 최근 발행 이력 → 중복 테마 방지
         themes = gemini_select_themes(
             news_text=_news_txt,
             research_text=_res_txt,
             slot=slot,
             n=5,
+            history_context=_history_ctx,
         )
     except Exception as e:
         logger.warning(f"⚠ [Step 0] 테마 선정 실패 — 단일 테마 fallback: {e}")
