@@ -205,35 +205,17 @@ def main() -> None:
     logger.info(f"[Phase 22] 슬롯: {slot} | run_id: {run_id}")
     logger.info("=" * 60)
 
-    # ── 발행 시간 스케줄 (슬롯별 KST) ────────────────────────────
-    _SCHEDULE: dict = {
-        "morning":  {
-            "post1": ["07:00", "07:30", "08:00", "08:30", "09:00"],
-            "post2": ["09:30", "10:00"],
-        },
-        "evening":  {
-            "post1": ["12:00", "12:30", "13:00", "13:30", "14:00"],
-            "post2": ["14:30", "15:00"],
-        },
-        "us_open":  {
-            "post1": ["21:00", "21:30", "22:00", "22:30", "23:00"],
-            "post2": ["23:30", "00:00"],
-        },
-        "default":  {
-            "post1": ["07:00", "07:30", "08:00", "08:30", "09:00"],
-            "post2": ["09:30", "10:00"],
-        },
-    }
-    _sched = _SCHEDULE.get(slot, _SCHEDULE["default"])
+    # ── 발행 시간 스케줄 (실행 시점 기준 상대 오프셋, 단위: 분) ──
+    # 절대 시각 방식은 크론 실행 시간과 역전될 수 있어 상대 방식으로 변경.
+    # Post1 5개: +10, +40, +70, +100, +130분 후
+    # Post2 2개: +160, +190분 후
+    _POST1_OFFSETS = [10, 40, 70, 100, 130]
+    _POST2_OFFSETS = [160, 190]
 
-    def _make_scheduled_at(time_str: str) -> str:
-        """HH:MM → 오늘 날짜 ISO 8601 KST 문자열 반환."""
-        hour, minute = int(time_str.split(":")[0]), int(time_str.split(":")[1])
-        base = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        # 00:00은 다음날
-        if time_str == "00:00":
-            base = base + timedelta(days=1)
-        return base.strftime("%Y-%m-%dT%H:%M:%S")
+    def _make_scheduled_at(offset_min: int) -> str:
+        """실행 시점(now) 기준 offset_min분 후 ISO 8601 문자열 반환."""
+        target = now + timedelta(minutes=offset_min)
+        return target.strftime("%Y-%m-%dT%H:%M:%S")
 
     # ── 카테고리 ID ─────────────────────────────────────────────
     _WP_ANALYSIS_PARENT = 2   # Phase 22: ANALYSIS 부모 ID
@@ -369,7 +351,7 @@ def main() -> None:
         try:
             theme_name = post1.get("_theme_info", {}).get("theme") or post1.get("theme", "")
             cat_id = get_or_create_wp_category(theme_name, _WP_ANALYSIS_PARENT)
-            sched  = _make_scheduled_at(_sched["post1"][i]) if i < len(_sched["post1"]) else ""
+            sched  = _make_scheduled_at(_POST1_OFFSETS[i]) if i < len(_POST1_OFFSETS) else ""
             result = step_publish(
                 post1, [_WP_ANALYSIS_PARENT, cat_id], f"Step 3A-{i+1}",
                 scheduled_at=sched,
@@ -386,7 +368,7 @@ def main() -> None:
         try:
             theme_name = post2.get("_theme_info", {}).get("theme") or post2.get("theme", "")
             cat_id = get_or_create_wp_category(theme_name, _WP_PICKS_PARENT)
-            sched  = _make_scheduled_at(_sched["post2"][i]) if i < len(_sched["post2"]) else ""
+            sched  = _make_scheduled_at(_POST2_OFFSETS[i]) if i < len(_POST2_OFFSETS) else ""
             step_publish(
                 post2, [_WP_PICKS_PARENT, cat_id], f"Step 3B-{i+1}",
                 scheduled_at=sched,
