@@ -4123,9 +4123,16 @@ def _call_gpt(system: str, user: str, label: str,
     logger.info(f"GPT-4o 완료 ({label}) | 길이: {len(content)}자")
 
     if response.usage:
+        # [Phase 23] prompt_tokens_details.cached_tokens — 캐시 히트 토큰 추출
+        _cached = 0
+        try:
+            _cached = response.usage.prompt_tokens_details.cached_tokens or 0
+        except AttributeError:
+            pass
         cost_tracker.record_openai_usage(
             input_tokens=response.usage.prompt_tokens,
             output_tokens=response.usage.completion_tokens,
+            cached_tokens=_cached,
         )
 
     return content
