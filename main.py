@@ -394,6 +394,24 @@ def main() -> None:
         except Exception as e:
             logger.error(f"⚠ [Step 3B-{i+1}] Post2 발행 실패: {e}")
 
+    # ── Phase 19: 정상 발행 품질 로그 (다중 포스트) ──────────────
+    try:
+        from generator import _log_normal_publish_event
+        for i, (post1, result) in enumerate(zip(posts1, post1_results)):
+            _log_normal_publish_event(
+                run_id=run_id, slot=slot, post_type=f"post1_{i+1}",
+                content=post1.get("content", ""), final_status="GO",
+                public_url=result.get("post_url", ""),
+            )
+        for i, post2 in enumerate(posts2):
+            _log_normal_publish_event(
+                run_id=run_id, slot=slot, post_type=f"post2_{i+1}",
+                content=post2.get("content", ""), final_status="GO",
+                public_url="",
+            )
+    except Exception as e:
+        logger.warning(f"⚠ Phase 19 품질로그 실패 (비치명): {e}")
+
     # ── Phase 10: 발행 이력 저장 ─────────────────────────────────
     if post1_results:
         try:
