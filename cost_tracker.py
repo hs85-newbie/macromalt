@@ -22,9 +22,10 @@ logger = logging.getLogger("macromalt")
 # 요금표 (2026년 기준)
 # ──────────────────────────────────────────────
 # OpenAI GPT-4o
-OPENAI_INPUT_PRICE_PER_M = 2.50    # USD / 1M input tokens
-OPENAI_OUTPUT_PRICE_PER_M = 10.00  # USD / 1M output tokens
-OPENAI_LIMIT_USD = 60.00           # 월 상한선
+OPENAI_INPUT_PRICE_PER_M        = 2.50   # USD / 1M input tokens (non-cached)
+OPENAI_CACHED_INPUT_PRICE_PER_M = 0.625  # USD / 1M cached input tokens (75% 할인)
+OPENAI_OUTPUT_PRICE_PER_M       = 10.00  # USD / 1M output tokens
+OPENAI_LIMIT_USD = 60.00                 # 월 상한선
 
 # Gemini 2.5-flash (thinking OFF, ≤200K context)
 GEMINI_INPUT_PRICE_PER_M = 0.075   # USD / 1M input tokens
@@ -86,8 +87,10 @@ def _init_month(log: dict, month: str) -> None:
             "openai": {
                 "calls": 0,
                 "input_tokens": 0,
+                "cached_input_tokens": 0,
                 "output_tokens": 0,
                 "cost_usd": 0.0,
+                "cache_savings_usd": 0.0,
                 "limit_usd": OPENAI_LIMIT_USD,
                 "notified_thresholds": [],
             },
@@ -153,22 +156,33 @@ def _check_and_notify_gemini(month_data: dict, pct: float) -> None:
 def record_openai_usage(
     input_tokens: int,
     output_tokens: int,
+    cached_tokens: int = 0,
 ) -> dict:
     """
     GPT-4o 호출 결과의 토큰 수를 기록하고 누적 비용을 반환합니다.
 
+    Args:
+        input_tokens:  전체 입력 토큰 (cached 포함)
+        output_tokens: 출력 토큰
+        cached_tokens: [Phase 23] prompt_tokens_details.cached_tokens — 캐시 히트 토큰
+
     반환값:
         {
             "call_cost_usd": float,
+            "cache_savings_usd": float,
             "month_cost_usd": float,
             "month_pct": float,
             "limit_usd": float,
         }
     """
+    non_cached = max(0, input_tokens - cached_tokens)
     call_cost = (
-        input_tokens * OPENAI_INPUT_PRICE_PER_M / 1_000_000
-        + output_tokens * OPENAI_OUTPUT_PRICE_PER_M / 1_000_000
+        non_cached    * OPENAI_INPUT_PRICE_PER_M        / 1_000_000
+        + cached_tokens * OPENAI_CACHED_INPUT_PRICE_PER_M / 1_000_000
+        + output_tokens * OPENAI_OUTPUT_PRICE_PER_M      / 1_000_000
     )
+    # 캐시 절감액: cached_tokens에 적용된 75% 할인분
+    savings = cached_tokens * (OPENAI_INPUT_PRICE_PER_M - OPENAI_CACHED_INPUT_PRICE_PER_M) / 1_000_000
 
     log = _load_log()
     month = _month_key()
@@ -177,20 +191,26 @@ def record_openai_usage(
     d = log[month]["openai"]
     d["calls"] += 1
     d["input_tokens"] += input_tokens
+    d.setdefault("cached_input_tokens", 0)
+    d["cached_input_tokens"] += cached_tokens
     d["output_tokens"] += output_tokens
     d["cost_usd"] = round(d["cost_usd"] + call_cost, 6)
+    d.setdefault("cache_savings_usd", 0.0)
+    d["cache_savings_usd"] = round(d["cache_savings_usd"] + savings, 6)
     log[month]["updated_at"] = datetime.now().isoformat()
 
     pct = (d["cost_usd"] / OPENAI_LIMIT_USD) * 100
     _check_and_notify_openai(log[month], pct)
     _save_log(log)
 
+    cache_info = f" | 캐시 히트: {cached_tokens:,}tok (절감 ${savings:.4f})" if cached_tokens else ""
     logger.info(
-        f"[비용] GPT-4o | 이번 호출: ${call_cost:.4f} | "
+        f"[비용] GPT-4o | 이번 호출: ${call_cost:.4f}{cache_info} | "
         f"이번 달 누적: ${d['cost_usd']:.4f} / ${OPENAI_LIMIT_USD} ({pct:.1f}%)"
     )
     return {
         "call_cost_usd": call_cost,
+        "cache_savings_usd": savings,
         "month_cost_usd": d["cost_usd"],
         "month_pct": pct,
         "limit_usd": OPENAI_LIMIT_USD,
@@ -340,11 +360,15 @@ def print_monthly_summary(month: Optional[str] = None) -> None:
     print(f"\n{'='*50}")
     print(f"📊 macromalt API 비용 현황 [{month}]")
     print(f"{'='*50}")
+    cached_tok  = oa.get("cached_input_tokens", 0)
+    savings_usd = oa.get("cache_savings_usd", 0.0)
+    cache_pct   = (cached_tok / oa["input_tokens"] * 100) if oa["input_tokens"] else 0
     print(f"🤖 OpenAI GPT-4o")
     print(f"   호출 수   : {oa['calls']:,}회")
-    print(f"   입력 토큰 : {oa['input_tokens']:,}")
+    print(f"   입력 토큰 : {oa['input_tokens']:,}  (캐시 히트: {cached_tok:,} / {cache_pct:.1f}%)")
     print(f"   출력 토큰 : {oa['output_tokens']:,}")
     print(f"   누적 비용 : ${oa['cost_usd']:.4f} / ${OPENAI_LIMIT_USD:.2f} ({oa_pct:.1f}%)")
+    print(f"   캐시 절감 : ${savings_usd:.4f}  (₩{round(savings_usd * USD_TO_KRW):,})")
     print(f"   잔여 예산 : ${OPENAI_LIMIT_USD - oa['cost_usd']:.4f}")
     print()
     print(f"🔵 Gemini 2.5-flash")
