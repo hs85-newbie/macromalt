@@ -128,3 +128,8 @@ _P_STYLE         = P_STYLE
 _HR_STYLE        = HR_STYLE
 _PICKS_DIV_STYLE = PICKS_DIV_STYLE
 _STRONG_STYLE    = STRONG_STYLE
+
+# ─── 인라인 출처 미니태그 스타일 (Phase 21) ──────────────────────────────────
+# 수치·통계 직후 <small style="{_CITE_STYLE}">(출처명, YYYY.MM)</small> 삽입
+CITE_STYLE  = "color:#888888;font-size:0.78em;margin-left:4px;font-style:normal;"
+_CITE_STYLE = CITE_STYLE
