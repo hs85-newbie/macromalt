@@ -171,7 +171,8 @@ def step_generate_picks(post1: dict, news: list[dict], research: list[dict], slo
     return post2
 
 
-def step_publish(post: dict, category_ids: list, step_label: str, featured_media_id: int = None) -> dict:
+def step_publish(post: dict, category_ids: list, step_label: str,
+                 featured_media_id: int = None, scheduled_at: str = "") -> dict:
     """Step 3A/3B: WordPress Draft 업로드"""
     from publisher import publish_draft
 
@@ -181,6 +182,8 @@ def step_publish(post: dict, category_ids: list, step_label: str, featured_media
         content=post["content"],
         category_ids=category_ids,
         featured_media_id=featured_media_id,
+        seo_title=post.get("seo_title", ""),  # [Phase 21] SEO slug 소스
+        scheduled_at=scheduled_at,
     )
     logger.info(f"✅ [{step_label}] 업로드 완료: Post ID {result['post_id']}")
     return result
@@ -195,337 +198,230 @@ def main() -> None:
     slot   = detect_slot(now)
 
     import cost_tracker as _ct
-    _ct.record_run_start()   # 런 시작 스냅샷 (토큰 델타 계산용)
+    _ct.record_run_start()
 
     logger.info("=" * 60)
-    logger.info(f"macromalt Phase 15E 파이프라인 시작 [run_id: {run_id}]")
-    logger.info(f"[Phase 15E] 슬롯: {slot} | run_id: {run_id}")
+    logger.info(f"macromalt Phase 22 다중 테마 파이프라인 시작 [run_id: {run_id}]")
+    logger.info(f"[Phase 22] 슬롯: {slot} | run_id: {run_id}")
     logger.info("=" * 60)
 
-    # 카테고리 ID 로드
-    cat_analysis = _get_category_ids("WP_CATEGORY_ANALYSIS", [2])
-    cat_picks    = _get_category_ids("WP_CATEGORY_PICKS",    [2])
-    logger.info(f"   카테고리 — 심층분석: {cat_analysis} | 종목리포트: {cat_picks}")
+    # ── 발행 시간 스케줄 (슬롯별 KST) ────────────────────────────
+    _SCHEDULE: dict = {
+        "morning":  {
+            "post1": ["07:00", "07:30", "08:00", "08:30", "09:00"],
+            "post2": ["09:30", "10:00"],
+        },
+        "evening":  {
+            "post1": ["12:00", "12:30", "13:00", "13:30", "14:00"],
+            "post2": ["14:30", "15:00"],
+        },
+        "us_open":  {
+            "post1": ["21:00", "21:30", "22:00", "22:30", "23:00"],
+            "post2": ["23:30", "00:00"],
+        },
+        "default":  {
+            "post1": ["07:00", "07:30", "08:00", "08:30", "09:00"],
+            "post2": ["09:30", "10:00"],
+        },
+    }
+    _sched = _SCHEDULE.get(slot, _SCHEDULE["default"])
 
-    post1_result = None
-    post2_result = None
+    def _make_scheduled_at(time_str: str) -> str:
+        """HH:MM → 오늘 날짜 ISO 8601 KST 문자열 반환."""
+        hour, minute = int(time_str.split(":")[0]), int(time_str.split(":")[1])
+        base = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        # 00:00은 다음날
+        if time_str == "00:00":
+            base = base + timedelta(days=1)
+        return base.strftime("%Y-%m-%dT%H:%M:%S")
 
+    # ── 카테고리 ID ─────────────────────────────────────────────
+    _WP_ANALYSIS_PARENT = 2   # Phase 22: ANALYSIS 부모 ID
+    _WP_PICKS_PARENT    = 3   # Phase 22: PICKS 부모 ID
+
+    # ── Step 1: 수집 (1회 — 모든 테마 공유) ─────────────────────
     try:
-        # ── Step 1: 수집 ──────────────────────────────
         news     = step_scrape_news()
         research = step_scrape_research()
-
-        # ── Step 2A: Post 1 생성 ──────────────────────
-        post1 = step_generate_analysis(news, research, slot=slot)
-
     except RuntimeError as e:
-        logger.error("=" * 60)
-        logger.error(f"❌ [Step 1] 수집 실패 [run_id: {run_id}]")
-        logger.error(f"   원인: {e}")
-        logger.error("=" * 60)
+        logger.error(f"❌ [Step 1] 수집 실패: {e}")
         sys.exit(1)
 
-    except Exception as e:
-        logger.exception(f"❌ [Step 2A] Post 1 생성 실패 [run_id: {run_id}]")
-        logger.error(f"   원인: {e}")
-        logger.error("   Post 1 실패로 Post 2 생성을 중단합니다.")
-        sys.exit(1)
-
+    # ── Step 0: 테마 선정 ────────────────────────────────────────
     try:
-        # ── Step 2B: Post 2 생성 ──────────────────────
-        post2 = step_generate_picks(post1, news, research, slot=slot)
-
+        from generator import gemini_select_themes, format_articles_for_prompt, format_research_for_prompt
+        _news_txt = format_articles_for_prompt(news)
+        _res_txt  = format_research_for_prompt(research)
+        themes = gemini_select_themes(
+            news_text=_news_txt,
+            research_text=_res_txt,
+            slot=slot,
+            n=5,
+        )
     except Exception as e:
-        logger.error(f"⚠ [Step 2B] Post 2 생성 실패 — Post 1은 계속 발행합니다.")
-        logger.error(f"   원인: {e}")
-        post2 = None
+        logger.warning(f"⚠ [Step 0] 테마 선정 실패 — 단일 테마 fallback: {e}")
+        themes = [{"priority": 1, "theme": "", "picks_priority": 1, "reason": "fallback"}]
 
-    # ── Step 2C: 이미지 준비 (비치명 — 실패해도 발행 계속) ───
+    logger.info(f"[Phase 22] 선정 테마 {len(themes)}개:")
+    for t in themes:
+        logger.info(f"   [{t.get('priority')}] {t.get('theme','')[:60]} (픽 우선순위: {t.get('picks_priority')})")
+
+    # ── Step 2A: Post1 생성 루프 (테마별) ───────────────────────
+    from generator import generate_deep_analysis
+    posts1 = []
+    for i, theme_info in enumerate(themes):
+        theme_name = theme_info.get("theme", "")
+        try:
+            logger.info(f"▶ [Step 2A-{i+1}] Post1 생성: '{theme_name[:50]}'")
+            post1 = generate_deep_analysis(news, research, slot=slot,
+                                           forced_theme=theme_name)
+            post1["_theme_info"] = theme_info  # 메타 보존
+            posts1.append(post1)
+            logger.info(f"✅ [Step 2A-{i+1}] Post1 완료: '{post1['title'][:50]}'")
+        except Exception as e:
+            logger.error(f"❌ [Step 2A-{i+1}] Post1 생성 실패 — 건너뜀: {e}")
+
+    if not posts1:
+        logger.error("❌ 모든 Post1 생성 실패 — 파이프라인 중단")
+        sys.exit(1)
+
+    # ── Step 2B: Post2 생성 (picks_priority 상위 2개) ───────────
+    from generator import generate_stock_picks_report
+    # picks_priority 낮은 순으로 정렬 (1=최우선)
+    picks_candidates = sorted(
+        [t for t in themes if t.get("picks_priority", 99) <= 2],
+        key=lambda x: x.get("picks_priority", 99)
+    )[:2]
+
+    posts2 = []
+    for i, theme_info in enumerate(picks_candidates):
+        theme_name = theme_info.get("theme", "")
+        # 해당 테마의 post1 찾기
+        matching_post1 = next(
+            (p for p in posts1 if p.get("_theme_info", {}).get("theme") == theme_name),
+            posts1[0]  # fallback: 첫 번째 post1
+        )
+        try:
+            logger.info(f"▶ [Step 2B-{i+1}] Post2 생성: '{theme_name[:50]}'")
+            post2 = generate_stock_picks_report(
+                theme=matching_post1.get("theme", theme_name),
+                key_data=matching_post1.get("key_data", []),
+                post1_content=matching_post1.get("content", ""),
+                news=news,
+                research=research,
+                materials=matching_post1.get("materials"),
+                slot=slot,
+            )
+            post2["_theme_info"] = theme_info
+            posts2.append(post2)
+            logger.info(f"✅ [Step 2B-{i+1}] Post2 완료: '{post2['title'][:50]}'")
+        except Exception as e:
+            logger.error(f"❌ [Step 2B-{i+1}] Post2 생성 실패 — 건너뜀: {e}")
+
+    # ── Step 2C: 이미지 준비 ─────────────────────────────────────
     from images import attach_post1_image, attach_post2_image, inject_chart_into_content
     from publisher import _strip_leading_h1
     import re as _re
 
-    logger.info("▶ [Step 2C] 이미지 준비")
-    post1_media_id, post1_img_url, post1_attribution = attach_post1_image(post1.get("theme", ""))
-    post2_media_id, post2_img_html, post2_chart_src  = attach_post2_image(post2.get("picks", []) if post2 else [])
-    logger.info(f"   이미지 — Post1: media_id={post1_media_id} | Post2: media_id={post2_media_id}")
+    for post1 in posts1:
+        try:
+            media_id, img_url, attribution = attach_post1_image(post1.get("theme", ""))
+            if img_url:
+                _img_figure = (
+                    f'\n<figure class="mm-featured-figure" style="margin:1.5em 0;text-align:center;">'
+                    f'<img src="{img_url}" alt="{post1.get("theme","")}" '
+                    f'style="max-width:100%;height:auto;" /></figure>\n'
+                )
+                _h1_m = _re.search(r"</h1>", post1.get("content", ""))
+                if _h1_m:
+                    _pos = _h1_m.end()
+                    post1["content"] = post1["content"][:_pos] + _img_figure + post1["content"][_pos:]
+                else:
+                    post1["content"] = _img_figure + post1.get("content", "")
+            if attribution:
+                post1["content"] += (
+                    f'\n<p class="mm-image-credit" style="font-size:11px;color:#aaa;text-align:right;margin-top:2em;">'
+                    f'[출처: {attribution}]</p>'
+                )
+        except Exception as e:
+            logger.warning(f"⚠ Post1 이미지 준비 실패 (비치명): {e}")
 
-    # Post 1: 본문에 Unsplash 이미지 삽입 (</h1> 직후 = 메인 제목 바로 아래)
-    if post1_img_url:
-        _img_figure = (
-            f'\n<figure class="mm-featured-figure" style="margin:1.5em 0;text-align:center;">'
-            f'<img src="{post1_img_url}" alt="{post1.get("theme","")}" '
-            f'style="max-width:100%;height:auto;" />'
-            f'</figure>\n'
-        )
-        _h1_match = _re.search(r"</h1>", post1.get("content", ""))
-        if _h1_match:
-            _pos = _h1_match.end()
-            post1["content"] = post1["content"][:_pos] + _img_figure + post1["content"][_pos:]
-        else:
-            post1["content"] = _img_figure + post1.get("content", "")
-        logger.info("   Post1 이미지 본문 삽입 완료 (h1 직후)")
+    for post2 in posts2:
+        try:
+            _, img_html, chart_src = attach_post2_image(post2.get("picks", []))
+            if img_html:
+                _url_m = _re.search(r'src="([^"]+)"', img_html)
+                _alt_m = _re.search(r'alt="([^"]+)"', img_html)
+                if _url_m:
+                    post2["content"] = _strip_leading_h1(post2["content"])
+                    post2["content"] = inject_chart_into_content(
+                        post2["content"], _url_m.group(1),
+                        _alt_m.group(1) if _alt_m else "", source=chart_src,
+                    )
+        except Exception as e:
+            logger.warning(f"⚠ Post2 이미지 준비 실패 (비치명): {e}")
 
-    # Post 1: 본문 하단에 Unsplash 출처 표기
-    if post1_attribution:
-        post1["content"] = post1.get("content", "") + (
-            f'\n<p class="mm-image-credit" style="font-size:11px;color:#aaa;text-align:right;margin-top:2em;">'
-            f'[출처: {post1_attribution}]'
-            f'</p>'
-        )
-        logger.info("   Post1 이미지 출처 표기 추가")
+    # ── Step 3: 발행 ─────────────────────────────────────────────
+    from publisher import get_or_create_wp_category
 
-    # Post 2: h1 먼저 제거 → 차트를 메인 픽 h2 직후에 삽입 (featured_media 미사용 — 본문 삽입만)
-    if post2 and post2_img_html:
-        _url_m = _re.search(r'src="([^"]+)"', post2_img_html)
-        _alt_m = _re.search(r'alt="([^"]+)"', post2_img_html)
-        if _url_m:
-            post2["content"] = _strip_leading_h1(post2["content"])
-            post2["content"] = inject_chart_into_content(
-                post2["content"],
-                _url_m.group(1),
-                _alt_m.group(1) if _alt_m else "",
-                source=post2_chart_src,
+    post1_results = []
+    for i, post1 in enumerate(posts1):
+        try:
+            theme_name = post1.get("_theme_info", {}).get("theme") or post1.get("theme", "")
+            cat_id = get_or_create_wp_category(theme_name, _WP_ANALYSIS_PARENT)
+            sched  = _make_scheduled_at(_sched["post1"][i]) if i < len(_sched["post1"]) else ""
+            result = step_publish(
+                post1, [_WP_ANALYSIS_PARENT, cat_id], f"Step 3A-{i+1}",
+                scheduled_at=sched,
             )
-            logger.info(f"   차트 본문 삽입 완료 (⭐ 메인 픽 h3 직후) [출처: {post2_chart_src}]")
+            post1_results.append(result)
+        except Exception as e:
+            logger.error(f"❌ [Step 3A-{i+1}] Post1 발행 실패: {e}")
 
-    try:
-        # ── Step 3A: Post 1 발행 ─────────────────────
-        # featured_media 미사용 — 본문 </h1> 직후 삽입 방식으로만 표시 (테마 중복 렌더링 방지)
-        post1_result = step_publish(post1, cat_analysis, "Step 3A", featured_media_id=None)
-
-    except Exception as e:
-        logger.error(f"❌ [Step 3A] Post 1 발행 실패 [run_id: {run_id}]")
-        logger.error(f"   원인: {e}")
+    if not post1_results:
+        logger.error("❌ Post1 발행 전체 실패")
         sys.exit(1)
 
-    if post2 is not None:
+    for i, post2 in enumerate(posts2):
         try:
-            # ── Step 3B: Post 2 발행 (featured_media 없음 — 차트는 본문에만)
-            post2_result = step_publish(post2, cat_picks, "Step 3B", featured_media_id=None)
-
+            theme_name = post2.get("_theme_info", {}).get("theme") or post2.get("theme", "")
+            cat_id = get_or_create_wp_category(theme_name, _WP_PICKS_PARENT)
+            sched  = _make_scheduled_at(_sched["post2"][i]) if i < len(_sched["post2"]) else ""
+            step_publish(
+                post2, [_WP_PICKS_PARENT, cat_id], f"Step 3B-{i+1}",
+                scheduled_at=sched,
+            )
         except Exception as e:
-            logger.error(f"⚠ [Step 3B] Post 2 발행 실패")
-            logger.error(f"   원인: {e}")
-            logger.warning("   Post 1은 정상 발행되었습니다.")
+            logger.error(f"⚠ [Step 3B-{i+1}] Post2 발행 실패: {e}")
 
-    # ── Phase 10: 발행 이력 저장 ─────────────────────
-    if post1_result:
+    # ── Phase 10: 발행 이력 저장 ─────────────────────────────────
+    if post1_results:
         try:
             from generator import save_publish_history
+            # 대표 post1/post2 (첫 번째)로 이력 저장
             save_publish_history(
                 slot=slot,
-                post1=post1,
-                post2=post2 if post2 is not None else None,
+                post1=posts1[0],
+                post2=posts2[0] if posts2 else None,
             )
         except Exception as e:
             logger.warning(f"⚠ 발행 이력 저장 실패 (비치명): {e}")
 
-    # ── Phase 19: 정상 발행 경로 품질 필드 로그 ────────────────────────
+    # ── 비용 요약 ─────────────────────────────────────────────────
     try:
-        from generator import _log_normal_publish_event
-        _final_status = "GO"  # 여기까지 도달하면 정상 발행 완료
-
-        if post1_result:
-            _log_normal_publish_event(
-                run_id=run_id,
-                slot=slot,
-                post_type="post1",
-                content=post1.get("content", ""),
-                final_status=_final_status,
-                public_url=post1_result.get("post_url", ""),
-            )
-        if post2_result:
-            _log_normal_publish_event(
-                run_id=run_id,
-                slot=slot,
-                post_type="post2",
-                content=post2.get("content", ""),
-                final_status=_final_status,
-                public_url=post2_result.get("post_url", ""),
-            )
-    except Exception as e:
-        logger.warning(f"⚠ Phase 19 정상발행 품질로그 실패 (비치명): {e}")
-
-    # ── Phase 15E: Post1/Post2 역할 분리 + 해석 지성 + 신뢰성 + P14~15E 게이트 ─
-    try:
-        from generator import (
-            _check_post_separation,
-            _check_post_continuity,
+        run_summary = _ct.get_run_summary()
+        logger.info(
+            f"[비용] 런 합계 | GPT: ${run_summary.get('gpt',{}).get('cost_usd',0):.4f} "
+            f"(₩{run_summary.get('gpt',{}).get('cost_krw',0):,}) | "
+            f"Gemini: ₩{run_summary.get('gemini',{}).get('cost_krw',0):,} | "
+            f"총: ₩{run_summary.get('total_krw',0):,}"
         )
+    except Exception:
+        pass
 
-        if post1 is not None and post2 is not None:
-            sep = _check_post_separation(
-                post1.get("content", ""), post2.get("content", "")
-            )
-            sep_status = sep["status"]
-            continuity = _check_post_continuity(
-                post1.get("content", ""), post2.get("content", "")
-            )
-            continuity_status = continuity["status"]
-        else:
-            sep_status = "SKIP"
-            continuity_status = "SKIP"
-
-        # Phase 12 품질 스코어
-        p1_scores = post1.get("quality_scores", {}) if post1 else {}
-
-        # Phase 13/14 진단 스코어
-        p1_p13 = post1.get("p13_scores", {}) if post1 else {}
-        p2_p13 = post2.get("p13_scores", {}) if post2 else {}
-
-        def _gate(score_dict: dict, key: str) -> str:
-            return score_dict.get(key, "SKIP")
-
-        def _p13gate(p13_dict: dict, sub: str, key: str = "status") -> str:
-            sub_dict = p13_dict.get(sub, {})
-            if isinstance(sub_dict, dict):
-                return sub_dict.get(key, "SKIP")
-            return "SKIP"
-
-        def _worst(a: str, b: str) -> str:
-            rank = {"FAIL": 0, "WARN": 1, "PASS": 2, "SKIP": 3}
-            return a if rank.get(a, 3) <= rank.get(b, 3) else b
-
-        temporal_status = _worst(
-            _p13gate(p1_p13, "temporal"), _p13gate(p2_p13, "temporal")
-        )
-        numeric_status = _worst(
-            _p13gate(p1_p13, "numeric"), _p13gate(p2_p13, "numeric")
-        )
-        closure_status = _worst(
-            _p13gate(p1_p13, "closure"), _p13gate(p2_p13, "closure")
-        )
-        interp_p1 = _p13gate(p1_p13, "interpretation", key="overall")
-        interp_p2 = _p13gate(p2_p13, "interpretation", key="overall")
-        hedge_p1  = _p13gate(p1_p13, "interpretation", key="hedge_overuse")
-        hedge_p2  = _p13gate(p2_p13, "interpretation", key="hedge_overuse")
-        ctr_p1    = _p13gate(p1_p13, "interpretation", key="counterpoint_spec")
-        ctr_p2    = _p13gate(p2_p13, "interpretation", key="counterpoint_spec")
-
-        # Phase 14: spine 존재 여부 확인
-        p1_spine = post1.get("post1_spine", "") if post1 else ""
-        spine_status = "PASS" if p1_spine else "WARN"
-
-        # Phase 14: 소스 정규화 실행 여부 (p13_scores에서 간접 확인)
-        source_norm_status = "PASS"  # 항상 실행됨 (generate_deep_analysis에서)
-
-        # Phase 14: 재작성 루프 여부 (weak_hits 기준으로 판단)
-        p1_weak = p1_p13.get("interpretation", {}).get("weak_interp_hits", 0) if isinstance(p1_p13.get("interpretation"), dict) else 0
-        p2_weak = p2_p13.get("interpretation", {}).get("weak_interp_hits", 0) if isinstance(p2_p13.get("interpretation"), dict) else 0
-        rewrite_triggered = (p1_weak >= 3 or p2_weak >= 3)
-        rewrite_loop_status = "PASS" if rewrite_triggered else ("WARN" if (p1_weak >= 1 or p2_weak >= 1) else "PASS")
-
-        # HOLD 조건 (Phase 14): temporal FAIL 또는 numeric hard_fail만 HOLD 트리거
-        # numeric suspicious-only는 WARN으로 강등 (Phase 14 재조정)
-        p1_hf = p1_p13.get("numeric", {}).get("hard_fail_count", 0) if isinstance(p1_p13.get("numeric"), dict) else 0
-        p2_hf = p2_p13.get("numeric", {}).get("hard_fail_count", 0) if isinstance(p2_p13.get("numeric"), dict) else 0
-
-        hold_conditions = [
-            temporal_status == "FAIL",
-            (p1_hf + p2_hf) >= 1,          # Phase 14: hard_fail만 HOLD (suspicious는 WARN)
-        ]
-
-        gate = {
-            # ── Phase 12 기존 키 유지 ─────────────────────────────────────
-            "numeric_density":             _gate(p1_scores, "numeric_density"),
-            "time_anchor":                 _gate(p1_scores, "time_anchor"),
-            "counterpoint_presence":       _gate(p1_scores, "counterpoint_presence"),
-            "generic_wording_control":     _gate(p1_scores, "generic_wording"),
-            "post_role_separation":        sep_status,
-            # ── Phase 13 진단 키 유지 ─────────────────────────────────────
-            "interpretation_quality_p1":   interp_p1,
-            "interpretation_quality_p2":   interp_p2,
-            "hedge_overuse_p1":            hedge_p1,
-            "hedge_overuse_p2":            hedge_p2,
-            "counterpoint_specificity_p1": ctr_p1,
-            "counterpoint_specificity_p2": ctr_p2,
-            "post1_post2_continuity":      continuity_status,
-            "temporal_consistency":        temporal_status,
-            "numeric_sanity":              numeric_status,
-            "verifier_revision_closure":   closure_status,
-            # ── Phase 14 신규 키 ──────────────────────────────────────────
-            "source_normalization":         source_norm_status,
-            "fact_forecast_separation":     source_norm_status,
-            "analytical_spine_enforcement": spine_status,
-            "post2_continuation_enforcement": "PASS" if p1_spine else "WARN",
-            "weak_interpretation_rewrite_loop": rewrite_loop_status,
-            "numeric_sanity_recalibration": "PASS",
-            # ── Phase 15 신규 키 ──────────────────────────────────────────
-            "phase15_tense_correction":    _p13gate(p1_p13, "tense", key="status") if isinstance(p1_p13.get("tense"), dict) else "PASS",
-            "phase15c_label_safety":       _p13gate(p2_p13, "label_leak", key="status") if isinstance(p2_p13.get("label_leak"), dict) else "PASS",
-            "phase15d_jeonmang_strip":     "PASS",   # 항상 실행됨
-            "phase15e_month_settlement":   "PASS",   # 항상 실행됨
-            # ── 공통 안정성 ────────────────────────────────────────────────
-            "phase13_compatibility":       "PASS",
-            "public_signature_stability":  "PASS",
-            "import_build":                "PASS",
-            "final_status":                "HOLD" if any(hold_conditions) else "GO",
-        }
-
-        logger.info("[Phase 15E] 최종 품질 게이트:")
-        for k, v in gate.items():
-            logger.info(f"  {k}: {v}")
-
-    except Exception as e:
-        logger.warning(f"⚠ Phase 15E 품질 게이트 집계 실패 (비치명): {e}")
-
-    # ── 최종 결과 요약 ────────────────────────────────
     logger.info("=" * 60)
-    logger.info(f"🎉 macromalt Phase 15E 파이프라인 완료 [run_id: {run_id}] [슬롯: {slot}]")
-    logger.info("-" * 60)
-
-    if post1_result:
-        logger.info("  📄 Post 1 — 심층 경제 분석")
-        logger.info(f"     제목    : {post1['title']}")
-        logger.info(f"     주제    : {post1.get('theme', 'N/A')}")
-        logger.info(f"     Post ID : {post1_result['post_id']}")
-        logger.info(f"     URL     : {post1_result['post_url']}")
-        logger.info(f"     상태    : {post1_result['status']} (임시저장)")
-
-    logger.info("-" * 60)
-
-    if post2_result:
-        logger.info("  📊 Post 2 — 종목 리포트")
-        logger.info(f"     제목    : {post2['title']}")
-        picks = post2.get("picks", [])
-        if picks:
-            ticker_names = ", ".join(
-                f"{p.get('name','?')}({p.get('ticker','?')})" for p in picks
-            )
-            logger.info(f"     종목    : {ticker_names}")
-        logger.info(f"     Post ID : {post2_result['post_id']}")
-        logger.info(f"     URL     : {post2_result['post_url']}")
-        logger.info(f"     상태    : {post2_result['status']} (임시저장)")
-    elif post2 is None:
-        logger.warning("  ⚠ Post 2 — 생성 또는 발행 실패 (Post 1은 정상)")
-
-    # ── 이번 런 토큰·비용 요약 ────────────────────────────────────────────
-    try:
-        _run = _ct.get_run_summary()
-        if _run:
-            _gpt = _run.get("gpt", {})
-            _gem = _run.get("gemini", {})
-            logger.info("-" * 60)
-            logger.info(f"💰 [토큰 사용량 — 이번 런: {run_id}]")
-            logger.info(
-                f"   🤖 GPT-4o  | {_gpt.get('calls',0)}회 호출 | "
-                f"입력 {_gpt.get('input',0):,}tok / 출력 {_gpt.get('output',0):,}tok | "
-                f"₩{_gpt.get('cost_krw',0):,} (${_gpt.get('cost_usd',0):.4f})"
-            )
-            logger.info(
-                f"   🔵 Gemini  | {_gem.get('calls',0)}회 호출 | "
-                f"입력 {_gem.get('input',0):,}tok / 출력 {_gem.get('output',0):,}tok | "
-                f"₩{_gem.get('cost_krw',0):,}"
-            )
-            logger.info(
-                f"   📌 합계    | ₩{_run.get('total_krw',0):,} (${_run.get('total_usd',0):.4f})"
-            )
-            # 월간 누적 현황도 함께 출력
-            _ct.print_monthly_summary()
-    except Exception as _e:
-        logger.warning(f"⚠ 토큰 요약 출력 실패 (비치명): {_e}")
-
+    logger.info(f"✅ macromalt Phase 22 파이프라인 완료 [run_id: {run_id}]")
+    logger.info(f"   Post1: {len(post1_results)}개 발행 | Post2: {len(posts2)}개 발행")
     logger.info("=" * 60)
 
 
