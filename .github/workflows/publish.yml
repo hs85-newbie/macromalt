@@ -1,16 +1,28 @@
 name: macromalt Daily Publish
 
 # ─────────────────────────────────────────────────────────────
-# 스케줄 — KST / UTC 대응
-#   KST 08:17  =  UTC 23:17 (전일)  →  cron: '17 23 * * *'
-#   KST 14:17  =  UTC 05:17         →  cron: '17 5  * * *'
-#   KST 20:17  =  UTC 11:17         →  cron: '17 11 * * *'
+# 스케줄 — KST / UTC 대응 (Phase 22 기준)
+#
+#   슬롯 감지 범위 (detect_slot, KST):
+#     morning : 05:00 ~ 11:59
+#     evening : 14:00 ~ 20:59
+#     us_open : 21:30~22:29 (DST) / 22:30~23:29 (non-DST)
+#
+#   크론 실행 시각 (슬롯 범위 내 + 발행 첫 포스트 10분 전):
+#     KST 06:50 = UTC 21:50 (전일) → morning
+#     KST 14:10 = UTC 05:10        → evening
+#     KST 21:35 = UTC 12:35        → us_open (DST, 3~11월)
+#     KST 22:35 = UTC 13:35        → us_open (non-DST, 11~3월)
+#
+#   발행 시각: 실행 시점 +10/+40/+70/+100/+130분 (Post1 × 5)
+#             +160/+190분 (Post2 × 2)
 # ─────────────────────────────────────────────────────────────
 on:
   schedule:
-    - cron: '17 23 * * *'   # KST 08:17 (아침 슬롯)
-    - cron: '17 5  * * *'   # KST 14:17 (오후 슬롯)
-    - cron: '17 11 * * *'   # KST 20:17 (저녁 슬롯)
+    - cron: '50 21 * * *'   # KST 06:50 → morning
+    - cron: '10 5  * * *'   # KST 14:10 → evening
+    - cron: '35 12 * * *'   # KST 21:35 → us_open (DST 기간)
+    - cron: '35 13 * * *'   # KST 22:35 → us_open (non-DST 기간)
   workflow_dispatch:
     inputs:
       reason:
@@ -31,7 +43,7 @@ jobs:
   publish:
     name: Publish Post1 + Post2
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     environment: 'GitHub Actions'
     # KST 고정 — datetime.now() / 로그 타임스탬프 / 슬롯 감지 모두 KST 기준
     env:
