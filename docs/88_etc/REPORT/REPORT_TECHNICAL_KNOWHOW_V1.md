@@ -1,6 +1,6 @@
 # macromalt 기술 종합 Know-How 보고서 V1
 
-> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 23 기준
+> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 20 Phase 4 기준 (최종 갱신: 2026-03-26)
 
 ---
 
@@ -18,6 +18,7 @@
 10. [품질 보증 체계](#10-품질-보증-체계)
 11. [환경 설정 완전 가이드](#11-환경-설정-완전-가이드)
 12. [운영 트러블슈팅 매뉴얼](#12-운영-트러블슈팅-매뉴얼)
+13. [AI 글쓰기 품질 개선 Know-How (Phase 20)](#13-ai-글쓰기-품질-개선-know-how)
 
 ---
 
@@ -188,7 +189,8 @@ main() 실행
 | **Phase 17** | 2026-03-19 | **스타일 토큰 중앙화** — `styles/tokens.py` 분리, CSS 하드코딩 제거 |
 | **Phase 18** | 2026-03-20 | **4축 안정화** — closure 오류, fallback 누락, parse_failed 루프, 반복 테마 방지 |
 | **Phase 19** | 2026-03-20 | **GitHub Actions 이관** — 로컬 스케줄 → CI/CD 완전 이관, 품질로그(JSONL) 시스템 |
-| **Phase 20** | 2026-03-23 | **Editorial Planner + QA 체계** — Lead Metrics / Evidence / Closure 3단계 검증 |
+| **Phase 20-1~3** | 2026-03-23 | **Editorial Planner Track** — Step1.5 플래너 삽입, 4-tier writer contract, stance_type 5종 |
+| **Phase 20-4** | 2026-03-26 | **Verifier 구조 검사** — 기준 26~30, lead_recall/lead_focus 이중 지표 |
 | **Phase 21** | 2026-03-20 | **SEO 최적화** — 슬러그 이중화, 인라인 출처 미니태그, OpenGraph 최적화 |
 | **Phase 22** | 2026-03-25 | **다중 테마 파이프라인** — 1테마/슬롯 → 5테마, 7포스팅, 예약 발행 30분 간격 |
 | **Phase 23** | 2026-03-25 | **Cost 고도화** — OpenAI 캐시 토큰 수집, Gemini usage_metadata 수집, 절감액 가시화 |
@@ -306,7 +308,176 @@ payload = {
 # ❌ 흔한 실수: date를 UTC로 넣으면 9시간 일찍 발행됨
 ```
 
-### 5-4. cost_tracker.py (비용 추적)
+### 5-4. Editorial Planner (Phase 20 Step 1.5)
+
+#### 핵심 문제 인식
+
+```
+[기존 파이프라인의 구조적 결함]
+Gemini Step1 → 평탄한 사실 묶음 JSON (모든 facts가 동등한 중요도)
+     ↓
+GPT → "이 JSON을 HTML로 변환하라" (neutral fact serializer 역할)
+     ↓
+결과: 균등 배분 구조 → 모든 섹션 동형 반복 → AI처럼 읽힘
+
+[해결 방향]
+structured facts → editorial plan → writer draft → verify/revise
+                       ↑
+             "lead_angle 1개 선택"이 핵심
+             GPT는 이미 계획된 contract를 소비하는 writer
+```
+
+#### Step1 스키마 확장 (Phase 20-1)
+
+facts 배열 항목에 추가된 필드:
+```json
+{
+  "id": "fact_1",
+  "causal_path": "금리 인상 → 달러 강세 → 수출 기업 원화 수익 감소",
+  "confidence": "high | medium | low"
+}
+```
+
+신규 perspective fields:
+```json
+"why_now":          { "claim": "...", "evidence_ids": ["fact_1"], "confidence": "high" },
+"market_gap":       { "claim": "...", "evidence_ids": [...], "confidence": "..." },
+"analyst_surprise": { "level": "none|mild|strong", "claim": "...", "evidence_ids": [...] },
+"stance_type":      "consensus_miss | underpriced_risk | overread | low_confidence | neutral",
+"stance_evidence_ids": [...],
+"risk_of_overstatement": [{ "text": "...", "reason": "..." }]
+```
+
+**생성 규칙:**
+- `evidence_ids`가 실제 facts id와 불일치하면 해당 필드 omit
+- `why_now`: today's specific trigger 필수 (범용 설명 금지)
+- `stance_type` 근거 없으면 강제로 `"neutral"`
+- `risk_of_overstatement`: why_now/market_gap 존재 시 1개 이상 필수
+
+#### Planner 구조 (Phase 20-2)
+
+```python
+GEMINI_PLANNER_POST1_SYSTEM = """
+# Post1 전용: macro_mechanism / transmission_path / market_structure / counterpoint
+# lead_angle 1개 필수 (pick 금지)
+# drop_ids 최소 1개 필수 (편집 의지 표명)
+# word_budget_ratio: lead ≥ 0.35
+"""
+
+GEMINI_PLANNER_POST2_SYSTEM = """
+# Post2 전용: pick_trigger / stock_sensitivity / selection_logic / counterpoint
+# pick_trigger 없이 시작 금지 (Phase 17 규칙 유지)
+"""
+```
+
+플래너 출력 → 4-tier writer contract:
+```json
+{
+  "lead_facts":         ["fact_2"],
+  "secondary_facts":    ["fact_1", "fact_3"],
+  "background_facts":   ["bg_1", "bg_2"],
+  "disallowed_fact_ids": ["fact_5"],
+  "lead_angle":         { "claim": "...", "evidence_ids": ["fact_2"] },
+  "stance_type":        "underpriced_risk",
+  "narrative_shape":    "conclusion_first | contradiction_first | question_first",
+  "section_plan":       [...]
+}
+```
+
+**GPT는 원본 step1 facts 배열을 받지 않는다** — 재균등 배분 원천 차단.
+
+#### Fallback 보장 원칙
+
+```python
+try:
+    planner = _call_editorial_planner(step1=materials, post_type="post1", ...)
+    if planner:
+        contract = _build_writer_contract(step1=materials, planner=planner, ...)
+except Exception as e:
+    logger.warning(f"[Phase 20] planner 예외 — fallback | {e}")
+    contract = None  # None이면 기존 파이프라인 그대로 작동
+```
+
+로그:
+- 성공: `[Phase 20] editorial planner OK | planner_used=True | stance_type=... | narrative_shape=...`
+- 실패: `[Phase 20] planner FAILED | planner_used=False | fallback=step1_only`
+
+#### writer HTML 주석 (Phase 20-3)
+
+GPT 작성 출력 끝에 실제 사용 facts 추적:
+```html
+<!-- macromalt:evidence_ids_used=[fact_2,fact_5,bg_1] -->
+```
+
+파싱:
+```python
+def _parse_writer_evidence_ids(html: str) -> list:
+    m = re.search(r'<!--\s*macromalt:evidence_ids_used=\[(.*?)\]\s*-->', html)
+    if m:
+        return [x.strip() for x in m.group(1).split(',') if x.strip()]
+    return []
+```
+
+로그: `[Phase 20] writer evidence | writer_used_evidence_ids=[fact_2,fact_5,bg_1]`
+
+---
+
+### 5-5. lead_metrics 이중 지표 (Phase 20-4)
+
+#### 설계 배경
+
+단일 `lead_drift` 지표로는 두 가지 다른 실패 패턴을 구분할 수 없다:
+
+| 실패 패턴 | 설명 |
+|-----------|------|
+| **lead 누락** | planner가 지정한 lead_ids를 writer가 실제로 안 씀 |
+| **강조 희석** | lead_ids는 썼지만 secondary/background도 대량 사용 → 균등 배분 회귀 |
+
+#### 이중 지표 정의
+
+```python
+def _check_p20_lead_metrics(
+    lead_ids: list,
+    used_ids: list,
+    run_id: str,
+    post_type: str,
+) -> dict:
+    """
+    lead_recall : len(lead_ids ∩ used_ids) / len(lead_ids)
+                  → planner 지정 핵심 근거를 writer가 얼마나 사용했나 (누락 감지)
+    lead_focus  : len(lead_ids ∩ used_ids) / len(used_ids)
+                  → writer 사용 전체 ids 중 lead 비중 (강조 희석 감지)
+    """
+```
+
+| 지표 | 공식 | 감지 실패 모드 |
+|------|------|---------------|
+| `lead_recall` | `\|lead ∩ used\| / \|lead\|` | planner 지정 리드를 writer가 누락 |
+| `lead_focus` | `\|lead ∩ used\| / \|used\|` | writer가 secondary/background에 집중 → 균등 배분 회귀 |
+
+#### WARN 조건
+
+```
+recall < 0.5   → "[Phase 20] WARN lead_metrics | lead_recall=0.xx — lead_ids 절반 이상 미사용"
+focus  < 0.25  → "[Phase 20] WARN lead_metrics | lead_focus=0.xx — 사용 facts 중 lead 비중 25% 미만"
+```
+
+**두 지표가 잡는 패턴 조합:**
+- `low recall + high focus`: 일부 lead만 썼지만 그나마 비중 높음 → lead 누락
+- `high recall + low focus`: lead 전부 썼지만 secondary도 대량 → 균등 배분 회귀 (흔한 패턴)
+- `low recall + low focus`: 두 문제 동시 발생
+
+#### 로그 (항상 출력)
+
+```
+[Phase 20] lead_metrics | run_id=20260326_070533 | post_type=post1 |
+lead_ids=[fact_2] | writer_used_ids=[fact_1,fact_2,fact_3,fact_4,fact_5] |
+missing_lead_ids=[] | lead_recall=1.00 | lead_focus=0.20
+```
+
+---
+
+### 5-6. cost_tracker.py (비용 추적)
 
 **규모**: 390줄
 
@@ -775,13 +946,46 @@ cost = (regular_tokens * 2.50 + cached_tokens * 0.625) / 1_000_000
   └── 필요 시 1회 자동 수정 후 재검수
 ```
 
-### 10-2. Phase 20 QA 체계 (Editorial Planner)
+### 10-2. Phase 20 QA 체계 (Editorial Planner + Verifier 구조 검사)
 
-| 검증 항목 | 기준 | 실패 처리 |
-|-----------|------|---------|
-| **Lead Metrics** | 도입부 수치 5개 이상, 시기 명확 | 재작성 요청 |
-| **Evidence** | 본문 인용 출처 3개 이상 | 경고 후 발행 |
-| **Closure** | 도입부↔결론 연결성 | 클로저 재작성 |
+#### Verifier 기준 26~30 (Phase 20-4 신규)
+
+| 기준 | 검사 항목 | 위반 시 |
+|------|----------|---------|
+| **26. 섹션 동형 반복** | 연속 2개+ 섹션이 "주장→수치→시사" 3단 구조 반복 | pass=false |
+| **27. 강조 분산** | 3개+ 섹션 균등 배분, 명확한 lead 섹션 부재 | pass=false |
+| **28. 리드 드리프트** | 도입부 핵심 각도가 중반 이후 사라짐 | pass=false (뚜렷한 경우) |
+| **29. 일반 문장 과잉** | 숫자·날짜·인과·출처 없는 문장 40%+ | pass=false |
+| **30. 근거 없는 단정** | consensus_miss/underpriced_risk 계열 단정 근거 없이 서술 | pass=false |
+
+> **적용 우선순위**: 26번(섹션 동형 반복), 28번(리드 드리프트) 엄격 적용
+
+#### Reviser 허용 범위 11~12번 (Phase 20-4 신규)
+
+```
+11. 섹션 동형 반복 → 반복 섹션 opener를 역접형/인과형/질문형으로 교체
+    (수치·논리 원문 보존, 섹션 길이 유지)
+12. 리드 논거 약화 → counterpoint 직전 섹션 끝에 lead 연결 문장 1개 추가
+    (날짜·수치 발명 금지, 기존 사실만 참조, 추가 문장 1개 제한)
+```
+
+#### lead_metrics 이중 지표 (Python-level 정량 모니터링)
+
+| 지표 | WARN 기준 | 의미 |
+|------|---------|------|
+| `lead_recall` | < 0.5 | lead_ids 절반 이상 미사용 |
+| `lead_focus` | < 0.25 | 사용 facts 중 lead 비중 25% 미만 (균등 배분 회귀) |
+
+#### QA 플로우 전체 (Phase 20 완성 기준)
+
+```
+[Step 1] Gemini 분석 → facts + perspective_fields (stance_type, why_now, ...)
+[Step 1.5] Planner → lead_angle 선택 → 4-tier contract 생성
+[Step 2] GPT 작성 (contract 소비) → HTML + evidence_ids_used 주석
+[Step 2.5] _check_p20_lead_metrics() → lead_recall / lead_focus 계산 → WARN 로그
+[Step 3] Gemini Verifier (기준 1~30) → pass/fail → 필요 시 Reviser 실행
+[Step 4] 발행 → publish_result.jsonl 기록 (GO/WARN/HOLD)
+```
 
 ### 10-3. Phase 19 JSONL 품질 로그
 
@@ -929,5 +1133,105 @@ cat publish_history.json | python -m json.tool
 
 ---
 
+## 13. AI 글쓰기 품질 개선 Know-How
+
+### 13-1. "AI처럼 읽힌다"의 진짜 원인
+
+> **어휘 교체(상투어 제거)로는 해결 불가.** 근본 원인은 파이프라인 인식 구조에 있다.
+
+| 표면 증상 | 실제 원인 |
+|-----------|---------|
+| 모든 섹션이 비슷한 구조 | GPT가 facts를 균등 배분하기 때문 |
+| "왜 오늘 이게 중요한가"가 없음 | 중요도 결정 레이어 부재 |
+| 동형 섹션 반복 | lead_angle이 없으면 모든 섹션이 동등한 서술 단위 |
+| 단정적 표현 과잉 | stance 근거 없이 분석 결론을 단정 |
+
+**핵심 해법**: GPT를 "fact serializer"에서 "thesis-expansion engine"으로 전환
+- Before: `raw facts JSON → GPT → HTML`
+- After: `facts → planner(lead 선택) → pre-sorted contract → GPT → HTML`
+
+---
+
+### 13-2. stance_type 5종 열거
+
+근거 없는 stance 사용 방지를 위해 freeform 대신 열거형으로 제한:
+
+| stance | 의미 | 사용 조건 |
+|--------|------|---------|
+| `consensus_miss` | 시장 컨센서스가 놓친 각도 | analyst_surprise.level = strong |
+| `underpriced_risk` | 시장이 저평가한 리스크 | why_now + risk_of_overstatement 필수 |
+| `overread` | 시장이 과대해석한 이슈 | 반대 evidence_ids 필수 |
+| `low_confidence` | 불확실성이 높아 판단 유보 | confidence=low facts가 lead일 때 |
+| `neutral` | 중립 서술 | 근거 불충분 시 강제 할당 |
+
+---
+
+### 13-3. narrative_shape 3종
+
+글의 진입 방식을 제어하여 섹션 opener 단조로움 방지:
+
+| shape | 구조 | 효과 |
+|-------|------|------|
+| `conclusion_first` | 결론 → 근거 | 핵심 주장이 리드에 나옴 |
+| `contradiction_first` | 반례/역설 → 분석 | 독자 주의 집중 |
+| `question_first` | 질문 → 답 | 분석 흐름을 독자 관점으로 구성 |
+
+---
+
+### 13-4. Post1 vs Post2 planner 역할 분리
+
+두 포스트 유형을 동일한 planner로 처리하면 적합하지 않은 angle이 생성됨.
+
+| Post | Planner 초점 | 금지 패턴 |
+|------|-------------|---------|
+| **Post1** (매크로 분석) | macro_mechanism / transmission_path / market_structure / counterpoint | 종목 pick 언급 금지 |
+| **Post2** (종목 픽) | pick_trigger / stock_sensitivity / selection_logic / counterpoint | pick_trigger 없이 시작 금지 |
+
+---
+
+### 13-5. evidence_ids 기반 설계 원칙
+
+**근거 없는 주관적 표현 방지를 위한 ID 추적 설계:**
+
+1. Gemini Step1에서 모든 사실에 `id` 부여 (`fact_1`, `fact_2`, `bg_1`, ...)
+2. Planner가 `lead_angle.evidence_ids`, `why_now.evidence_ids` 등 모든 주장에 근거 id 첨부
+3. `_validate_planner_evidence_ids()`: id 불일치 시 해당 claim 제거 (hallucination 방지)
+4. Writer 출력 주석에서 실제 사용 id 추출 → `_check_p20_lead_metrics()` 입력
+5. `lead_recall + lead_focus` 계산으로 writer가 contract를 실제로 따랐는지 검증
+
+**설계 원칙**: "근거 id 없는 주장은 claim 자격 없음"
+
+---
+
+### 13-6. STYLE_RESIDUAL_KW 분류 주의점
+
+Gemini Verifier가 조건부 분석 서술을 사실 오류로 오분류하는 패턴 주의:
+
+```python
+# 오분류되기 쉬운 합법적 표현들 (STYLE_RESIDUAL_KW에 등록 필요)
+"가능성이",     # "~가능성이 높습니다" — 확률적 분석
+"만약",         # 조건부 시나리오
+"수 있습니다",  # 조건부 서술
+"된다면",       # 조건 종속절
+"않는다면",     # 부정 조건
+"숫자나 기준",  # [기준10] writing quality 지적 (사실 오류 아님)
+```
+
+`truly_unresolved`로 분류되면 `verifier_revision_closure: FAIL` → 발행 차단.
+새로운 조건부 표현이 추가될 때마다 `STYLE_RESIDUAL_KW` 업데이트 필요.
+
+---
+
+### 13-7. _log_normal_publish_event 제거 금지
+
+Phase 19 Actions 이관 시 실수로 제거 → Phase 20 주간 리포트 데이터 공백 발생.
+
+**이 함수가 없으면**: `publish_result.jsonl` 미기록 → `phase20_weekly_report.py` 집계 불가 → 주간 리포트 빈 파일 생성.
+
+> **규칙**: `_log_normal_publish_event()`는 항상 유지. 리팩터링 시 제거 금지.
+
+---
+
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*다음 갱신: Phase 24 (FastAPI SaaS 서버) 완료 시*
+*Phase 20 Phase 4 기준 최종 갱신: 2026-03-26*
+*다음 갱신 예정: Phase 24 (FastAPI SaaS 서버) 또는 SEO/수익화 트랙 완료 시*
