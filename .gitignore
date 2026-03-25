@@ -40,6 +40,9 @@ logs/
 data/raw/
 output/
 
+# [Phase 22] 동적 카테고리 캐시 (로컬 런타임 전용)
+category_cache.json
+
 # [Phase A-B] 거시지표 캐시 + 지식베이스 DB (로컬 전용)
 data/macro_cache.json
 data/knowledge_base.db
