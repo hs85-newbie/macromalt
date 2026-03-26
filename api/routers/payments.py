@@ -164,13 +164,35 @@ async def payment_webhook(
     billing_key = data.get("billingKey") or data.get("payment", {}).get("billingKey")
     payment_status = data.get("status", "")  # DONE / CANCELED / ABORTED 등
 
-    if not billing_key:
-        return {"ok": True}
+    sub = None
+    if billing_key:
+        result = await db.execute(
+            select(Subscription).where(Subscription.toss_billing_key == billing_key)
+        )
+        sub = result.scalar_one_or_none()
 
-    result = await db.execute(
-        select(Subscription).where(Subscription.toss_billing_key == billing_key)
-    )
-    sub = result.scalar_one_or_none()
+    # billingKey 없거나 못 찾은 경우: customerKey 또는 customerEmail로 fallback 조회
+    if not sub:
+        customer_key = data.get("customerKey")
+        customer_email = data.get("customerEmail")
+        if customer_key:
+            result = await db.execute(
+                select(Subscription).where(Subscription.toss_customer_key == customer_key)
+                .order_by(Subscription.created_at.desc())
+            )
+            sub = result.scalar_one_or_none()
+        if not sub and customer_email:
+            user_result = await db.execute(
+                select(User).where(User.email == customer_email)
+            )
+            user_by_email = user_result.scalar_one_or_none()
+            if user_by_email:
+                result = await db.execute(
+                    select(Subscription).where(Subscription.user_id == user_by_email.id)
+                    .order_by(Subscription.created_at.desc())
+                )
+                sub = result.scalar_one_or_none()
+
     if not sub:
         return {"ok": True}
 
@@ -186,7 +208,11 @@ async def payment_webhook(
         event_type == "BILLING_FAILED"
         or (event_type == "PAYMENT_STATUS_CHANGED" and payment_status in ("ABORTED", "EXPIRED"))
     )
-    is_cancel = event_type in ("CANCEL", "BILLING_DELETED")
+    # PAYMENT_STATUS_CHANGED + CANCELED: 결제 취소는 구독 비활성화 처리
+    is_cancel = (
+        event_type in ("BILLING_DELETED",)
+        or (event_type == "PAYMENT_STATUS_CHANGED" and payment_status == "CANCELED")
+    )
 
     if is_success:
         sub.status = "active"
