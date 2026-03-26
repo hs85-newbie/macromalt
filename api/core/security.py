@@ -45,10 +45,16 @@ def decode_token(token: str) -> dict:
 # ── AES-256-GCM ───────────────────────────────────────────────────────────────
 
 def _get_aes_key() -> bytes:
-    key = settings.AES_SECRET_KEY.encode("utf-8")
-    if len(key) != 32:
-        raise ValueError(f"AES_SECRET_KEY must be exactly 32 bytes, got {len(key)}")
-    return key
+    raw = settings.AES_SECRET_KEY
+    # 64자 hex string이면 32바이트로 디코드 (Railway Variables에서 hex 입력 시 대응)
+    if len(raw) == 64:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+    key = raw.encode("utf-8")
+    # 32바이트보다 길면 앞 32바이트만 사용
+    return key[:32].ljust(32, b"\x00")
 
 
 def encrypt_api_key(plain: str) -> tuple[str, str]:
