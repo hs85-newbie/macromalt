@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -131,6 +131,28 @@ class RunLogResponse(BaseModel):
     cost_krw: Optional[int]
 
     model_config = {"from_attributes": True}
+
+
+# ── Payments ──────────────────────────────────────────────────────────────────
+
+class PaymentReadyRequest(BaseModel):
+    plan: str = "pro"
+    amount: int = 49900
+
+
+class PaymentReadyResponse(BaseModel):
+    checkout_url: str
+    customer_key: str
+    order_id: str
+
+
+class SubscriptionResponse(BaseModel):
+    plan: str
+    status: str
+    amount: int
+    next_billing_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Published Posts ───────────────────────────────────────────────────────────
