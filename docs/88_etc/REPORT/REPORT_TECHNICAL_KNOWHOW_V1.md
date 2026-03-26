@@ -1186,6 +1186,119 @@ STYLE_RESIDUAL_KW = [
 
 **결론**: 항상 유지해야 하는 함수. 제거 금지.
 
+### 6-15b. [MAJOR] Phase 15 교정 맵 단독 적용 시 복합 어간 잔류
+
+**증상**: `_P15_TENSE_CORRECTION_MAP`이 `"기록할 것으로 추정됩니다"` → `"기록할 것으로 집계됐습니다"` 부분 교정 후 미래형 어간 `"기록할"`이 그대로 잔류 → 시제 혼재 ("기록할 것으로 집계됐습니다").
+
+**원인**: 리스트 기반 교정 맵은 명시된 패턴만 매칭. `"추정됩니다"` 패턴은 누락, `"예상됩니다"`만 등록 → 어미만 교정되고 어간(`할`)은 미교정.
+
+**해결** (Phase 15A):
+```python
+# _enforce_tense_correction() Step 0 (맵 교정 이전 실행)
+_P15A_COMPOUND_RE_FORMAL = re.compile(
+    r"([가-힣]+)할(\s+것으로\s+)(추정|예상|전망|기대|관측)됩니다"
+)
+# 어간 "할" + 어미 전체를 한 번에 교체
+result = _P15A_COMPOUND_RE_FORMAL.sub(lambda m: m.group(1) + "한" + m.group(2) + "집계됐습니다", text)
+```
+
+**교훈**: 어미 교정과 어간 교정은 반드시 묶음(regex)으로 처리. 리스트 맵으로 어미만 교정하면 어간이 잔류하는 변형 문제는 항상 존재.
+
+---
+
+### 6-17. [MAJOR] Step3 Gemini가 완료 연도를 현재 진행형으로 오판
+
+**증상**: Phase 15A/B로 GPT 초안의 시제 교정 성공 후, Gemini Step3 Reviser가 "2024년은 현재 진행 중인 연도, '기록했다'는 부적절 → [전망] 태그 추가"로 재수정해 오히려 악화.
+
+**원인**: Gemini 2.5-flash가 2026년 기준 실행임을 모르고, 2024/2025를 현재 연도로 인식.
+
+**해결** (Phase 15C):
+```python
+_P15C_STEP3_TEMPORAL_GROUNDING = """
+[Phase 15C — Temporal Context]
+이 글은 2026년에 발행됩니다. 기준 연도: 2026년.
+2024년, 2025년 = 완전히 종료된 회계 연도 → 확정 사실로 서술 (과거형 필수)
+
+절대 금지:
+- 2024/2025년 문장에 [전망] 태그 추가
+- 과거형("기록했습니다") → 전망 어미("기록할 것으로")로 변환
+"""
+# GEMINI_VERIFIER_SYSTEM 및 GEMINI_REVISER_SYSTEM 앞에 prepend
+```
+
+**교훈**: Verifier/Reviser 모델에도 실행 기준 날짜를 명시해야 함. GPT가 올바르게 생성한 시제를 Step3가 되돌리는 역방향 오류에 주의.
+
+---
+
+### 6-18. [MEDIUM] Post2에 파이프라인 내부 레이블 혼입 (`Post1 분석에서...`)
+
+**증상**: Post2 본문에 "Post1 분석에서", "Post1이 도출한" 등 파이프라인 내부 프롬프트 레이블이 독자에게 노출됨.
+
+**원인**: `_P13_POST2_CONTINUITY_RULE`, `_P14_FEWSHOT_BAD_GOOD_INTERP` 프롬프트 예시 문장에 "Post1 결론:", "Post1 분석에서" 텍스트가 포함 → GPT가 그대로 생성.
+
+**해결** (Phase 15C):
+```python
+# 프롬프트 내 예시 문장 교체
+"Post1 분석에서"     → "앞서 진행된 거시 분석에서"
+"Post1이 도출한"     → "앞서 도출된 결론인"
+"Post1 결론:"        → "거시 분석 결론:"
+
+# 발행 전 탐지
+def _detect_internal_label_leakage(content: str) -> dict:
+    FORBIDDEN_LABELS = ["Post1", "Post2", "post1", "post2", "Step1", "Step2", "Step3"]
+    # → p13_scores["label_leak"]["status"] 반환
+```
+
+**교훈**: 프롬프트 예시 문장에 포함된 내부 식별자는 그대로 복사 생성됨. few-shot 예시는 항상 "독자가 볼 수 있는 표현"으로 작성.
+
+---
+
+### 6-19. [MAJOR] 확정 어미 교정 후 `[전망]` 태그 잔류
+
+**증상**: Phase 15A/15B 교정으로 동사는 과거형(`기록한 것으로 집계됐습니다`)이 됐으나, 앞에 붙은 `[전망]` 텍스트 태그는 그대로 잔류 → 확정 실적이 예측처럼 표시됨.
+
+```
+[전망] 2025년 SK하이닉스의 영업이익은 15조원을 기록한 것으로 집계됐습니다
+       ↑ 태그: ❌   ↑ 동사: ✅
+```
+
+**원인**: Phase 15A/15B는 동사 어미 교정 전담. `[전망]` 태그는 별도 텍스트 요소이므로 regex가 건드리지 않음.
+
+**해결** (Phase 15D):
+```python
+def _strip_misapplied_jeonmang_tags(content, run_year, label):
+    # AND 조건: 완료 연도 OR 확정 과거 월 포함 + 확정 어미 패턴 포함
+    # 진짜 전망 문장("[전망] 2026년 하반기 HBM 수요...")은 조건 미충족 → 보존
+    # 역순 처리로 인덱스 보존
+```
+
+**교훈**: 시제 교정은 동사 어미(regex)와 텍스트 태그(`[전망]`)를 별도로 처리해야 함. 어미 교정 완료 후 태그 검사를 독립 단계로 추가.
+
+---
+
+### 6-20. [MEDIUM] "늘어날" 어간 패턴이 Phase 15A regex 미커버
+
+**증상**: "늘어날 것으로 전망됩니다"가 교정 미적용 → 2026년 2월 수출 데이터를 예측형으로 서술.
+
+**원인**: `_P15A_COMPOUND_RE_FORMAL = r"([가-힣]+)할(\s+것으로\s+)..."` — "늘어날"은 어간 끝이 `할`이 아닌 `날`이라 미매칭. 동시에 Phase 15D 탐지 조건은 확정 어미가 이미 있어야 작동 — 어미가 아직 예측형이므로 미실행.
+
+**해결** (Phase 15E):
+```python
+_P15E_COMPOUND_RE_NAL_FORMAL = re.compile(
+    r"([가-힣]+)날(\s+것으로\s+)(추정|예상|전망|기대|관측)됩니다"
+)
+# "늘어날 것으로 전망됩니다" → "늘어난 것으로 집계됐습니다"
+
+# 현재 연도 과거 월 구간 교정
+def _enforce_current_year_month_settlement(content, run_year, run_month):
+    settled_months = range(1, run_month)  # 1월 ~ run_month-1월
+    # 현재 연도 + 과거 월 문장 탐지 → 동사+태그 일괄 교정
+```
+
+**교훈**: 어간 변형 패턴(`할/날/를/...`)은 regex 하나로 완전히 커버 불가. 실출력 검증에서 신규 어간 패턴 발견 시 즉시 추가 regex 작성 필요.
+
+---
+
 ### 6-16. [MINOR] Python AST 탐지 — AnnAssign vs Assign 오탐
 
 **증상**: `ast.walk(tree)` 후 `isinstance(node, ast.Assign)`으로 상수 존재 여부 확인 시 "not found" 오탐 발생. 해당 상수는 코드에 실제로 존재함.
@@ -1781,6 +1894,12 @@ Phase가 진행되면서 품질 검증 기준이 누적된 방식:
 | OpenDART `company.json`에 stock_code 직접 전달 | `status=100` 오류, 재무 수치 0건 | `corpCode.xml` ZIP 다운로드 → 로컬 캐시 매핑 경유 (6-9 참조) |
 | REVISER를 역할 지정 없이 단순 편집자로 정의 | GPT 초안 대비 70~80% 축소, 품질 저하 | "보존형 편집장" 명시 + 90% 보존 강제 + 분량 미달 시 보강 규칙 (6-10 참조) |
 | PICKS 주석 검증을 assemble_final_content() 이후 content에서 수행 | 설계상 주석 제거 함수이므로 P10 항상 FAIL | 반환값에 `picks_comment_in_raw` 필드 추가 → raw 단계에서 검증 (6-11 참조) |
+| 시제 교정 맵으로 어미만 교정 (어간 미처리) | 복합 어간 잔류: "기록할 것으로 집계됐습니다" | 어간+어미 묶음 regex (Phase 15A) → _P15A_COMPOUND_RE_FORMAL (6-15b 참조) |
+| Step3 Verifier/Reviser에 실행 기준 날짜 미주입 | 완료 연도를 현재 연도로 오판 → [전망] 재주입 | _P15C_STEP3_TEMPORAL_GROUNDING을 시스템 프롬프트 앞에 prepend (6-17 참조) |
+| 프롬프트 예시 문장에 내부 파이프라인 레이블 포함 | Post2 본문에 "Post1 분석에서" 그대로 노출 | few-shot 예시는 독자가 볼 수 있는 표현으로 작성 (6-18 참조) |
+| 어미 교정(regex)과 텍스트 태그(`[전망]`) 교정을 동일 레이어로 가정 | 어미 과거형 + [전망] 태그 공존 → 신뢰도 훼손 | 어미 교정 후 태그 검사 독립 단계 추가 — Phase 15D (6-19 참조) |
+| 한국어 어간 변형(`할`/`날`)을 단일 regex로 처리 | "늘어날 것으로 전망됩니다" 미교정 잔류 | 어간별 regex 패턴 추가 (_P15E_COMPOUND_RE_NAL_*) + 실출력 발견 시 즉시 추가 (6-20 참조) |
+| 슬롯 publish_history.json 파일 삭제 | 반복 방지 해제 → 동일 테마 연속 발행 재개 | 손상 시 빈 슬롯 딕셔너리로 초기화 (삭제 금지) |
 
 ---
 
@@ -1926,6 +2045,326 @@ def _dart_get(endpoint, params, label="") -> dict | None:
 
 ---
 
+### 14-8. Phase 10: 슬롯 분기 + publish_history 반복 완화
+
+#### 배경
+
+Phase 9까지는 단일 파이프라인으로 항상 같은 유형의 글을 생성. 시간대별로 독자 관심사가 다르고, 같은 테마가 연속 발행되는 문제 발생.
+
+#### 슬롯 분기 구조
+
+```python
+# main.py: 실행 시각 기반 슬롯 자동 결정
+KST_HOUR = datetime.now(ZoneInfo("Asia/Seoul")).hour
+if   6  <= KST_HOUR < 11: slot = "morning"    # 개장 전 분석
+elif 13 <= KST_HOUR < 17: slot = "evening"    # 장 마감 후 리뷰
+elif 21 <= KST_HOUR < 24: slot = "us_open"    # 미국 개장 시간대
+else:                     slot = "default"
+```
+
+각 슬롯별로 generator.py의 `forced_theme` 우선순위, 종목 픽 수, 발행 시각 오프셋이 다르게 적용됨.
+
+#### publish_history.json 구조
+
+```json
+{
+  "slots": {
+    "morning":  [{"theme": "반도체", "ts": "2026-03-26T06:53:00", "fingerprint": {...}}, ...],
+    "evening":  [...],
+    "us_open":  [...],
+    "default":  [...]
+  }
+}
+```
+
+- 슬롯별 최근 5건 보존 (6건 이상 시 오래된 것 자동 제거)
+- `fingerprint`에는 theme/axes/ticker 3차원 버킷 포함
+- 파일 손상 시: 빈 슬롯 딕셔너리로 초기화 (삭제 금지 — 삭제 시 반복 방지가 풀림)
+
+---
+
+### 14-9. Phase 12: 증거 밀도 강화
+
+#### 배경
+
+Phase 11까지는 글이 "근거 없는 주장 모음"처럼 읽히는 문제 잔존. 숫자/데이터 없이 흐릿한 서술로 채워진 섹션이 다수 발생.
+
+#### `_build_numeric_highlight_block()`
+
+수집된 facts에서 수치 데이터를 추출해 GPT 프롬프트의 "근거 블록"으로 주입.
+
+```python
+def _build_numeric_highlight_block(materials: dict) -> str:
+    """
+    step1 JSON의 key_data, stats, comparisons에서 수치가 있는 항목만 필터링.
+    결과: "▶ 삼성전자 2025년 HBM 매출: +150% YoY (출처: 삼성전자 IR)" 형태
+    GPT writer에게 "이 숫자들을 반드시 본문에 인용하라"는 맥락으로 주입.
+    """
+```
+
+#### `_score_post_quality(content)` 구조
+
+발행 전 품질 점수 계산. Phase 12에서 기초 구조 도입, Phase 13/16/20에서 지속 확장.
+
+```python
+# 점수 구성 요소
+numeric_density:    len(re.findall(r'\d+[%조억원달러]+', text)) / para_count
+source_citation:    len(re.findall(r'\(출처:|증권\s*리서치|Bloomberg|Reuters', text))
+section_count:      len(soup.find_all(['h2', 'h3']))
+min_length_pass:    total_chars >= 1500
+```
+
+**HOLD 기준**: `numeric_density < 1.5 AND source_citation < 2` → 재생성 트리거 (최대 1회)
+
+---
+
+### 14-10. Phase 13: 해석 지성 + HOLD/GO 시스템
+
+#### 배경
+
+Phase 12로 숫자는 늘었으나 "A가 B였으므로 C가 될 것" 수준의 인과 서술이 없음. 데이터 나열과 분석은 다르다.
+
+#### `_score_interpretation_quality(content)`
+
+```python
+# 해석 품질 지표 3종
+causal_chain:     "→", "따라서", "이에 따라", "이는 X를 의미" 등 인과 연결어 밀도
+contrarian_view:  반대 시각, 리스크, 불확실 섹션 존재 여부
+time_specificity: 특정 날짜/분기/기간이 명시된 문장 비율
+
+# 점수 → 최종 판정
+score >= 3   → GO
+score == 2   → CONDITIONAL GO (발행 허용, WARN 로그)
+score <= 1   → HOLD (재생성 트리거)
+```
+
+#### HOLD/CONDITIONAL GO/GO 3단계 판정 체계
+
+Phase 13에서 도입된 3단계 게이트. 이후 Phase 14~20까지 모든 품질 게이트의 기초 패턴.
+
+```
+HOLD           → 재생성 (최대 1회) → 재판정
+CONDITIONAL GO → 발행 허용 + WARN 로그 (수동 검토 권고)
+GO             → 정상 발행
+```
+
+**운영 원칙**: CONDITIONAL GO 상태로 Phase 종료 시 잔여 이슈를 다음 Phase 핸드오프에 반드시 명시. 방치 시 다음 대화에서 맥락 소실.
+
+---
+
+### 14-11. Phase 14H: 소스 정규화 + 타겟 블록 재작성
+
+#### 배경
+
+Phase 13까지 GPT가 수집된 뉴스를 "현재 이슈"처럼 서술 → 수개월 전 데이터를 최신 정보처럼 혼용.
+
+#### Track A: `_normalize_source_for_generation()`
+
+뉴스/리서치 소스를 CONFIRMED/FORECAST로 구분 후 GPT 프롬프트에 분류 주입.
+
+```python
+STATUS_CONFIRMED = ["발표했다", "기록했다", "집계됐다", "공시했다", "확정됐다"]
+STATUS_FORECAST  = ["전망했다", "예상했다", "기대했다", "목표로 했다"]
+
+# 소스 정규화 결과 → {confirmed: [...], forecast: [...]} 딕셔너리
+# GPT 프롬프트: "CONFIRMED facts는 과거형, FORECAST facts는 전망 어미 사용"
+```
+
+#### `_enforce_interpretation_rewrite()`
+
+Phase 13 `_score_interpretation_quality()` HOLD 감지 시 호출되는 타겟 재작성 함수.
+
+```python
+# Gemini를 사용해 약한 해석 블록만 선택적 재작성
+weak_blocks = _find_weak_interpretation_blocks(content)  # [해석] 태그 블록만 필터
+if len(weak_blocks) >= 3:  # Phase 14I에서 OR hedge_overuse=FAIL로 확장
+    revised = _call_gemini_targeted_rewrite(weak_blocks, context=materials)
+    content = _merge_revised_blocks(content, revised)
+```
+
+**Phase 14H 실출력 검증 HOLD 원인**: `weak_interp_hits=2 < 3` → 재작성 미실행, 동시에 헤징 어미 74% 포화 → Phase 14I 설계 트리거.
+
+---
+
+### 14-12. Phase 14I: 해석 헤징 억제 (Interpretation Hedge Clamp)
+
+#### 배경
+
+Phase 14H 실출력 검증 결과: `[해석]` 레이블 문장 7개 중 6개가 "파악됩니다/보입니다" 공식으로 끝남 → 면책 선언처럼 읽힘, 분석 글이 아님.
+
+#### `_detect_interp_hedge_density(content)`
+
+```python
+_P14I_INTERP_HEDGE_ENDINGS = [
+    "파악됩니다", "보입니다", "것으로 보입니다", "것으로 파악됩니다",
+    "작용하는 것으로 보입니다", "시사하는 것으로 보입니다",
+    "판단됩니다", "것으로 판단됩니다", "보여집니다", "여겨집니다"
+]
+# [해석] 레이블 포함 블록 대상으로 위 어미 밀도 계산
+# 임계값: hedge_density >= 0.5 → status = "FAIL"
+```
+
+#### `_P14I_INTERP_HEDGE_CLAMP` 프롬프트 주입 내용
+
+- 위 10개 어미를 `[해석]` 문장의 기본 결말로 사용 금지
+- 실제 실패 예시 3개 (Post에서 추출한 실제 문장)
+- 허용 대안 5개: "핵심은 [A]에 있다", "이는 [A] 대신 [B]에 주목해야 함을 의미한다" 등
+
+#### Track B: 재작성 트리거 확장
+
+```python
+# Phase 14I 이전
+if weak_interp_hits >= 3: _enforce_interpretation_rewrite()
+
+# Phase 14I 이후
+if weak_interp_hits >= 3 OR hedge_overuse_status == "FAIL":
+    _enforce_interpretation_rewrite()
+```
+
+Phase 14H 런에서 `weak_hits=2 < 3`이었으나 `hedge_overuse=FAIL(74%)`로 재작성 실행 확인.
+
+---
+
+### 14-13. Phase 15: 완료 연도 시제 강제화 (2단계 차단 구조)
+
+#### 배경
+
+Phase 14I 실출력에서 2025년 SK하이닉스 확정 실적을 "projection"으로 표기. 2026년 기사에서 2024/2025년은 완전 완료 회계 연도 → 확정 서술 필수. Phase 14 소스 정규화(Track A)는 수집 뉴스만 커버하며, GPT 훈련 데이터 기반 자체 기업 실적 서술에는 적용 불가.
+
+#### 2단계 차단 구조
+
+```
+[생성 단계] Track B/C                    [발행 전 교정 단계] Track D/E
+_P15_TEMPORAL_TENSE_ENFORCEMENT          generate_deep_analysis() +
+GPT user_msg 앞에 주입                   generate_stock_picks_report()
+→ 생성 시점에 예방                       Track D 탐지 → FAIL 시 Track E 교정
+```
+
+#### `_detect_completed_year_as_forecast()` (Track D)
+
+```python
+completed_years = range(run_year - 3, run_year)  # 2023/2024/2025
+# 18개 전망 동사 목록 (_P15_COMPLETED_YEAR_FORECAST_VERBS)
+# 예외 마커: 잠정치/컨센서스/가이던스 표현 → WARN 처리 (자동 교정 제외)
+# status: PASS / WARN / FAIL
+```
+
+#### `_enforce_tense_correction()` (Track E)
+
+```python
+# _P15_TENSE_CORRECTION_MAP: 29개 패턴
+# "기록할 것으로 예상됩니다" → "기록한 것으로 집계됐습니다"
+# 긴 패턴 우선 처리 (짧은 패턴이 먼저 매칭되어 복합 패턴을 망치는 것 방지)
+# 교정 후 재탐지 → 잔여 violations 확인
+```
+
+#### `TEMPORAL_RESULT_CATEGORIES` 7종 분류
+
+| 분류 | 서술 방식 |
+|------|---------|
+| `COMPLETED_PERIOD_ACTUAL` | 완료 연도 확정 실적 → 직접 과거 서술 |
+| `COMPLETED_PERIOD_PRELIMINARY` | 잠정치 → 잠정임 명시 후 서술 |
+| `COMPLETED_PERIOD_CONSENSUS_REFERENCE` | 컨센서스 → 기대/사실 분리 서술 |
+| `CURRENT_YEAR_FORECAST` | 2026년 전망 → 전망 어미 허용 |
+| `FUTURE_YEAR_FORECAST` | 2027년+ → 전망 어미 허용 |
+| `COMPANY_GUIDANCE` | 기업 가이던스 → 가이던스임 명시 후 허용 |
+| `AMBIGUOUS_TEMPORAL_RESULT` | 시제 불명확 → WARN |
+
+---
+
+### 14-14. Phase 15A~E: 5단계 복합 시제 교정 레이어
+
+Phase 15 기본 교정(29개 패턴)으로 해결되지 않은 변형 패턴들을 순차적으로 추가 교정.
+
+#### Phase 15A: 복합 어간+어미 regex 교정
+
+**문제**: `_P15_TENSE_CORRECTION_MAP`이 `"기록할 것으로 추정됩니다"` 매칭 후 어간 `"기록할"`이 잔류 → 시제 혼재.
+
+**해결**: 어간+어미 묶음 regex 엔진.
+
+```python
+_P15A_COMPOUND_RE_FORMAL = re.compile(
+    r"([가-힣]+)할(\s+것으로\s+)(추정|예상|전망|기대|관측)됩니다"
+)
+# → r"\1한\2집계됐습니다" (어간 "할" → "한" + 어미 일괄 교체)
+
+_P15A_COMPOUND_RE_INFORMAL = re.compile(...)  # 됩니다→된다 비격식체
+_P15A_FUTURE_STEM_RE        = re.compile(...)  # 잔여 미래형 어간 검사
+```
+
+`_enforce_tense_correction()` 내에서 맵 교정 이전 Step 0으로 실행 (우선순위 최상).
+
+#### Phase 15B: 연결어미 복합시제
+
+**문제**: 15A는 `됩니다/된다`만 커버. 연결어미(`되며`, `되고`, `되어`) 패턴 미커버.
+
+```python
+_P15B_COMPOUND_RE_CONNECTIVE = re.compile(
+    r"([가-힣]+)할(\s+것으로\s+)(추정|예상|전망|기대|관측)(되며|되고|되어)"
+)
+# → r"\1한\2집계\4"
+```
+
+#### Phase 15C: Step3 Temporal Grounding + Post2 레이블 차단
+
+**문제 1**: Gemini Step3가 2024/2025년을 "현재 진행 중"으로 오인, GPT 확정 어미 문장에 `[전망]` 재주입.
+
+```
+실제 로그: "2024년은 현재 진행 중인 연도로, 확정 실적이 아님. '기록했다'는 단정적 표현은 부적절하며, [전망] 태그가 필요함"
+```
+
+**해결**: `_P15C_STEP3_TEMPORAL_GROUNDING` 상수 — 발행 기준 연도(2026)와 완료 연도 명시 → Verifier/Reviser 시스템 프롬프트 앞에 prepend.
+
+**문제 2**: Post2 생성 프롬프트 내 예시 텍스트에 "Post1 분석에서", "Post1이 도출한" 등 내부 파이프라인 레이블이 노출됨 → Post2 본문에 그대로 생성.
+
+**해결**: `_P15C_POST2_LABEL_BAN` 상수 → Post2 user_msg 최우선 위치에 주입. `_detect_internal_label_leakage()` 함수로 발행 전 레이블 탐지 + `p13_scores["label_leak"]` 반환.
+
+#### Phase 15D: `[전망]` 오주입 태그 제거
+
+**문제**: Phase 15A/15B 교정 후 동사 어미는 과거형이지만 앞의 `[전망]` 텍스트 태그가 잔류.
+
+```
+예시: "[전망] 2025년 SK하이닉스의 영업이익은 15조원을 기록한 것으로 집계됐습니다"
+→ 동사: ✅ (과거형) | 태그: ❌ ([전망]이 확정 실적을 예측처럼 제시)
+```
+
+**해결**: `_strip_misapplied_jeonmang_tags()` — 완료 연도 + 확정 어미 AND 조건 충족 시 `[전망]` 제거.
+
+```python
+_P15D_CONFIRMED_VERB_MARKERS = [
+    "집계됐습니다", "집계됐다", "집계됐으며", "기록한 것으로 집계",
+    "기록됐습니다", "달성했습니다", "증가한 것으로", "감소한 것으로", ...  # 16개
+]
+# 진짜 전망 문장 보존 로직: 조건 B 미충족 → 보존
+# "[전망] 2026년 하반기 HBM 수요 증가 예상됩니다" → 보존 (확정 어미 없음)
+```
+
+#### Phase 15E: 현재 연도 과거 월 복합 교정 + "날" 어간 패턴
+
+**문제 1**: 2026년 2월 데이터를 예측형으로 서술. Phase 15D의 `completed_years = range(run_year-3, run_year)`는 `run_year(2026)` 제외 → 미커버.
+
+**문제 2**: Phase 15A/15B는 `할 것으로` 패턴만 커버. "늘어날 것으로 전망됩니다"의 `날` 어간은 미커버.
+
+```python
+_P15E_COMPOUND_RE_NAL_FORMAL = re.compile(
+    r"([가-힣]+)날(\s+것으로\s+)(추정|예상|전망|기대|관측)됩니다"
+)
+# "늘어날 것으로 전망됩니다" → "늘어난 것으로 집계됐습니다"
+```
+
+**해결**: `_enforce_current_year_month_settlement()` — 현재 연도 중 `run_month - 1` 이하 월을 settled 구간으로 판단, 동사+태그 일괄 교정.
+
+| Phase | 함수/상수 | 커버 패턴 |
+|-------|----------|---------|
+| 15 | `_detect_completed_year_as_forecast` + `_enforce_tense_correction` | 완료 연도 전망 어미 29패턴 |
+| 15A | `_P15A_COMPOUND_RE_FORMAL/INFORMAL` | `([어간])할 것으로 (추정|예상|전망|기대|관측)됩니다/된다` |
+| 15B | `_P15B_COMPOUND_RE_CONNECTIVE` | 연결어미 `되며/되고/되어` 복합 패턴 |
+| 15C | `_P15C_STEP3_TEMPORAL_GROUNDING` + `_P15C_POST2_LABEL_BAN` | Step3 오판 + Post2 내부 레이블 |
+| 15D | `_strip_misapplied_jeonmang_tags` | 확정 어미 + `[전망]` 태그 공존 |
+| 15E | `_P15E_COMPOUND_RE_NAL_*` + `_enforce_current_year_month_settlement` | `날` 어간 + 현재 연도 과거 월 |
+
+---
+
 ### 14-8. 보고서 작성 기준 (Phase 17 확정)
 
 Phase 17에서 확정된 상세 보고서 작성 기준 (`PHASE17_REPORT_FULL_BODY_REQUIREMENT.md`):
@@ -1950,6 +2389,7 @@ Phase 17에서 확정된 상세 보고서 작성 기준 (`PHASE17_REPORT_FULL_BO
 ---
 
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*Phase 23 기준 최종 갱신: 2026-03-26 (Phase 17 항목 보강 포함)*
+*Phase 23 기준 최종 갱신: 2026-03-26*
+*2026-03-26 보강: Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화 (14-9), Phase 13 해석 지성/HOLD-GO 체계 (14-10), Phase 14H 소스 정규화/타겟 재작성 (14-11), Phase 14I 헤징 억제 (14-12), Phase 15 완료 연도 2단계 차단 구조 (14-13), Phase 15A~E 5단계 복합 시제 교정 상세 (14-14), 에러 사례 6-15b~6-20 신규 추가, 반면교사 패턴 7종 추가*
 *2026-03-13 보강: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13 신규 추가*
 *다음 갱신 예정: Phase 24 (FastAPI SaaS 서버) 또는 SEO/수익화 트랙 완료 시*
