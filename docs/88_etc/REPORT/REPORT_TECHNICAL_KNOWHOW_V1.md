@@ -2678,9 +2678,202 @@ Phase 17에서 확정된 상세 보고서 작성 기준 (`PHASE17_REPORT_FULL_BO
 
 ---
 
+### 14-9. DART 재무 연도 Fallback + BROKER_KW 확장 (Phase 5-B)
+
+#### 재무 연도 자동 해결 (resolved_bsns_year)
+
+DART `fnlttSinglAcnt` API는 `bsns_year` 파라미터가 필요하지만, 현재 연도 데이터가 아직 없는 경우 오류(`013`) 반환.
+
+```python
+# scraper.py — run_dart_financials()
+def _resolve_bsns_year(corp_code: str, reprt_code: str) -> tuple[str, bool]:
+    """
+    당해 연도 데이터가 없으면 전년도로 fallback.
+    반환: (resolved_year, used_fallback)
+    """
+    for year in [str(datetime.now().year), str(datetime.now().year - 1)]:
+        resp = _dart_get("/api/fnlttSinglAcnt.json", {..., "bsns_year": year})
+        if resp and resp.get("status") == "000":
+            return year, (year != str(datetime.now().year))
+    return str(datetime.now().year - 1), True
+```
+
+- `format_dart_for_prompt` 헤더에 `기준연도: {resolved_bsns_year}` + `(전년도 fallback)` 표시 → LLM이 연도 혼동 없이 수치 해석 가능
+- `used_fallback=True`인 경우 헤더에 명시 → 프롬프트 내 수치의 시점 투명성 확보
+
+#### BROKER_KW 2차 확장 (증권사 키워드 23개)
+
+증권사 리서치 필터는 `BROKER_KW` 상수로 관리. Phase 5-B에서 2차 확장:
+
+```python
+# generator.py
+BROKER_KW: tuple = (
+    # 1차 (기존): 키움, 미래에셋, 삼성증권, 한국투자, KB, 메리츠, NH투자, 대신, 하나, 유안타
+    # 2차 추가 (Phase 5-B):
+    "신한투자", "신한금융투자",
+    "NH투자증권",              # NH 중복 방지 위해 풀네임 추가
+    "LS증권",
+    "DB금융투자",
+    "IBK투자증권",
+    "BNK투자증권",
+    "부국증권",
+    "신영증권",
+    "토스증권",
+    ...  # 총 23개
+)
+```
+
+**운영 주의**: `신한` / `NH` / `IBK` 키워드는 금융지주 계열사 오탐 가능. 로그에서 비리서치 기사 포함 여부 주기적 점검 권고.
+
+---
+
+### 14-10. PDF 리포트 Enrich 파이프라인 (Phase 5-B)
+
+#### 전체 구조
+
+```
+네이버 금융 리서치 URL (https://finance.naver.com/research/...)
+    ↓ _fetch_pdf_bytes(url)          # 5 MB 스트리밍 상한
+    ↓ _extract_pdf_key_sections()    # pdfplumber — 핵심 섹션만
+    ↓ enrich_research_with_pdf()     # weight 상위 3건 in-place 추가
+    ↓ article["pdf_snippet"]         # 프롬프트 주입용
+    ↓ generator.py — Gemini context에 삽입
+```
+
+#### 핵심 상수
+
+| 상수 | 파일 | 값 | 의미 |
+|---|---|---|---|
+| `_PDF_MAX_BYTES` | `scraper.py` | 5 MB | 대용량 PDF 차단 상한 |
+| `_PDF_SNIPPET_MAX` | `scraper.py` | 800자 | 로컬 추출 상한 |
+| `_PDF_PROMPT_SNIPPET_LEN` | `generator.py` | 400자 | 프롬프트 삽입 상한 |
+| `enrich_research_with_pdf(max_pdf)` | `scraper.py` | 3 | API 호출 상위 N건 |
+
+**설계 원칙**: 추출 상한(800자)과 프롬프트 삽입 상한(400자)을 분리. 추출 시 여유 있게 보존 → 주입 시 필요분만 컷.
+
+#### _extract_pdf_key_sections() 알고리즘
+
+```python
+# 1) 앞 2페이지 전체 텍스트 (커버/요약)
+for page in pages[:2]:
+    collected.append(page.extract_text())
+
+# 2) 나머지 페이지: 키워드 근방 ±2줄만 추출
+_PDF_KEY_TERMS = (
+    "목표주가", "투자의견", "영업이익", "매출액", "전망",
+    "리스크", "컨센서스", "BUY", "HOLD", "SELL", "PER", "EPS", ...
+)
+for page in pages[2:]:
+    lines = page.extract_text().splitlines()
+    matched_idx = {±2 around keyword lines}
+    collected.append("\n".join(lines[i] for i in sorted(matched_idx)))
+```
+
+#### 에러 처리 패턴
+
+```python
+# Content-Type 및 확장자 이중 검증 (서버가 wrong CT 반환하는 경우 대비)
+ct = resp.headers.get("Content-Type", "")
+if "pdf" not in ct.lower() and not url.lower().endswith(".pdf"):
+    return None
+
+# pdfplumber 미설치 시 조용히 skip
+try:
+    import pdfplumber
+except ImportError:
+    logger.warning("[PDF] pdfplumber 미설치 — pip install pdfplumber")
+    return ""
+```
+
+**알려진 이슈**: 한경 컨센서스 PDF는 세션 로그인 필요. `_hankyung_login()` ↔ `enrich_research_with_pdf` 세션 전달 미구현 상태 (Phase 6 후보).
+
+---
+
+### 14-11. OpenDART 원문 파싱 파이프라인 (Phase 5-C)
+
+#### API 구조
+
+```
+GET https://opendart.fss.or.kr/api/document.json
+    ?crtfc_key={DART_API_KEY}
+    &rcept_no={접수번호}
+→ 응답: ZIP 바이너리 (성공) 또는 JSON 오류 메시지 (실패)
+```
+
+**주의**: 성공 응답의 `Content-Type`이 `application/zip`이 아닌 경우도 있음 → `Content-Type` 체크 대신 JSON 여부로 오류 판별.
+
+```python
+ct = resp.headers.get("Content-Type", "")
+if "json" in ct:
+    msg = resp.json().get("message", "알 수 없는 오류")
+    logger.warning(f"[DART/doc] rcept_no={rcept_no} API 오류: {msg}")
+    return None
+```
+
+#### 캐시 전략
+
+```python
+_DART_DOC_CACHE     = Path(__file__).parent / ".dart_doc_cache"
+_DART_DOC_CACHE_TTL = 86400 * 7   # 7일
+
+# 캐시 경로: .dart_doc_cache/{rcept_no}.zip
+# .gitignore에 .dart_doc_cache/ 추가 필수
+```
+
+#### XML 파싱 fallback 체인
+
+```python
+try:
+    soup = BeautifulSoup(xml_bytes, "lxml-xml")   # 1순위: lxml-xml
+except Exception:
+    soup = BeautifulSoup(xml_bytes, "html.parser") # 2순위: html.parser
+```
+
+`lxml-xml` 미설치 환경에서도 정상 동작.
+
+#### enrich 적용 우선순위
+
+```python
+# "기타" 이벤트 타입 후순위 + 최신순 정렬
+sorted_disc = sorted(
+    disclosures,
+    key=lambda x: (x.get("event_type") == "기타", "-" + x.get("rcept_dt", "")),
+)
+# 상위 max_fetch=3건만 document.json 호출
+```
+
+**이유**: "기타" 공시는 프롬프트 가치 낮음. API 호출 최소화를 위해 중요 이벤트 우선.
+
+#### 프롬프트 삽입 제한
+
+```python
+# format_dart_for_prompt() 내부
+if d.get("full_text"):
+    lines.append(f"  원문발췌: {d['full_text'][:400]}")
+# 추출 상한 800자 → 프롬프트 삽입 400자로 추가 컷
+```
+
+---
+
+### 14-12. Phase 5-D 통합 품질 재검증에서 발견된 이슈 4건
+
+Phase 5-C 구현 이후 전체 흐름 재검증 중 발견된 이슈:
+
+| # | 이슈 | 원인 | 해결 |
+|---|---|---|---|
+| 1 | `GEMINI_ANALYST_SYSTEM`에 DART 원문발췌 처리 지침 없음 | 5-C 추가 시 시스템 프롬프트 미업데이트 | "DART 공시 처리 지침" 블록 추가 — 원문발췌를 공시 사실로 처리, source/date 명시 규칙 |
+| 2 | `full_text` 800자 슬라이스 없이 1줄 삽입 | `format_dart_for_prompt` 초기 구현 시 길이 제한 누락 | `[:400]` 추가 |
+| 3 | `_PDF_SNIPPET_MAX=800` vs 삽입 `[:300]` 상수 불일치 | 5-B 구현 시 분리된 상수 미정렬 | `_PDF_PROMPT_SNIPPET_LEN=400` 상수 도입, 코드 통일 |
+| 4 | fallback facts에 `relevance_to_theme` 없음 | API 실패 시 fallback이 `_filter_irrelevant_facts`에서 bg로 이동될 위험 | `"relevance_to_theme": "직접 관련"` 추가 |
+
+**패턴 교훈**: 추출 상한(scraper)과 프롬프트 삽입 상한(generator)을 두 파일에 분산할 때는 상수 정렬 표를 유지해야 함. 파일 간 상수 불일치는 코드 리뷰에서 잘 안 잡힘.
+
+---
+
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
 *Phase 23 + Phase 9 운영 검증 기준 최종 갱신: 2026-03-26*
 *2026-03-26 (이번 갱신): 에러 사례 6-29 신규 추가 — Reviser LLM hallucination형 날짜 주입 패턴 (Phase 9 발견, Reviser 규칙 9로 해결), 반면교사 패턴 추가*
 *2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화 (14-9), Phase 13 해석 지성/HOLD-GO 체계 (14-10), Phase 14H 소스 정규화/타겟 재작성 (14-11), Phase 14I 헤징 억제 (14-12), Phase 15 완료 연도 2단계 차단 구조 (14-13), Phase 15A~E 5단계 복합 시제 교정 상세 (14-14), 에러 사례 6-15b~6-20 신규 추가, 반면교사 패턴 7종 추가*
 *2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13 신규 추가*
+*2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
 *다음 갱신 예정: Phase 24 (FastAPI SaaS 서버) 또는 SEO/수익화 트랙 완료 시*
