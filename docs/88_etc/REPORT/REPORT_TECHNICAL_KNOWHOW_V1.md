@@ -2997,7 +2997,7 @@ Phase 5-B 설계 단계(14-9/14-10)와 실제 커밋 상태의 차이:
 
 ## 15. Phase 24 SaaS 전환 Know-How
 
-> Phase 24 착수일: 2026-03-26 | 상태: M0~M2 완료, M4 완료, M3 대기 중
+> Phase 24 착수일: 2026-03-26 | 상태: M0~M4 전체 완료 ✅
 
 ### 15-1. SaaS 전환 배경 및 목표
 
@@ -3256,7 +3256,7 @@ M2는 반드시 **단독 진행** (M1 완료 후, 다른 모듈과 동시 작업
 | M1 Backend | ✅ 완료 | `a4227b1` | FastAPI + JWT + AES-256 + DB + 라우터 6개, pytest 10/10 PASS |
 | M4 Frontend | ✅ 완료 | `c81ac24` | 랜딩/로그인/대시보드 5탭 UI, api.js JWT 자동갱신 |
 | M2 Pipeline | ✅ 완료 | `cba7bea` | _apply_ctx_to_env + run_pipeline(ctx), generator/publisher 무수정 |
-| M3 Payment | ⏳ 대기 | — | Toss 결제 테스트 모드 |
+| M3 Payment | ✅ 완료 | `3bbc2ff` | Toss 빌링키/웹훅/구독관리, pytest 18/18 PASS |
 
 ---
 
@@ -3301,10 +3301,40 @@ def run_pipeline(ctx=None) -> None:
 ---
 
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*최종 갱신: 2026-03-26 (M2 Pipeline 완료 반영 - 환경변수 오버라이드 방식)*
-*2026-03-26 (이전): M4 Frontend 완료 (c81ac24)*
-*2026-03-26 (이전): M1 Backend 완료 (a4227b1, pytest 10/10)*
-*2026-03-26 (이전): Phase 24 SaaS 전환 섹션 15 추가 (M0 완료)*
-*2026-03-26 (이전): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14)*
+### 15-14. M3 Toss 결제 흐름 정리
+
+```
+[1] POST /api/payments/ready
+    → customerKey 생성 → Toss 빌링 인증 URL 반환
+    → 프론트가 URL로 이동 → 사용자 카드 입력
+
+[2] POST /api/payments/confirm (Toss 리다이렉트)
+    → authKey + customerKey → Toss API 빌링키 발급
+    → 즉시 첫 결제 (₩49,900)
+    → subscriptions 저장, user.plan = 'pro'
+
+[3] POST /api/payments/webhook (Toss 자동 호출)
+    → BILLING_SUCCESS: next_billing_at +30일
+    → BILLING_FAILED / CANCEL: plan → 'free'
+
+[4] POST /api/payments/subscription/cancel
+    → status = 'cancelled', user.plan = 'free'
+```
+
+**테스트 전략**: 실제 Toss API 호출은 `unittest.mock.patch`로 mock 처리.
+테스트 키(`test_sk_...`) 없이도 18/18 전체 통과.
+
+**Railway 환경변수 설정 필요 (프로덕션 전)**:
+```
+TOSS_SECRET_KEY = test_sk_...  (Toss 개발자 콘솔 발급)
+TOSS_CLIENT_KEY = test_ck_...
+```
+
+---
+
+*END — REPORT_TECHNICAL_KNOWHOW_V1.md*
+*최종 갱신: 2026-03-26 (Phase 24 M0~M4 전체 완료 - pytest 18/18 PASS)*
+*2026-03-26: M3 Toss 결제 (3bbc2ff), M2 Pipeline (cba7bea), M4 Frontend (c81ac24), M1 Backend (a4227b1), M0 설계 (84dcb0c)*
+*2026-03-26 (이전): Phase 5-B 운영 검증, 설계-구현 불일치 정리*
 *2026-03-13: Phase 4.3~5-D 상세 추가*
-*다음 갱신 예정: M3 Toss 결제 완료 시*
+*다음 갱신 예정: Phase 24 E2E 통합 검증, Railway 프로덕션 배포 완료 시*
