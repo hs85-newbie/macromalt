@@ -259,9 +259,9 @@ def _run_pipeline_main(ctx=None) -> None:
     # ── 발행 시간 스케줄 (실행 시점 기준 상대 오프셋, 단위: 분) ──
     # 절대 시각 방식은 크론 실행 시간과 역전될 수 있어 상대 방식으로 변경.
     # Post1 5개: +10, +40, +70, +100, +130분 후
-    # Post2 2개: +160, +190분 후
+    # Post2 3개: +160, +190, +220분 후
     _POST1_OFFSETS = [10, 40, 70, 100, 130]
-    _POST2_OFFSETS = [160, 190]
+    _POST2_OFFSETS = [160, 190, 220]
 
     def _make_scheduled_at(offset_min: int) -> str:
         """실행 시점(now) 기준 offset_min분 후 ISO 8601 문자열 반환."""
@@ -320,13 +320,13 @@ def _run_pipeline_main(ctx=None) -> None:
         logger.error("❌ 모든 Post1 생성 실패 — 파이프라인 중단")
         sys.exit(1)
 
-    # ── Step 2B: Post2 생성 (picks_priority 상위 2개) ───────────
+    # ── Step 2B: Post2 생성 (picks_priority 상위 3개) ───────────
     from generator import generate_stock_picks_report
     # picks_priority 낮은 순으로 정렬 (1=최우선)
     picks_candidates = sorted(
-        [t for t in themes if t.get("picks_priority", 99) <= 2],
+        [t for t in themes if t.get("picks_priority", 99) <= 3],
         key=lambda x: x.get("picks_priority", 99)
-    )[:2]
+    )[:3]
 
     posts2 = []
     for i, theme_info in enumerate(picks_candidates):
