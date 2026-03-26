@@ -186,8 +186,11 @@ main() 실행
 |-------|-----------|--------------|
 | **Phase 4.3** | 2026-03-13 | **리포트 밀도 복원·주제 집중도 강화** — REVISER 보존형 편집장 재정의(90% 보존 강제), `_strip_code_fences()` 공통화, 자동 검증 14/10 기준, P6/P8 프롬프트 강화 |
 | **Phase 5-A~D** | 2026-03-13 | DART 연동(corpCode.xml 캐시, 재무 YoY 비교), PDF enrich (pdfplumber), WordPress 자동 발행 기초 |
-| **Phase 6** | 2026-03-13 | 한경컨센서스 세션 로그인, DART XML 수정공시 처리 |
-| **Phase 7~9** | 2026-03-13 | 실 발행 검증 3회, 투자 권유 억제 (기준5: "매수/유망/담아야" 금지) |
+| **Phase 6-A** | 2026-03-13 | 한경 세션 전달 구조 완성 (`_hankyung_login` → `enrich_research_with_pdf`), BROKER_KW 오탐 정제 (신한→신한투자, NH→NH투자, IBK→IBK투자), sources.json 종목 페이지 추가 |
+| **Phase 6-B** | 2026-03-13 | DART 사업보고서 섹션 파싱 신규 (`_find_annual_report_rcept_no`, `_extract_sections_from_zip`, `run_dart_annual_report_sections`), document.json→document.xml 엔드포인트 수정, bgn_de 필수 파라미터 추가, probe→전체텍스트 검색 교체, fallback 키워드 정책 |
+| **Phase 7** | 2026-03-13 | 실 발행 1회 검증 (DART 섹션 추출 `['사업의 내용','재무상태']` 확인), DEBUG_LLM 플래그 추가 (`basicConfig` 선점 문제 해결) |
+| **Phase 8** | 2026-03-13 | Step2a/2b/Step3 시점 일관성 규칙 보강 ([전망] 태그 의무화 + 과거 확정 실적 예외), 투자 권유 금지 표현 19종 목록 확정 (3회차 보정), publisher.py draft→publish 전환, WP REST API로 기존 draft 포스트 publish 전환 |
+| **Phase 9** | 2026-03-13 | 실 발행 3회 연속 검증 (기준1/5 2회차부터 0건 안정화), Reviser 규칙9 추가 (검수 이슈 내 날짜/수치 본문 삽입 금지) |
 | **Phase 10** | 2026-03-16 | 슬롯 분기 (morning/evening/us_open/default) + 이력 반복 완화 |
 | **Phase 11** | 2026-03-16 | Fingerprint 기반 반복 완화 엔진 — theme/axes/ticker 3종 버킷 |
 | **Phase 12** | 2026-03-16 | 증거 밀도 강화 — `_build_numeric_highlight_block()`, `_score_post_quality()` |
@@ -1327,6 +1330,214 @@ for node in ast.walk(tree):
 
 ---
 
+### 6-21. [MAJOR] DART 원문 API `document.json` → `document.xml` 엔드포인트 오류
+
+**증상**: `_fetch_dart_document_zip()` 호출 시 HTTP 200 응답이지만 JSON body에 `status=101` (문서 없음).
+
+**원인**: OpenDART 공식 문서에 `document.json`으로 표기되어 있으나, 실제 ZIP 반환 엔드포인트는 `document.xml`.
+
+```python
+# ❌ 잘못된 엔드포인트
+BASE = "https://opendart.fss.or.kr/api/document.json"
+
+# ✅ 올바른 엔드포인트 (ZIP 반환)
+BASE = "https://opendart.fss.or.kr/api/document.xml"
+```
+
+**교훈**: DART API는 엔드포인트명이 반환 포맷과 무관한 경우가 있음. 공식 문서보다 실제 응답 헤더(`Content-Type: application/zip`) 확인 우선.
+
+---
+
+### 6-22. [MAJOR] DART 사업보고서 조회 `bgn_de` 미지정 시 `status=013`
+
+**증상**: `list.json?pblntf_ty=A&corp_code=...` 호출 시 `status=013` (조회 조건 오류).
+
+**원인**: DART `list.json` API는 `bgn_de` (조회 시작일) 파라미터가 사실상 필수. 미지정 시 기간 조건 불만족으로 오류 반환.
+
+**해결**:
+```python
+def _find_annual_report_rcept_no(corp_code: str) -> Optional[str]:
+    from datetime import date
+    today = date.today()
+    bgn_de = f"{today.year - 2}0101"   # 2년 전부터 조회
+    end_de = today.strftime("%Y%m%d")
+    params = {
+        "corp_code":  corp_code,
+        "pblntf_ty":  "A",
+        "bgn_de":     bgn_de,          # ← 필수
+        "end_de":     end_de,
+        "page_count": "10",
+        "sort":       "date",
+        "sort_mth":   "desc",
+    }
+    data = _dart_get("list.json", params, ...)
+    items = data.get("list", [])
+    # pblntf_detail_ty=A001 파라미터는 실제로 미작동 → report_nm 문자열 필터로 대체
+    annual = [it for it in items if "사업보고서" in it.get("report_nm", "")]
+    return annual[0].get("rcept_no") if annual else None
+```
+
+**교훈**:
+- `pblntf_detail_ty=A001` 파라미터는 API 문서에 있으나 실제 필터링 미작동 → `report_nm` 문자열 필터로 대체
+- `bgn_de` 미지정 시 `status=013` 반환 — 항상 명시적으로 지정
+
+---
+
+### 6-23. [MAJOR] 사업보고서 ZIP 섹션 추출 — probe 방식 실패 → 전체 텍스트 검색
+
+**증상**: `_extract_sections_from_zip()`에서 헤더 키워드 탐지 0건. 전 종목에 걸쳐 섹션 추출 실패.
+
+**원인**: 사업보고서 ZIP 내 XML은 단일 대형 파일(17만+ 자) 구조. 앞 200자(probe)만 읽어 헤더 위치 탐지하는 방식으로는 중간 위치의 섹션 헤더를 발견 불가.
+
+```python
+# ❌ probe 방식 (실패)
+probe = xml_content[:200]
+for kw in keywords:
+    if kw in probe:
+        ...
+
+# ✅ 전체 텍스트 검색
+raw = xml_content  # 전체
+for kw in keywords:
+    idx = raw.find(kw)
+    if idx >= 0:
+        snippet = raw[idx : idx + max_chars]
+        result[canonical] = snippet
+        break
+```
+
+**교훈**: 대용량 XML(수십만 자)에서 헤더 위치는 예측 불가. 전체 텍스트 `str.find()` 검색이 유일한 신뢰 가능 방법.
+
+---
+
+### 6-24. [MAJOR] 사업보고서 섹션 fallback 키워드 정책
+
+**배경**: "재무상태" 헤더가 없는 기업(소규모 상장사 일부)에서 섹션 추출 0건.
+
+**해결**: 우선순위 fallback 키워드 dict 도입 + fallback 사용 시 INFO 로그:
+
+```python
+_ANNUAL_SECTION_KEYWORDS: dict = {
+    "사업의 내용":  ["사업의 내용"],
+    "재무상태":    ["재무상태", "재무제표", "재무위험", "재무위험관리", "유동성"],
+    "MD&A":       ["MD&A"],
+    "경영진의 논의": ["경영진의 논의"],
+}
+
+primary = keywords[0]
+for kw in keywords:
+    idx = raw.find(kw)
+    if idx >= 0:
+        result[canonical] = raw[idx : idx + max_chars]
+        if kw != primary:
+            logger.info(
+                f"[DART/annual] '{canonical}' fallback 매칭: "
+                f"'{primary}' 없음 → '{kw}' 사용"
+            )
+        break
+```
+
+**교훈**: 외부 데이터 소스의 문서 구조는 기업마다 다름. 단일 키워드 의존 금지 — fallback 체인 + 로그가 필수.
+
+---
+
+### 6-25. [MEDIUM] scraper.py `basicConfig(INFO)` 선점으로 DEBUG 로그 미출력
+
+**증상**: `DEBUG_LLM=1` 환경변수 설정 후 generator.py에서 `logger.debug()` 호출해도 DEBUG 로그 출력 안 됨.
+
+**원인**: `scraper.py`가 모듈 레벨에서 `logging.basicConfig(level=INFO)`를 먼저 실행. Python `basicConfig`는 루트 로거에 핸들러가 이미 있으면 두 번째 호출을 무시 → generator.py의 `basicConfig(level=DEBUG)` 무효화.
+
+**해결**:
+```python
+# generator.py — DEBUG_LLM 플래그 처리 시 named logger 레벨 직접 조정
+if os.getenv("DEBUG_LLM"):
+    logging.getLogger("macromalt").setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.DEBUG)   # 루트 레벨도 강제 하향
+```
+
+**교훈**: 멀티 모듈 구조에서 `basicConfig`는 선점 경쟁이 있음. 특정 로거의 레벨을 바꾸려면 `basicConfig` 대신 `getLogger(name).setLevel()` 직접 조정.
+
+---
+
+### 6-26. [MEDIUM] BROKER_KW 금융 계열사 오탐 — 키워드 구체화
+
+**증상**: `신한`, `NH`, `IBK` 등 단어가 포함된 뉴스 기사를 증권사 리서치로 오분류. 신한은행 인사발령, NH농협 실적 기사 등이 브로커 출처로 잘못 태깅.
+
+**해결** (Phase 6-A):
+```python
+# ❌ 이전 (오탐 발생)
+BROKER_KW = ["신한", "NH", "IBK", ...]
+
+# ✅ 수정 후 (투자증권 표기로 한정)
+BROKER_KW = ["신한투자", "NH투자", "IBK투자", ...]
+```
+
+**교훈**: BROKER_KW는 금융그룹 단어가 아닌 "투자증권" 명칭으로 특정해야 오탐 방지. 신규 증권사 추가 시 반드시 정확한 법인명 사용.
+
+---
+
+### 6-27. [MEDIUM] Phase 8 — 투자 권유성 표현 / 시점 단정 서술 프롬프트 보강
+
+**배경**: Step3 Verifier 기준1/5 위반이 초기 10건에서 프롬프트 보강 3회차 후 1건 이하로 감소.
+
+#### 기준1 (시점 일관성) 보강 원칙
+
+```
+- 2026년, 연간, 가이던스, 전망, 예상, 추정, 상향 조정, 하향 조정이 포함된 문장
+  → [전망] 태그 필수 또는 조건부 해석 문장으로 분리
+- ★ 예외: 2024/2025년 등 이미 발표된 과거 확정 실적·집계값은 적용 제외
+  (이 예외 없으면 "2024년 영업이익 X조"도 [전망] 요구 — 과도한 오탐)
+```
+
+#### 기준5 (투자 권유) 최종 금지 표현 목록
+
+```
+"매수", "매수하세요", "지금 사야 할", "유망", "주목해야 한다", "담아야 한다",
+"기회다", "추천한다", "매력적인 선택지", "관심 가져볼 만한", "주가 상승을 견인",
+"장기 성장 가능성을 갖춘", "긍정적으로 평가", "수혜가 기대",
+"저평가 매력", "매수 기회", "하방 경직성 제공",
+"수혜를 받을 수 있는", "실적 개선 효과를 기대할 수 있는"
+```
+
+**적용 위치**: Step2a 자기검수 + Step2b 작성규칙2 + Step3 기준5 + Step3 수정규칙4 — 4곳 완전 동기화 필수. 한 곳만 업데이트하면 일관성 깨짐.
+
+**교훈**: LLM은 금지 표현을 정확히 열거할수록 준수율이 올라감. "이와 유사한 표현"만으로는 부족 — 구체적 문자열 목록이 효과적.
+
+---
+
+### 6-28. [MINOR] publisher.py `status: "draft"` → `"publish"` 누락
+
+**증상**: 파이프라인 실행 후 WordPress에 포스팅이 생성되나 draft 상태. 공개 URL 접근 불가.
+
+**원인**: publisher.py 초기 구현 시 안전 목적으로 `"status": "draft"` 설정. 실운영 전환 시 `"publish"` 변경 누락.
+
+**해결**:
+```python
+# publisher.py
+payload = {
+    "title":   title,
+    "content": content,
+    "status":  "publish",   # ← "draft"에서 변경
+    ...
+}
+```
+
+**기존 draft 포스트 일괄 전환** (WP REST API):
+```python
+import requests
+for post_id in [104, 105]:
+    r = requests.post(
+        f"{site_url}/wp-json/wp/v2/posts/{post_id}",
+        auth=(username, password),
+        json={"status": "publish"}
+    )
+    print(r.json().get("link"))  # 공개 URL 확인
+```
+
+**교훈**: 개발 단계에서 `draft`로 설정해두면 실운영 전환 시 누락되기 쉬움. 실운영 체크리스트에 "publisher status=publish 확인" 항목 필수.
+
+---
+
 ## 7. WordPress 연동 노하우
 
 ### 7-1. REST API 인증
@@ -1844,6 +2055,36 @@ corp_info = run_dart_company_info(stock_code="005930")
 
 ---
 
+### 14-2b. DART 사업보고서 섹션 파싱 패턴 (Phase 6-B)
+
+사업보고서(pblntf_ty=A)에서 "사업의 내용", "재무상태" 등 핵심 섹션을 추출해 Post2 프롬프트에 주입하는 패턴.
+
+#### 전체 흐름
+
+```
+1. _find_annual_report_rcept_no(corp_code)
+   → list.json?pblntf_ty=A&bgn_de=2년전&report_nm="사업보고서" 필터
+   → 최신 사업보고서 rcept_no 반환
+
+2. _extract_sections_from_zip(rcept_no, corp_code)
+   → document.xml 엔드포인트로 ZIP 다운로드
+   → ZIP 내 단일 대형 XML에서 raw.find(kw) 전체 텍스트 검색
+   → _ANNUAL_SECTION_KEYWORDS fallback 체인으로 섹션 추출
+
+3. run_dart_annual_report_sections(tickers)
+   → 종목코드 리스트 → {code: {섹션명: 텍스트}} 반환
+   → generator.py Post2 Step 1D-2에서 context_text로 주입
+```
+
+#### 핵심 상수
+
+| 상수 | 값 | 설명 |
+|------|-----|------|
+| `_ANNUAL_SECTION_MAX` | 400자 | 섹션당 추출 최대 길이 |
+| `_ANNUAL_HEADER_PROBE` | 폐기 | probe 방식 실패 → 전체 검색으로 교체 |
+
+---
+
 ### 14-3. 한경컨센서스 세션 로그인 (Phase 6)
 
 **문제**: 한경컨센서스는 로그인 세션이 있어야만 컨센서스 데이터 접근 가능.
@@ -1866,6 +2107,8 @@ Phase가 진행되면서 품질 검증 기준이 누적된 방식:
 
 | Phase | 추가된 검증 레이어 | 목적 |
 |-------|-----------------|------|
+| 8 | 기준1 시점 단정 금지 + 과거 확정 실적 예외 처리 | [전망] 태그 의무화, 2024/2025년 실적 오탐 제거 |
+| 8 | 기준5 금지 표현 19종 확정 목록 | 저평가 매력/매수 기회/하방 경직성/수혜를 받을 수 있는 등 추가 |
 | 7~9 | 기준5: 권유성 표현 금지 | "매수/유망/담아야 한다" 등 제거 |
 | 13 | `_score_interpretation_quality()` | hedge 과잉 / weak 해석 탐지 |
 | 14I | `_detect_interp_hedge_density()` | 헤징 어미 10종 밀도 측정 |
