@@ -156,9 +156,13 @@ async def payment_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     body = await request.json()
+    # Toss 2024-06-01 API: eventType 필드로 구분
     event_type = body.get("eventType", "")
     data = body.get("data", {})
-    billing_key = data.get("billingKey")
+
+    # 빌링키는 data.billingKey 또는 data.payment.billingKey 경로 모두 허용
+    billing_key = data.get("billingKey") or data.get("payment", {}).get("billingKey")
+    payment_status = data.get("status", "")  # DONE / CANCELED / ABORTED 등
 
     if not billing_key:
         return {"ok": True}
@@ -172,13 +176,30 @@ async def payment_webhook(
 
     user = await db.get(User, sub.user_id)
 
-    if event_type == "BILLING_SUCCESS":
+    # PAYMENT_STATUS_CHANGED: data.status 로 성공/실패 구분 (2024-06-01 API)
+    # 구버전 호환: BILLING_SUCCESS / BILLING_FAILED 이벤트명도 처리
+    is_success = (
+        event_type == "BILLING_SUCCESS"
+        or (event_type == "PAYMENT_STATUS_CHANGED" and payment_status == "DONE")
+    )
+    is_failed = (
+        event_type == "BILLING_FAILED"
+        or (event_type == "PAYMENT_STATUS_CHANGED" and payment_status in ("ABORTED", "EXPIRED"))
+    )
+    is_cancel = event_type in ("CANCEL", "BILLING_DELETED")
+
+    if is_success:
         sub.status = "active"
         sub.next_billing_at = datetime.utcnow() + timedelta(days=30)
         if user:
             user.plan = "pro"
-    elif event_type in ("BILLING_FAILED", "CANCEL"):
-        sub.status = "inactive" if event_type == "BILLING_FAILED" else "cancelled"
+    elif is_failed:
+        sub.status = "inactive"
+        sub.cancelled_at = datetime.utcnow()
+        if user:
+            user.plan = "free"
+    elif is_cancel:
+        sub.status = "cancelled"
         sub.cancelled_at = datetime.utcnow()
         if user:
             user.plan = "free"
