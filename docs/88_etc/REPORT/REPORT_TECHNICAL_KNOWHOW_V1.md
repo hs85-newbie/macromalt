@@ -2870,10 +2870,88 @@ Phase 5-C 구현 이후 전체 흐름 재검증 중 발견된 이슈:
 
 ---
 
+### 14-13. Phase 5-B 운영 검증 결과 (2026-03-13 이번 세션)
+
+이번 세션에서 실제 실행 기반으로 확인한 내용. 코드 설계(14-9/14-10)와 별개로, 실 운영 흐름을 점검한 결과를 기록.
+
+#### 1. bsns_year 전달 경로 — auto fallback 항상 발동
+
+```python
+# generator.py — generate_stock_picks_report() 내 유일한 호출부
+dart_financials = run_dart_financials(kr_stock_codes)  # bsns_year 미전달 = None
+```
+
+- `bsns_year=None` → 함수 내부에서 현재 연도 시도 → 실패 시 전년도 자동 전환
+- 2026-03 현재, 대부분 종목의 2025년 사업보고서 미공시 → **거의 모든 실행에서 fallback 발동**
+- 명시적 연도 전달 경로는 현재 없음 (자동 모드 전용)
+- `resolved_bsns_year` / `used_fallback` 메타가 결과 딕셔너리에 저장되어 `format_dart_for_prompt` 헤더에 노출됨
+
+**교훈**: 사업보고서 제출 주기(3~4월)를 감안하면, 1분기 운영 중 fallback은 정상 동작임. 5~6월 이후 2025년 데이터 공시 시 자연 전환됨.
+
+#### 2. BROKER_KW 오탐 분석 — 단독 키워드 위험 목록
+
+Phase 5-B 2차 확장 시 추가한 단독 키워드 중 비증권사 금융기관과 겹치는 케이스 실측:
+
+| 키워드 | 오탐 대상 | 위험도 |
+|--------|---------|------|
+| `신한` | 신한은행, 신한카드 | 🟡 중간 |
+| `NH` | NH농협은행 | 🟡 중간 |
+| `IBK` | IBK기업은행 | 🟡 중간 |
+| `DB금융` | DB손해보험 | 🟢 낮음 (금융 붙어 있어 비교적 안전) |
+| `BNK` | BNK부산은행 | 🟡 중간 |
+| `토스증권` | 토스뱅크 | 🟢 낮음 (증권 명시) |
+
+**권고 처리**: 실운영 로그에서 비리서치 기사가 broker 분류로 잡히는 경우 `신한→신한투자`, `NH→NH투자`, `IBK→IBK투자`로 구체화. 빈도가 낮으면 모니터링만 유지.
+
+#### 3. pdfplumber 실 PDF 추출 검증
+
+네이버 금융 리서치 섹터 리포트 2건으로 실추출 테스트:
+
+| 항목 | 결과 |
+|---|---|
+| URL 구조 | `https://stock.pstatic.net/stock-research/…/{날짜}_industry_{id}.pdf` |
+| 리다이렉트 | 없음 (직링크, HTTP 200 직접 응답) |
+| Content-Type | `application/octet-stream` (pdf가 아님에 주의) |
+| 추출 결과 | 800자 컷 적용 후 증권사명·날짜·투자의견·핵심 논지 포함 확인 |
+| 오류 없음 여부 | pdfplumber 렌더링 경고 (`invalid float`) 발생하나 텍스트 추출에 무영향 |
+
+**Content-Type 주의**: 네이버 PDF는 `application/octet-stream`으로 반환됨. `_fetch_pdf_bytes()` 내부에서 URL `.pdf` 확장자 기준으로 허용 처리. Content-Type만 보면 PDF가 아닌 것처럼 보이나 정상 수신됨.
+
+```python
+# 이중 판별 (Content-Type + 확장자 OR) — 현재 구현
+ct = resp.headers.get("Content-Type", "")
+if "pdf" not in ct.lower() and not url.lower().endswith(".pdf"):
+    return None
+# → 네이버 PDF는 확장자 기준으로 통과
+```
+
+#### 4. pdfplumber vs 스캔 PDF
+
+이번 테스트 2건은 모두 텍스트 레이어가 있는 PDF. 스캔 이미지 PDF는 `extract_text()` 결과가 빈 문자열 → `_extract_pdf_key_sections()` 빈 문자열 반환 → `pdf_snippet` 필드 미생성 → 파이프라인 정상 유지.
+
+**교훈**: PDF 추출 실패는 파이프라인을 중단시키지 않음. 단지 해당 article의 `pdf_snippet`이 없는 채로 넘어감.
+
+---
+
+### 14-14. Phase 5-B 구현 vs 설계 불일치 정리
+
+Phase 5-B 설계 단계(14-9/14-10)와 실제 커밋 상태의 차이:
+
+| 항목 | 설계(14-9/14-10 기록) | 실제 구현 | 비고 |
+|---|---|---|---|
+| 프롬프트 삽입 상한 | `_PDF_PROMPT_SNIPPET_LEN=400` | `[:300]` (하드코딩) | 14-12 이슈#3에서 정렬 권고됨 |
+| BROKER_KW 신한 | `신한투자`, `신한금융투자` (풀네임) | `신한` (단독 키워드) | 오탐 위험 존재. 운영 후 정제 권고 |
+| BROKER_KW NH | `NH투자증권` (풀네임) | `NH` (단독 키워드) | 동일 |
+| `_resolve_bsns_year` 함수 | 별도 helper로 설계 | `run_dart_financials` 내 인라인 처리 | 동작은 동일 |
+
+**패턴**: 설계 문서는 "이상적 구현"을 기록하는 경향이 있고, 실제 코드는 소수정 원칙 하에 최소 변경으로 구현됨. 운영 중 오탐/불일치 발생 시 설계 기준으로 보완.
+
+---
+
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*Phase 23 + Phase 9 운영 검증 기준 최종 갱신: 2026-03-26*
-*2026-03-26 (이번 갱신): 에러 사례 6-29 신규 추가 — Reviser LLM hallucination형 날짜 주입 패턴 (Phase 9 발견, Reviser 규칙 9로 해결), 반면교사 패턴 추가*
-*2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화 (14-9), Phase 13 해석 지성/HOLD-GO 체계 (14-10), Phase 14H 소스 정규화/타겟 재작성 (14-11), Phase 14I 헤징 억제 (14-12), Phase 15 완료 연도 2단계 차단 구조 (14-13), Phase 15A~E 5단계 복합 시제 교정 상세 (14-14), 에러 사례 6-15b~6-20 신규 추가, 반면교사 패턴 7종 추가*
-*2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13 신규 추가*
+*최종 갱신: 2026-03-26 (Phase 5-B 운영 검증 + 설계-구현 불일치 정리 추가)*
+*2026-03-26 (이번 갱신): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14) 추가. 에러 사례 6-29 추가.*
+*2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화, Phase 13 해석 지성/HOLD-GO 체계, Phase 14H/I 상세, Phase 15A~E 5단계 복합 시제 교정, 에러 사례 6-15b~6-20, 반면교사 패턴 7종*
+*2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13*
 *2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
-*다음 갱신 예정: Phase 24 (FastAPI SaaS 서버) 또는 SEO/수익화 트랙 완료 시*
+*다음 갱신 예정: Phase 5-C 한경 세션 연동 완료 시 / Phase 24 (FastAPI SaaS 서버) 착수 시*
