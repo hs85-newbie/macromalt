@@ -2997,7 +2997,7 @@ Phase 5-B 설계 단계(14-9/14-10)와 실제 커밋 상태의 차이:
 
 ## 15. Phase 24 SaaS 전환 Know-How
 
-> Phase 24 착수일: 2026-03-26 | 상태: M0 완료, M1 완료, M4 완료, M2 대기 중
+> Phase 24 착수일: 2026-03-26 | 상태: M0~M2 완료, M4 완료, M3 대기 중
 
 ### 15-1. SaaS 전환 배경 및 목표
 
@@ -3255,17 +3255,11 @@ M2는 반드시 **단독 진행** (M1 완료 후, 다른 모듈과 동시 작업
 | M0 설계 | ✅ 완료 | `84dcb0c` | CLAUDE.md, schema.sql, openapi.yaml, UserContext, api/web 골격 |
 | M1 Backend | ✅ 완료 | `a4227b1` | FastAPI + JWT + AES-256 + DB + 라우터 6개, pytest 10/10 PASS |
 | M4 Frontend | ✅ 완료 | `c81ac24` | 랜딩/로그인/대시보드 5탭 UI, api.js JWT 자동갱신 |
-| M2 Pipeline | ⏳ 대기 | — | UserContext 멀티유저 전환 |
+| M2 Pipeline | ✅ 완료 | `cba7bea` | _apply_ctx_to_env + run_pipeline(ctx), generator/publisher 무수정 |
 | M3 Payment | ⏳ 대기 | — | Toss 결제 테스트 모드 |
 
 ---
 
-*END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*최종 갱신: 2026-03-26 (Phase 24 SaaS 전환 섹션 15 추가)*
-*2026-03-26 (이전): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14) 추가. 에러 사례 6-29 추가.*
-*2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화, Phase 13 해석 지성/HOLD-GO 체계, Phase 14H/I 상세, Phase 15A~E 5단계 복합 시제 교정, 에러 사례 6-15b~6-20, 반면교사 패턴 7종*
-*2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13*
-*2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
 ### 15-12. M1 에러 Know-How (실제 발생)
 
 | 에러 | 원인 | 해결 |
@@ -3278,11 +3272,39 @@ M2는 반드시 **단독 진행** (M1 완료 후, 다른 모듈과 동시 작업
 
 ---
 
+### 15-13. M2 설계 패턴 — 환경변수 오버라이드 방식
+
+generator.py, publisher.py는 내부적으로 `os.getenv()`로 API 키/WP 정보를 읽는다.
+이를 수정하면 수천 줄 코드에 영향이 가므로, **환경변수 오버라이드** 방식을 채택했다.
+
+```python
+# main.py — _apply_ctx_to_env() 패턴
+def _apply_ctx_to_env(ctx) -> None:
+    """ctx 값을 환경변수에 주입 — generator/publisher 코드 무수정 유지"""
+    if ctx.openai_api_key:
+        os.environ["OPENAI_API_KEY"] = ctx.openai_api_key
+    if ctx.gemini_api_key:
+        os.environ["GEMINI_API_KEY"] = ctx.gemini_api_key
+    # ... WP, DART, BOK, FRED, KRX, Unsplash 동일 패턴
+
+def run_pipeline(ctx=None) -> None:
+    if ctx is not None:
+        _apply_ctx_to_env(ctx)   # 환경변수 덮어쓰기
+    _run_pipeline_main(ctx=ctx)  # 기존 파이프라인 실행
+```
+
+**트레이드오프**:
+- 장점: generator.py(6,500줄), publisher.py 전혀 수정 없음. 회귀 위험 제로.
+- 단점: 동일 프로세스에서 다중 사용자 동시 실행 불가 (환경변수는 프로세스 전역).
+- 해결: API 서버에서 사용자별 `run_pipeline(ctx)`을 **별도 스레드/프로세스**로 실행 → 격리 보장.
+
+---
+
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*최종 갱신: 2026-03-26 (M4 Frontend 완료 반영 - 랜딩/로그인/대시보드 5탭)*
+*최종 갱신: 2026-03-26 (M2 Pipeline 완료 반영 - 환경변수 오버라이드 방식)*
+*2026-03-26 (이전): M4 Frontend 완료 (c81ac24)*
+*2026-03-26 (이전): M1 Backend 완료 (a4227b1, pytest 10/10)*
 *2026-03-26 (이전): Phase 24 SaaS 전환 섹션 15 추가 (M0 완료)*
-*2026-03-26 (이전): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14) 추가. 에러 사례 6-29 추가.*
-*2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화, Phase 13 해석 지성/HOLD-GO 체계, Phase 14H/I 상세, Phase 15A~E 5단계 복합 시제 교정, 에러 사례 6-15b~6-20, 반면교사 패턴 7종*
-*2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13*
-*2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
-*다음 갱신 예정: Phase 24 M4 완료 시, M2 Pipeline 통합 완료 시, M3 Toss 결제 완료 시*
+*2026-03-26 (이전): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14)*
+*2026-03-13: Phase 4.3~5-D 상세 추가*
+*다음 갱신 예정: M3 Toss 결제 완료 시*
