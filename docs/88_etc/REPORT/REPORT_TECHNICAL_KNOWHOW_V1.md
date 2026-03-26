@@ -37,7 +37,7 @@
 | 총 코드 라인 | ~12,000줄 |
 | 핵심 함수/클래스 | 180+ 개 |
 | 외부 API | 7개 |
-| 보고서 파일 | 56개 (Phase 14~23) |
+| 보고서 파일 | 56개 (Phase 4.3~23 + Know-How/수익화 등) |
 | GitHub Actions 워크플로우 | 2개 |
 | Phase 22 기준 일 발행량 | **21개 포스팅/일** (3슬롯 × 7개) |
 | 월 발행량 | **~630개/월** |
@@ -687,16 +687,16 @@ missing_lead_ids=[] | lead_recall=1.00 | lead_focus=0.20
 #### 비용 단가 (2026-03 기준)
 
 ```python
-# OpenAI GPT-4o
-OPENAI_INPUT_PRICE_PER_1M  = 2.50   # USD
-OPENAI_CACHED_PRICE_PER_1M = 0.625  # USD (75% 할인)
-OPENAI_OUTPUT_PRICE_PER_1M = 10.00  # USD
+# OpenAI GPT-4o  (cost_tracker.py 실제 변수명)
+OPENAI_INPUT_PRICE_PER_M        = 2.50   # USD / 1M input tokens (non-cached)
+OPENAI_CACHED_INPUT_PRICE_PER_M = 0.625  # USD / 1M cached input tokens (75% 할인)
+OPENAI_OUTPUT_PRICE_PER_M       = 10.00  # USD / 1M output tokens
 
 # Gemini 2.5-flash
-GEMINI_INPUT_PRICE_PER_1M  = 0.075  # USD
-GEMINI_OUTPUT_PRICE_PER_1M = 0.30   # USD
+GEMINI_INPUT_PRICE_PER_M  = 0.075  # USD / 1M input tokens
+GEMINI_OUTPUT_PRICE_PER_M = 0.30   # USD / 1M output tokens
 
-USD_TO_KRW = 1_380  # 고정 환율
+USD_TO_KRW = 1_380  # 고정 환율 (월 1회 수동 업데이트 권장)
 ```
 
 #### 월간 한도 & 알림
@@ -1082,18 +1082,38 @@ def _format_source_section(content: str) -> str:
 
 **원인**: Secrets는 `${{ secrets.VAR }}` 문법, Variables는 `${{ vars.VAR }}` 문법 혼용 필요
 
-**해결** (publish.yml):
+**해결** (publish.yml 실제 방식):
 ```yaml
-- name: Inject secrets
-  run: |
-    echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
-    echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> $GITHUB_ENV
-    echo "WORDPRESS_USERNAME=${{ secrets.WORDPRESS_USERNAME }}" >> $GITHUB_ENV
+# ⚠️ 실제 구현: 개별 Secret 방식이 아닌 단일 SECRETS 블록 방식 사용
+# GitHub Secrets에 "SECRETS"라는 이름 하나로 모든 .env 내용을 dotenv 형식으로 저장
 
-    # .env 파일에도 동시 기록 (python-dotenv 대응)
-    echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-    echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+- name: Inject secrets into environment
+  env:
+    ENV_CONTENT: ${{ secrets.SECRETS }}   # 단일 Secret: 모든 KEY=VALUE를 포함
+  run: |
+    # A: .env 파일 작성 → load_dotenv() 호환
+    printf '%s\n' "$ENV_CONTENT" > .env
+
+    # B: KEY=VALUE 형식 줄만 추출 → $GITHUB_ENV 주입 (주석/빈 줄 제외)
+    grep -E '^[A-Z_][A-Z0-9_]*=.+' .env >> $GITHUB_ENV || true
+
+    # 검증: 로드된 키 목록 출력 (값 비노출)
+    echo "=== SECRETS 로드된 키 ==="
+    grep -E '^[A-Z_][A-Z0-9_]*=.+' .env | cut -d= -f1 || echo "(없음)"
+
+- name: Inject variables into environment
+  env:
+    VARS_CONTENT: ${{ vars.VARIABLES }}   # Variables도 동일 방식
+  run: |
+    if [ -n "$VARS_CONTENT" ]; then
+      printf '%s\n' "$VARS_CONTENT" > .vars_tmp
+      grep -E '^[A-Z_][A-Z0-9_]*=.+' .vars_tmp >> $GITHUB_ENV || true
+      rm -f .vars_tmp
+    fi
 ```
+
+**핵심 차이**: 개별 키별 Secret 등록이 아니라 `.env` 파일 전체를 하나의 `SECRETS` Secret으로 등록.
+새 환경변수 추가 시 `SECRETS` 값만 수정하면 됨 (Actions 설정 변경 불필요).
 
 ---
 
@@ -1690,15 +1710,16 @@ env:
 ### 8-4. Artifact 업로드 (로그 보관)
 
 ```yaml
-- name: Upload logs
+- name: Upload logs artifact
   uses: actions/upload-artifact@v4
   if: always()   # 실패해도 로그 업로드
   with:
-    name: macromalt-logs-${{ github.run_number }}
+    name: publish-log-${{ github.run_id }}   # run_id 기준 (run_number 아님)
     path: |
       logs/macromalt_daily.log
       logs/publish_result.jsonl
-    retention-days: 30
+    retention-days: 14   # 14일 보관 (30이 아님)
+    if-no-files-found: warn
 ```
 
 ### 8-5. Variables vs Secrets 사용 기준
@@ -1872,27 +1893,37 @@ UNSPLASH_ACCESS_KEY=...
 TIMEZONE=Asia/Seoul
 ```
 
-### 11-2. GitHub Actions Secrets 목록
+### 11-2. GitHub Actions Secrets 설정 방식
+
+> ⚠️ 개별 Secret 방식이 아님. `SECRETS` 단일 Secret에 .env 전체 내용을 저장.
+
+**GitHub UI 경로**: Repository → Settings → Secrets and variables → Actions
 
 ```
-OPENAI_API_KEY
-GEMINI_API_KEY
-DART_API_KEY
-WORDPRESS_SITE_URL
-WORDPRESS_USERNAME
-WORDPRESS_PASSWORD
-HANKYUNG_USERNAME
-HANKYUNG_PASSWORD
-FRED_API_KEY
-BOK_API_KEY
-UNSPLASH_ACCESS_KEY
+Secret 이름: SECRETS
+Secret 값 (dotenv 형식 전체):
+  OPENAI_API_KEY=sk-proj-...
+  GEMINI_API_KEY=AIzaSy...
+  DART_API_KEY=abc123...
+  WORDPRESS_SITE_URL=https://your-blog.com
+  WORDPRESS_USERNAME=your-username
+  WORDPRESS_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
+  HANKYUNG_USERNAME=...
+  HANKYUNG_PASSWORD=...
+  FRED_API_KEY=...
+  BOK_API_KEY=...
+  UNSPLASH_ACCESS_KEY=...
 ```
+
+**장점**: 새 환경변수 추가 시 `SECRETS` 값만 수정 (Actions workflow 변경 불필요)
 
 ### 11-3. GitHub Actions Variables 목록
 
 ```
-TIMEZONE=Asia/Seoul
-SCRAPE_INTERVAL_MINUTES=60
+Variable 이름: VARIABLES
+Variable 값 (dotenv 형식):
+  TIMEZONE=Asia/Seoul
+  SCRAPE_INTERVAL_MINUTES=60
 ```
 
 ---
@@ -2344,13 +2375,26 @@ Phase 9까지는 단일 파이프라인으로 항상 같은 유형의 글을 생
 #### 슬롯 분기 구조
 
 ```python
-# main.py: 실행 시각 기반 슬롯 자동 결정
-KST_HOUR = datetime.now(ZoneInfo("Asia/Seoul")).hour
-if   6  <= KST_HOUR < 11: slot = "morning"    # 개장 전 분석
-elif 13 <= KST_HOUR < 17: slot = "evening"    # 장 마감 후 리뷰
-elif 21 <= KST_HOUR < 24: slot = "us_open"    # 미국 개장 시간대
-else:                     slot = "default"
+# main.py: detect_slot() — 실행 시각(KST) 기반 슬롯 자동 결정 (현재 코드)
+def detect_slot(dt: datetime = None) -> str:
+    if dt is None:
+        dt = datetime.now()
+    hm = dt.hour * 100 + dt.minute   # 예: 21:35 → 2135
+
+    if 500 <= hm < 1200:             # 05:00 ~ 11:59
+        return "morning"
+    if 1400 <= hm < 2100:            # 14:00 ~ 20:59
+        return "evening"
+    if _is_us_dst(dt):               # DST(3~11월): 21:30 ~ 22:29
+        if 2130 <= hm < 2230:
+            return "us_open"
+    else:                            # non-DST(11~3월): 22:30 ~ 23:29
+        if 2230 <= hm < 2330:
+            return "us_open"
+    return "default"
 ```
+
+> Phase 10 초기 구현 대비 변경사항: morning 시작 05:00(기존 06:00), evening 14:00~21:00(기존 13:00~17:00), us_open DST/non-DST 분리 추가.
 
 각 슬롯별로 generator.py의 `forced_theme` 우선순위, 종목 픽 수, 발행 시각 오프셋이 다르게 적용됨.
 
