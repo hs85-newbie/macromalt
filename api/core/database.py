@@ -13,6 +13,11 @@ def _make_engine():
     url = settings.DATABASE_URL
     if url.startswith("sqlite"):
         return create_async_engine(url, connect_args={"check_same_thread": False})
+    # Railway는 postgresql:// 또는 postgres:// 형식으로 주입 → asyncpg 드라이버로 변환
+    if url.startswith("postgres://"):
+        url = "postgresql+asyncpg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
     return create_async_engine(url)
 
 
