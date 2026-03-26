@@ -1,6 +1,6 @@
 # macromalt 기술 종합 Know-How 보고서 V1
 
-> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 23 기준 (최종 갱신: 2026-03-26, Phase 17 항목 보강)
+> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 23 기준 (최종 갱신: 2026-03-26, Phase 16J/K + 17 항목 보강)
 
 ---
 
@@ -1019,6 +1019,32 @@ STYLE_RESIDUAL_KW = [
 
 **결론**: 항상 유지해야 하는 함수. 제거 금지.
 
+### 6-16. [MINOR] Python AST 탐지 — AnnAssign vs Assign 오탐
+
+**증상**: `ast.walk(tree)` 후 `isinstance(node, ast.Assign)`으로 상수 존재 여부 확인 시 "not found" 오탐 발생. 해당 상수는 코드에 실제로 존재함.
+
+**원인**: Python 타입 주석을 포함한 변수 선언(`var: str = value`)은 `ast.Assign`이 아닌 `ast.AnnAssign` 노드로 파싱됨.
+
+```python
+# ❌ 탐지 실패
+_P16J_POST2_SAME_THEME_OPENER: str = "..."  # AnnAssign → ast.Assign으로 탐지 불가
+
+# ✅ 올바른 탐지 방법
+for node in ast.walk(tree):
+    if isinstance(node, ast.Assign):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == VAR_NAME:
+                found = True
+    elif isinstance(node, ast.AnnAssign):
+        if isinstance(node.target, ast.Name) and node.target.id == VAR_NAME:
+            found = True
+
+# 또는 grep 기반으로 검증 (더 간단)
+# grep로 확인 후 AST 검사 생략하는 것도 실용적 선택
+```
+
+**교훈**: 코드 존재 여부 확인 시 AST보다 grep(ripgrep)이 오탐 없이 빠름. AST는 구조 분석에만 사용.
+
 ---
 
 ## 7. WordPress 연동 노하우
@@ -1567,6 +1593,7 @@ Phase가 진행되면서 품질 검증 기준이 누적된 방식:
 | 16 | Temporal SSOT 전 레이어 주입 | 근본적 시제 오류 원천 차단 |
 | 16B | `_p16b_calc_intro_overlap()` | Post1/Post2 도입부 중복 감지 |
 | 16F | `_p16f_check_bridge_alignment()` | 브릿지-픽 정합성 |
+| 16J | `_p16j_check_theme_repeat()` + `_P16J_POST2_SAME_THEME_OPENER` | 동일 theme 연속 슬롯 감지 → Post2 opener 각도 다양화 조건부 주입 |
 | 17 | opener H3 패턴 + PARSE_FAILED TYPE | opener 각도 품질 + 런타임 오류 분류 |
 | 20 | Verifier 기준 26~30 + lead_metrics | 편집 구조 품질 + planner 준수율 |
 
@@ -1582,6 +1609,8 @@ Phase가 진행되면서 품질 검증 기준이 누적된 방식:
 | `_log_normal_publish_event` 제거 | Phase 20 주간 리포트 데이터 공백 | 함수 항상 유지 (제거 금지) |
 | CSS 인라인 상수 generator.py에 직접 작성 | 스타일 변경 시 수백 줄 수정 필요 | styles/tokens.py 분리 (Pre-Phase 17) |
 | handoff 없이 대화 종료 | 다음 대화에서 맥락 완전 소실 | Phase 종료마다 통합 핸드오프 문서 작성 |
+| `ast.Assign`으로 타입 주석 할당 탐지 | `AnnAssign`은 탐지 못 함 (false "not found") | `isinstance(node, (ast.Assign, ast.AnnAssign))` 병용 |
+| CONDITIONAL GO 상태에서 계열 종료 진행 | 잔여 이슈가 누적될 경우 다음 세션에서 맥락 소실 | CONDITIONAL GO 종료 시 반드시 Phase 17 우선순위 항목 + 잔여 이슈 목록을 total handoff에 명시 |
 
 ---
 
