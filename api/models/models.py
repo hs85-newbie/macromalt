@@ -30,8 +30,8 @@ class User(Base):
     name = Column(String(100))
     plan = Column(String(20), nullable=False, default="free")
     is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=_now)
-    updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
     # Relationships
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
@@ -52,10 +52,10 @@ class Subscription(Base):
     plan = Column(String(20), nullable=False, default="pro")
     status = Column(String(20), nullable=False, default="inactive")
     amount = Column(Integer, nullable=False, default=49900)
-    next_billing_at = Column(DateTime)
-    cancelled_at = Column(DateTime)
-    created_at = Column(DateTime, nullable=False, default=_now)
-    updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    next_billing_at = Column(DateTime(timezone=True))
+    cancelled_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
     user = relationship("User", back_populates="subscriptions")
 
@@ -70,9 +70,9 @@ class UserApiKey(Base):
     key_enc = Column(Text, nullable=False)
     iv = Column(String(64), nullable=False)
     is_valid = Column(Boolean, nullable=False, default=True)
-    last_tested_at = Column(DateTime)
-    created_at = Column(DateTime, nullable=False, default=_now)
-    updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    last_tested_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
     user = relationship("User", back_populates="api_keys")
 
@@ -90,9 +90,9 @@ class UserWpSettings(Base):
     category_picks = Column(Integer, default=3)
     category_default = Column(Integer, default=1)
     is_connected = Column(Boolean, nullable=False, default=False)
-    last_tested_at = Column(DateTime)
-    created_at = Column(DateTime, nullable=False, default=_now)
-    updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    last_tested_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
     user = relationship("User", back_populates="wp_settings")
 
@@ -106,8 +106,8 @@ class UserPipelineSettings(Base):
     slot = Column(String(20), default="morning")
     max_posts_per_run = Column(Integer, default=3)
     language = Column(String(10), default="ko")
-    created_at = Column(DateTime, nullable=False, default=_now)
-    updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
     user = relationship("User", back_populates="pipeline_settings")
 
@@ -120,8 +120,8 @@ class RunLog(Base):
     status = Column(String(20), nullable=False)
     slot = Column(String(20))
     triggered_by = Column(String(20), default="manual")
-    started_at = Column(DateTime, nullable=False, default=_now)
-    finished_at = Column(DateTime)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    finished_at = Column(DateTime(timezone=True))
     error_message = Column(Text)
     cost_usd = Column(Numeric(10, 6), default=0)
     cost_krw = Column(Integer, default=0)
@@ -140,7 +140,7 @@ class PublishedPost(Base):
     wp_post_url = Column(Text)
     title = Column(Text, nullable=False)
     category = Column(String(50))
-    published_at = Column(DateTime, nullable=False, default=_now)
+    published_at = Column(DateTime(timezone=True), nullable=False, default=_now)
 
     user = relationship("User", back_populates="published_posts")
     run_log = relationship("RunLog", back_populates="published_posts")
