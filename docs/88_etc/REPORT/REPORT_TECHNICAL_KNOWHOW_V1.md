@@ -1,6 +1,6 @@
 # macromalt 기술 종합 Know-How 보고서 V1
 
-> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 23 기준 (최종 갱신: 2026-03-26, Phase 4.3/5-A 항목 보강)
+> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 24-M0 기준 (최종 갱신: 2026-03-26, Phase 24 SaaS 전환 착수)
 
 ---
 
@@ -20,6 +20,7 @@
 12. [운영 트러블슈팅 매뉴얼](#12-운영-트러블슈팅-매뉴얼)
 13. [AI 글쓰기 품질 개선 Know-How (Phase 20)](#13-ai-글쓰기-품질-개선-know-how)
 14. [Phase 5~17 파이프라인 진화 Know-How](#14-phase-517-파이프라인-진화-know-how)
+15. [Phase 24 SaaS 전환 Know-How](#15-phase-24-saas-전환-know-how)
 
 ---
 
@@ -2992,10 +2993,277 @@ Phase 5-B 설계 단계(14-9/14-10)와 실제 커밋 상태의 차이:
 
 ---
 
+---
+
+## 15. Phase 24 SaaS 전환 Know-How
+
+> Phase 24 착수일: 2026-03-26 | 상태: M0 완료, M1+M4 진행 중
+
+### 15-1. SaaS 전환 배경 및 목표
+
+Phase 1~23은 운영자 1인이 직접 API 키와 WP를 설정한 단일 사용자 파이프라인이었다.
+Phase 24는 이를 **멀티유저 SaaS**로 전환한다.
+
+| 항목 | Before (Phase 1~23) | After (Phase 24~) |
+|------|--------------------|--------------------|
+| 사용자 | 운영자 1인 | 다수 회원 |
+| 설정 | `.env` 파일 하드코딩 | DB 암호화 저장 + 웹 UI |
+| 실행 | GitHub Actions cron | API 호출 (수동/자동) |
+| 과금 | 없음 | Type B (₩49,900/월 구독) |
+| API 키 | 운영자 키 | BYOK (사용자 제공) |
+| 인프라 | GitHub Actions 전용 | Railway FastAPI 서버 |
+
+---
+
+### 15-2. 추가 기술 스택 (Phase 24)
+
+| 분류 | 라이브러리 | 버전 | 용도 |
+|------|----------|------|------|
+| **웹 프레임워크** | `fastapi` | ≥0.110.0 | REST API 서버 |
+| **ASGI 서버** | `uvicorn[standard]` | ≥0.29.0 | FastAPI 실행 |
+| **데이터 검증** | `pydantic` | ≥2.6.0 | 요청/응답 스키마 |
+| **설정 관리** | `pydantic-settings` | ≥2.2.0 | 환경변수 BaseSettings |
+| **ORM** | `sqlalchemy` | ≥2.0.0 | async DB 접근 |
+| **SQLite 드라이버** | `aiosqlite` | ≥0.20.0 | 로컬 개발 DB |
+| **PostgreSQL 드라이버** | `asyncpg` | ≥0.29.0 | 프로덕션 DB |
+| **DB 마이그레이션** | `alembic` | ≥1.13.0 | 스키마 버전 관리 |
+| **JWT** | `python-jose[cryptography]` | ≥3.3.0 | access/refresh 토큰 |
+| **비밀번호 해시** | `passlib[bcrypt]` | ≥1.7.4 | bcrypt 해시 |
+| **암호화** | `cryptography` | ≥42.0.0 | AES-256-GCM |
+| **테스트** | `pytest`, `pytest-asyncio`, `httpx` | 최신 | API 테스트 |
+| **결제** | Toss Payments REST API | v1 | 구독 결제 |
+| **프론트엔드** | Vanilla JS + TailwindCSS CDN | - | 대시보드 UI |
+| **배포** | Railway | - | FastAPI 서버 호스팅 |
+
+---
+
+### 15-3. 아키텍처 변화
+
+```
+[Phase 1~23 단일 운영자 구조]
+.env ──→ main.py ──→ generator.py ──→ publisher.py ──→ WordPress
+GitHub Actions cron 실행
+
+[Phase 24 멀티유저 SaaS 구조]
+웹 UI (web/) ──→ FastAPI (api/) ──→ UserContext ──→ pipeline/
+                    │                                    │
+                    ├── JWT 인증                         ├── generator.py
+                    ├── AES-256 복호화                   ├── publisher.py
+                    ├── PostgreSQL                       └── scraper.py
+                    └── Toss 결제 웹훅
+
+Railway 배포: https://macromalt-production.up.railway.app
+```
+
+---
+
+### 15-4. DB 스키마 설계 (7개 테이블)
+
+```
+users                   회원 기본 정보 (email, bcrypt 비밀번호, plan)
+subscriptions           Toss 구독 (빌링키, 상태, 다음 결제일)
+user_api_keys           BYOK API 키 (AES-256-GCM 암호화, provider별)
+user_wp_settings        WordPress 연결 (site_url, 비밀번호 암호화)
+user_pipeline_settings  파이프라인 설정 (슬롯, 최대 발행 수)
+run_logs                실행 이력 (상태, 비용, 시간)
+published_posts         발행 포스트 이력 (WP post_id, URL, 제목)
+```
+
+전체 DDL: `design/schema.sql` 참조
+
+---
+
+### 15-5. UserContext 패턴 — 멀티유저 핵심
+
+기존 파이프라인은 `os.getenv()`로 운영자 키를 직접 읽었다.
+Phase 24부터는 **UserContext 객체**를 통해 사용자별 키를 주입한다.
+
+```python
+# design/user_context.py — 핵심 패턴
+
+@dataclass
+class UserContext:
+    user_id: int
+    user_email: str
+    openai_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    wp_url: Optional[str] = None
+    wp_username: Optional[str] = None
+    wp_password: Optional[str] = None
+    run_log_id: Optional[int] = None
+    # ... 기타 API 키, 카테고리 ID 등
+
+    @classmethod
+    def from_env(cls) -> "UserContext":
+        """기존 .env 기반 단독 실행 — 하위 호환 유지"""
+        ...
+```
+
+**M2 전환 원칙**:
+- `os.getenv("OPENAI_API_KEY")` → `ctx.openai_api_key`
+- 기존 `__main__` 단독 실행은 `UserContext.from_env()`로 유지
+- 파이프라인 함수 시그니처: `run_pipeline(ctx: UserContext)`
+
+---
+
+### 15-6. 보안 설계
+
+| 항목 | 방식 | 이유 |
+|------|------|------|
+| 비밀번호 저장 | bcrypt 해시 (단방향) | 평문 저장 절대 금지 |
+| API 키 저장 | AES-256-GCM 암호화 (복호화 가능) | 파이프라인 실행 시 복호화 필요 |
+| WP 비밀번호 저장 | AES-256-GCM 암호화 | 동일 이유 |
+| JWT | access(1h) + refresh(30d) | 단기 access로 탈취 피해 최소화 |
+| AES_SECRET_KEY | 32바이트, 환경변수 주입 | 코드에 하드코딩 금지 |
+
+```python
+# AES-256-GCM 암호화/복호화 패턴 (api/core/security.py)
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import os, secrets
+
+def encrypt_api_key(plain: str) -> tuple[str, str]:
+    key = settings.AES_SECRET_KEY.encode()[:32]
+    iv = secrets.token_bytes(12)          # GCM nonce: 12바이트
+    aesgcm = AESGCM(key)
+    ct = aesgcm.encrypt(iv, plain.encode(), None)
+    return ct.hex(), iv.hex()
+
+def decrypt_api_key(ct_hex: str, iv_hex: str) -> str:
+    key = settings.AES_SECRET_KEY.encode()[:32]
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(bytes.fromhex(iv_hex), bytes.fromhex(ct_hex), None).decode()
+```
+
+---
+
+### 15-7. API 엔드포인트 구조 (25개)
+
+```
+/health                              헬스체크 (인증 불필요)
+
+/api/auth/register                   회원가입 → TokenResponse
+/api/auth/login                      로그인 → TokenResponse
+/api/auth/refresh                    토큰 갱신
+
+/api/users/me                        GET/PATCH 내 정보
+
+/api/settings/api-keys               GET/POST API 키 (provider별)
+/api/settings/api-keys/{provider}/test  API 키 유효성 테스트
+/api/settings/wordpress              GET/POST WP 연결 정보
+/api/settings/wordpress/test         WP 연결 테스트
+/api/settings/pipeline               GET/PATCH 파이프라인 설정
+
+/api/pipeline/execute                POST 파이프라인 실행 (비동기)
+/api/pipeline/runs                   GET 실행 이력
+/api/pipeline/runs/{run_id}          GET 특정 실행 상세
+/api/pipeline/posts                  GET 발행 포스트 목록
+
+/api/payments/ready                  결제 준비 (Toss 빌링키 URL)
+/api/payments/confirm                결제 승인 콜백
+/api/payments/webhook                Toss 웹훅 수신 (공개)
+/api/payments/subscription           구독 상태 조회
+/api/payments/subscription/cancel   구독 해지
+```
+
+전체 스키마: `design/openapi.yaml` 참조
+
+---
+
+### 15-8. Toss Payments 연동 (테스트 모드)
+
+| 항목 | 내용 |
+|------|------|
+| 결제 방식 | 빌링키 자동결제 (카드 등록 후 매월 자동 청구) |
+| 사업자 등록 | 현재 없음 → 테스트 모드로만 동작 |
+| 웹훅 URL | `https://macromalt-production.up.railway.app/api/payments/webhook` |
+| 처리 이벤트 | `BILLING_SUCCESS` → 구독 활성화 / `BILLING_FAILED` → 만료 |
+| 테스트 키 | `test_sk_...` 형태, Toss 개발자 콘솔에서 발급 |
+
+**웹훅은 공개 URL 필수** → 로컬 개발 시 ngrok 사용:
+```bash
+ngrok http 8000
+# → https://xxxx.ngrok.io/api/payments/webhook 로 테스트
+```
+
+---
+
+### 15-9. 인프라 구성
+
+| 항목 | 로컬 개발 | 프로덕션 |
+|------|---------|---------|
+| DB | SQLite (`api/local.db`) | PostgreSQL (Railway 자동 주입) |
+| 서버 | `uvicorn main:app --reload` (포트 8000) | Railway (포트 $PORT, HTTPS 자동) |
+| 환경변수 | `.env` 파일 | Railway Variables |
+| 배포 | 없음 | GitHub main 푸시 → 자동 배포 |
+| 도메인 | localhost:8000 | macromalt-production.up.railway.app |
+
+**Railway 설정 파일** (`api/railway.toml`):
+```toml
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+```
+
+**Railway 환경변수** (Settings → Variables):
+```
+DATABASE_URL     PostgreSQL 연결 문자열 (자동 주입)
+JWT_SECRET_KEY   랜덤 32바이트 hex
+AES_SECRET_KEY   랜덤 32바이트 hex
+TOSS_SECRET_KEY  Toss 테스트 시크릿 키
+ENVIRONMENT      production
+```
+
+---
+
+### 15-10. 개발 방식 — Subagent + CLAUDE.md 하네스
+
+Phase 24는 규모가 커서 **멀티 에이전트 병렬 개발** 방식을 채택했다.
+
+**CLAUDE.md 하네스 역할**:
+- 모든 Subagent가 읽는 코딩 표준, 브랜치 전략, 보안 규칙, 머지 전 체크리스트
+- 코드 리뷰어 없음 → CLAUDE.md가 품질의 유일한 기준
+
+**개발 순서**:
+```
+M0 (설계 선행) ──→ M1 Backend ┐              ──→ M2 Pipeline 통합
+커밋: 84dcb0c        M4 Frontend ┘ (병렬)         M3 Toss 결제
+                    (worktree 격리)
+```
+
+**모듈별 담당 파일**:
+| 모듈 | 브랜치 | 수정 파일 |
+|------|--------|---------|
+| M0 | main | `design/`, `CLAUDE.md`, `api/` 골격, `web/` 골격 |
+| M1 | feature/phase24-m1-backend | `api/` 전체 |
+| M2 | feature/phase24-m2-pipeline | `main.py`, `generator.py`, `publisher.py` |
+| M3 | feature/phase24-m3-payment | `api/routers/payments.py` |
+| M4 | feature/phase24-m4-frontend | `web/` 전체 |
+
+**M2 충돌 주의**: main.py, generator.py, publisher.py는 핵심 파이프라인 파일이므로
+M2는 반드시 **단독 진행** (M1 완료 후, 다른 모듈과 동시 작업 금지).
+
+---
+
+### 15-11. Phase 24 진행 현황 (2026-03-26 기준)
+
+| 모듈 | 상태 | 커밋 | 내용 |
+|------|------|------|------|
+| M0 설계 | ✅ 완료 | `84dcb0c` | CLAUDE.md, schema.sql, openapi.yaml, UserContext, api/web 골격 |
+| M1 Backend | 🔄 진행 중 | — | FastAPI + JWT + AES-256 + DB + 라우터 |
+| M4 Frontend | 🔄 진행 중 | — | 랜딩/로그인/대시보드 UI |
+| M2 Pipeline | ⏳ 대기 | — | UserContext 멀티유저 전환 |
+| M3 Payment | ⏳ 대기 | — | Toss 결제 테스트 모드 |
+
+---
+
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*최종 갱신: 2026-03-26 (Phase 5-B 운영 검증 + 설계-구현 불일치 정리 추가)*
-*2026-03-26 (이번 갱신): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14) 추가. 에러 사례 6-29 추가.*
+*최종 갱신: 2026-03-26 (Phase 24 SaaS 전환 섹션 15 추가)*
+*2026-03-26 (이전): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14) 추가. 에러 사례 6-29 추가.*
 *2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화, Phase 13 해석 지성/HOLD-GO 체계, Phase 14H/I 상세, Phase 15A~E 5단계 복합 시제 교정, 에러 사례 6-15b~6-20, 반면교사 패턴 7종*
 *2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13*
 *2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
-*다음 갱신 예정: Phase 5-C 한경 세션 연동 완료 시 / Phase 24 (FastAPI SaaS 서버) 착수 시*
+*다음 갱신 예정: Phase 24 M1/M4 완료 시, M2 Pipeline 통합 완료 시, M3 Toss 결제 완료 시*
