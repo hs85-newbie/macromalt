@@ -2997,7 +2997,7 @@ Phase 5-B 설계 단계(14-9/14-10)와 실제 커밋 상태의 차이:
 
 ## 15. Phase 24 SaaS 전환 Know-How
 
-> Phase 24 착수일: 2026-03-26 | 상태: M0 완료, M1+M4 진행 중
+> Phase 24 착수일: 2026-03-26 | 상태: M0 완료, M1 완료, M4 진행 중
 
 ### 15-1. SaaS 전환 배경 및 목표
 
@@ -3253,7 +3253,7 @@ M2는 반드시 **단독 진행** (M1 완료 후, 다른 모듈과 동시 작업
 | 모듈 | 상태 | 커밋 | 내용 |
 |------|------|------|------|
 | M0 설계 | ✅ 완료 | `84dcb0c` | CLAUDE.md, schema.sql, openapi.yaml, UserContext, api/web 골격 |
-| M1 Backend | 🔄 진행 중 | — | FastAPI + JWT + AES-256 + DB + 라우터 |
+| M1 Backend | ✅ 완료 | `a4227b1` | FastAPI + JWT + AES-256 + DB + 라우터 6개, pytest 10/10 PASS |
 | M4 Frontend | 🔄 진행 중 | — | 랜딩/로그인/대시보드 UI |
 | M2 Pipeline | ⏳ 대기 | — | UserContext 멀티유저 전환 |
 | M3 Payment | ⏳ 대기 | — | Toss 결제 테스트 모드 |
@@ -3266,4 +3266,23 @@ M2는 반드시 **단독 진행** (M1 완료 후, 다른 모듈과 동시 작업
 *2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화, Phase 13 해석 지성/HOLD-GO 체계, Phase 14H/I 상세, Phase 15A~E 5단계 복합 시제 교정, 에러 사례 6-15b~6-20, 반면교사 패턴 7종*
 *2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13*
 *2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
-*다음 갱신 예정: Phase 24 M1/M4 완료 시, M2 Pipeline 통합 완료 시, M3 Toss 결제 완료 시*
+### 15-12. M1 에러 Know-How (실제 발생)
+
+| 에러 | 원인 | 해결 |
+|------|------|------|
+| `email-validator is not installed` | pydantic `EmailStr` 타입 사용 시 필요 | `pip install 'pydantic[email]'` |
+| `No module named 'greenlet'` | SQLAlchemy async 실행 시 필요 | `pip install greenlet` |
+| `ValueError: password cannot be longer than 72 bytes` | bcrypt 5.x + passlib 충돌 (passlib이 내부 72바이트 테스트 실행 시 에러) | `pip install 'bcrypt==4.0.1'` (passlib 호환 버전 고정) |
+
+**bcrypt 버전 고정 이유**: passlib의 `detect_wrap_bug()` 함수가 72바이트 이상 문자열로 bcrypt를 테스트하는데, bcrypt 5.x에서 이를 에러로 처리하도록 변경됨. `requirements.txt`에 `bcrypt==4.0.1` 명시 필수.
+
+---
+
+*END — REPORT_TECHNICAL_KNOWHOW_V1.md*
+*최종 갱신: 2026-03-26 (M1 Backend 완료 반영 - pytest 10/10, bcrypt 에러 Know-How 추가)*
+*2026-03-26 (이전): Phase 24 SaaS 전환 섹션 15 추가 (M0 완료)*
+*2026-03-26 (이전): Phase 5-B 운영 검증 (14-13) + 설계-구현 불일치 정리 (14-14) 추가. 에러 사례 6-29 추가.*
+*2026-03-26 (이전): Phase 10 슬롯 분기/publish_history 구조 (14-8), Phase 12 증거 밀도 강화, Phase 13 해석 지성/HOLD-GO 체계, Phase 14H/I 상세, Phase 15A~E 5단계 복합 시제 교정, 에러 사례 6-15b~6-20, 반면교사 패턴 7종*
+*2026-03-13: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13*
+*2026-03-13 (추가): Phase 5-B DART 재무 연도 fallback + BROKER_KW 확장 + PDF enrich 파이프라인 (14-9/14-10), Phase 5-C DART 원문 파싱 (14-11), Phase 5-D 통합 품질 재검증 이슈 4건 (14-12)*
+*다음 갱신 예정: Phase 24 M4 완료 시, M2 Pipeline 통합 완료 시, M3 Toss 결제 완료 시*
