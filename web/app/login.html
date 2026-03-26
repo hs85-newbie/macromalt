@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>로그인 — macromalt</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { background:#1a1a2e; color:#fff; font-family:'Noto Sans KR',system-ui,sans-serif; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:1.5rem; }
+    .gradient-text { background:linear-gradient(135deg,#6c63ff,#a78bfa); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+    .btn-primary { background:linear-gradient(135deg,#6c63ff,#8b85ff); color:white; border:none; cursor:pointer; transition:opacity 0.2s,transform 0.15s; }
+    .btn-primary:hover { opacity:0.9; transform:translateY(-1px); }
+    .btn-primary:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
+    .input-field { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:white; border-radius:0.625rem; padding:0.75rem 1rem; font-size:0.95rem; width:100%; transition:border-color 0.2s; outline:none; font-family:inherit; }
+    .input-field:focus { border-color:rgba(108,99,255,0.7); box-shadow:0 0 0 3px rgba(108,99,255,0.12); }
+    .input-field::placeholder { color:rgba(255,255,255,0.3); }
+    .tab-btn { padding:0.625rem 1.5rem; border-radius:0.5rem; font-weight:600; font-size:0.95rem; cursor:pointer; transition:all 0.2s; border:none; background:transparent; color:rgba(255,255,255,0.45); }
+    .tab-btn.active { background:rgba(108,99,255,0.18); color:#8b85ff; }
+    .error-box { background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:0.625rem; padding:0.75rem 1rem; color:#fca5a5; font-size:0.875rem; display:none; }
+    .success-box { background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:0.625rem; padding:0.75rem 1rem; color:#86efac; font-size:0.875rem; display:none; }
+    label { display:block; font-size:0.875rem; color:rgba(255,255,255,0.6); margin-bottom:0.375rem; font-weight:500; }
+    .form-group { display:flex; flex-direction:column; gap:0.375rem; }
+    .card { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.09); border-radius:1.25rem; padding:2.5rem; width:100%; max-width:26rem; }
+  </style>
+</head>
+<body>
+
+  <!-- 로고 -->
+  <a href="/index.html" style="display:flex;align-items:center;gap:0.5rem;text-decoration:none;margin-bottom:2rem;">
+    <div style="width:2.25rem;height:2.25rem;border-radius:0.625rem;background:#6c63ff;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:1rem;">M</div>
+    <span style="color:white;font-weight:700;font-size:1.25rem;letter-spacing:-0.02em;">macromalt</span>
+  </a>
+
+  <div class="card">
+    <!-- 탭 -->
+    <div style="display:flex;gap:0.25rem;margin-bottom:2rem;background:rgba(255,255,255,0.04);border-radius:0.625rem;padding:0.25rem;">
+      <button class="tab-btn active" id="tab-login" onclick="switchTab('login')" style="flex:1;">로그인</button>
+      <button class="tab-btn" id="tab-register" onclick="switchTab('register')" style="flex:1;">회원가입</button>
+    </div>
+
+    <!-- 에러/성공 메시지 -->
+    <div class="error-box" id="error-msg"></div>
+    <div class="success-box" id="success-msg"></div>
+
+    <!-- 로그인 폼 -->
+    <form id="form-login" onsubmit="handleLogin(event)" style="display:flex;flex-direction:column;gap:1.25rem;">
+      <div class="form-group">
+        <label for="login-email">이메일</label>
+        <input class="input-field" id="login-email" type="email" placeholder="your@email.com" required autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label for="login-password">비밀번호</label>
+        <input class="input-field" id="login-password" type="password" placeholder="••••••••" required autocomplete="current-password">
+      </div>
+      <button type="submit" id="btn-login" class="btn-primary" style="width:100%;padding:0.875rem;border-radius:0.75rem;font-size:1rem;font-weight:600;margin-top:0.5rem;box-shadow:0 6px 20px rgba(108,99,255,0.32);">
+        로그인
+      </button>
+      <p style="text-align:center;color:rgba(255,255,255,0.35);font-size:0.875rem;">
+        계정이 없으신가요? <button type="button" onclick="switchTab('register')" style="color:#8b85ff;background:none;border:none;cursor:pointer;font-family:inherit;font-size:inherit;">회원가입</button>
+      </p>
+    </form>
+
+    <!-- 회원가입 폼 -->
+    <form id="form-register" onsubmit="handleRegister(event)" style="display:none;flex-direction:column;gap:1.25rem;">
+      <div class="form-group">
+        <label for="reg-name">이름</label>
+        <input class="input-field" id="reg-name" type="text" placeholder="홍길동" required autocomplete="name">
+      </div>
+      <div class="form-group">
+        <label for="reg-email">이메일</label>
+        <input class="input-field" id="reg-email" type="email" placeholder="your@email.com" required autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label for="reg-password">비밀번호 <span style="color:rgba(255,255,255,0.3);font-size:0.8rem;">(8자 이상)</span></label>
+        <input class="input-field" id="reg-password" type="password" placeholder="••••••••" required minlength="8" autocomplete="new-password">
+      </div>
+      <button type="submit" id="btn-register" class="btn-primary" style="width:100%;padding:0.875rem;border-radius:0.75rem;font-size:1rem;font-weight:600;margin-top:0.5rem;box-shadow:0 6px 20px rgba(108,99,255,0.32);">
+        회원가입
+      </button>
+      <p style="text-align:center;color:rgba(255,255,255,0.35);font-size:0.875rem;">
+        이미 계정이 있으신가요? <button type="button" onclick="switchTab('login')" style="color:#8b85ff;background:none;border:none;cursor:pointer;font-family:inherit;font-size:inherit;">로그인</button>
+      </p>
+    </form>
+  </div>
+
+  <p style="color:rgba(255,255,255,0.2);font-size:0.8rem;margin-top:2rem;text-align:center;">
+    © 2026 macromalt &nbsp;·&nbsp; <a href="/index.html" style="color:rgba(255,255,255,0.3);text-decoration:none;">홈으로</a>
+  </p>
+
+  <script src="/assets/api.js"></script>
+  <script>
+    // 이미 로그인된 경우 대시보드로
+    if (localStorage.getItem('access_token')) {
+      window.location.replace('/app/dashboard.html');
+    }
+
+    // 해시로 탭 초기화
+    function initTabFromHash() {
+      if (window.location.hash === '#register') {
+        switchTab('register');
+      }
+    }
+    initTabFromHash();
+    window.addEventListener('hashchange', initTabFromHash);
+
+    function switchTab(tab) {
+      var loginForm = document.getElementById('form-login');
+      var registerForm = document.getElementById('form-register');
+      var tabLogin = document.getElementById('tab-login');
+      var tabRegister = document.getElementById('tab-register');
+
+      clearMessages();
+
+      if (tab === 'login') {
+        loginForm.style.display = 'flex';
+        registerForm.style.display = 'none';
+        tabLogin.classList.add('active');
+        tabRegister.classList.remove('active');
+      } else {
+        loginForm.style.display = 'none';
+        registerForm.style.display = 'flex';
+        tabLogin.classList.remove('active');
+        tabRegister.classList.add('active');
+        history.replaceState(null, '', '#register');
+      }
+    }
+
+    function showError(msg) {
+      var el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.style.display = 'block';
+      document.getElementById('success-msg').style.display = 'none';
+    }
+
+    function showSuccess(msg) {
+      var el = document.getElementById('success-msg');
+      el.textContent = msg;
+      el.style.display = 'block';
+      document.getElementById('error-msg').style.display = 'none';
+    }
+
+    function clearMessages() {
+      document.getElementById('error-msg').style.display = 'none';
+      document.getElementById('success-msg').style.display = 'none';
+    }
+
+    function setLoading(btnId, loading, text, loadingText) {
+      var btn = document.getElementById(btnId);
+      btn.disabled = loading;
+      btn.textContent = loading ? loadingText : text;
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      clearMessages();
+      var email = document.getElementById('login-email').value.trim();
+      var password = document.getElementById('login-password').value;
+      setLoading('btn-login', true, '로그인', '로그인 중...');
+      try {
+        await API.login(email, password);
+        showSuccess('로그인 성공! 대시보드로 이동합니다...');
+        setTimeout(function() {
+          window.location.replace('/app/dashboard.html');
+        }, 600);
+      } catch (err) {
+        showError(err.message || '로그인에 실패했습니다.');
+        setLoading('btn-login', false, '로그인', '로그인 중...');
+      }
+    }
+
+    async function handleRegister(e) {
+      e.preventDefault();
+      clearMessages();
+      var name = document.getElementById('reg-name').value.trim();
+      var email = document.getElementById('reg-email').value.trim();
+      var password = document.getElementById('reg-password').value;
+      if (password.length < 8) {
+        showError('비밀번호는 8자 이상이어야 합니다.');
+        return;
+      }
+      setLoading('btn-register', true, '회원가입', '가입 중...');
+      try {
+        await API.register(email, password, name);
+        showSuccess('가입 완료! 대시보드로 이동합니다...');
+        setTimeout(function() {
+          window.location.replace('/app/dashboard.html');
+        }, 600);
+      } catch (err) {
+        showError(err.message || '회원가입에 실패했습니다.');
+        setLoading('btn-register', false, '회원가입', '가입 중...');
+      }
+    }
+  </script>
+</body>
+</html>
