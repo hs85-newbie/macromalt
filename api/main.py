@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.core.database import create_tables
-from api.routers import auth, payments, pipeline, settings, users
+from core.database import create_tables
+from routers import auth, payments, pipeline, settings, users
 
 app = FastAPI(title="macromalt API", version="1.0.0")
 

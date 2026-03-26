@@ -6,11 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.database import get_db
-from api.core.deps import get_current_user
-from api.core.security import decrypt_api_key, encrypt_api_key
-from api.models.models import User, UserApiKey, UserPipelineSettings, UserWpSettings
-from api.schemas.schemas import (
+from core.database import get_db
+from core.deps import get_current_user
+from core.security import decrypt_api_key, encrypt_api_key
+from models.models import User, UserApiKey, UserPipelineSettings, UserWpSettings
+from schemas.schemas import (
     ApiKeyRequest,
     ApiKeyResponse,
     PipelineSettingsRequest,
