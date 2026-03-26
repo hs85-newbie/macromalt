@@ -291,8 +291,10 @@ def _run_pipeline_main(ctx=None) -> None:
             news_text=_news_txt,
             research_text=_res_txt,
             slot=slot,
+            n=10,
             history_context=_history_ctx,
         )
+        themes = themes[:10]  # 최대 10개 상한
     except Exception as e:
         logger.warning(f"⚠ [Step 0] 테마 선정 실패 — 단일 테마 fallback: {e}")
         themes = [{"priority": 1, "theme": "", "picks_priority": 1, "reason": "fallback"}]
