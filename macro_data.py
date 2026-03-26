@@ -48,6 +48,39 @@ _FRED_SERIES: dict = {
     "vix":          ("VIXCLS",   "VIX 변동성지수"),
 }
 
+# ── IMF 지표 정의 ─────────────────────────────────────────────────────────────
+# (indicator_code, country_code, 레이블)
+_IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
+_IMF_SERIES: dict = {
+    "world_gdp_growth": ("NGDP_RPCH", "001", "세계 실질GDP 성장률(%)"),
+    "us_gdp_growth":    ("NGDP_RPCH", "111", "미국 실질GDP 성장률(%)"),
+    "kr_gdp_growth":    ("NGDP_RPCH", "542", "한국 실질GDP 성장률(%)"),
+    "world_cpi":        ("PCPIPCH",   "001", "세계 소비자물가 상승률(%)"),
+}
+
+
+# ── IMF 조회 ─────────────────────────────────────────────────────────────────
+
+def _fetch_imf_value(indicator: str, country: str) -> Optional[str]:
+    """IMF DataMapper API에서 최신값 1건 조회. 실패 시 None 반환."""
+    url = f"{_IMF_BASE}/{indicator}/{country}"
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json().get("values", {}).get(indicator, {}).get(country, {})
+        if not data:
+            return None
+        # 연도별 딕셔너리에서 가장 최근 유효값 선택
+        latest_year = max(
+            (k for k, v in data.items() if v is not None),
+            default=None,
+        )
+        if latest_year is None:
+            return None
+        return f"{data[latest_year]:.2f} ({latest_year})"
+    except Exception as e:
+        logger.warning(f"[macro_data] IMF 조회 실패 ({indicator}/{country}): {e}")
+    return None
+
 
 # ── 캐시 유틸 ────────────────────────────────────────────────────────────────
 
@@ -183,7 +216,7 @@ def get_macro_snapshot(force_refresh: bool = False) -> dict:
             return cached
 
     logger.info("[macro_data] 거시지표 신규 조회 시작")
-    result: dict = {"korea": {}, "us": {}, "floats": {}}
+    result: dict = {"korea": {}, "us": {}, "global": {}, "floats": {}}
 
     # BOK 조회
     for key, (stat, item, cycle, label) in _BOK_SERIES.items():
@@ -198,6 +231,13 @@ def get_macro_snapshot(force_refresh: bool = False) -> dict:
         result["us"][key] = val or "조회 불가"
         if val:
             logger.info(f"[macro_data] FRED {label}: {val}")
+
+    # IMF 조회
+    for key, (indicator, country, label) in _IMF_SERIES.items():
+        val = _fetch_imf_value(indicator, country)
+        result["global"][key] = val or "조회 불가"
+        if val:
+            logger.info(f"[macro_data] IMF {label}: {val}")
 
     # 교차검증용 float 값 추출
     result["floats"] = {
@@ -259,8 +299,16 @@ def format_macro_for_prompt(snapshot: dict) -> str:
         direction = "정상" if spread >= 0 else "역전 ⚠"
         lines.append(f"  장단기스프레드(10Y-2Y): {spread:+.2f}%p ({direction})")
 
+    glb = snapshot.get("global", {})
+    if glb:
+        lines.append("\n■ 글로벌 거시지표 (IMF DataMapper)")
+        lines.append(f"  세계 GDP성장률: {glb.get('world_gdp_growth', 'N/A')}")
+        lines.append(f"  미국 GDP성장률: {glb.get('us_gdp_growth', 'N/A')}")
+        lines.append(f"  한국 GDP성장률: {glb.get('kr_gdp_growth', 'N/A')}")
+        lines.append(f"  세계 CPI상승률: {glb.get('world_cpi', 'N/A')}")
+
     lines.append(
         "\n※ 위 수치를 글에서 인용 시 출처 표기: "
-        "BOK(한국은행 경제통계시스템) 또는 FRED(미국 연준)"
+        "BOK(한국은행 경제통계시스템), FRED(미국 연준), 또는 IMF DataMapper"
     )
     return "\n".join(lines)
