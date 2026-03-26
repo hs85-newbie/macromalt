@@ -8,11 +8,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.database import get_db, AsyncSessionLocal
-from api.core.deps import get_current_user
-from api.core.security import decrypt_api_key
-from api.models.models import PublishedPost, RunLog, User, UserApiKey, UserWpSettings
-from api.schemas.schemas import (
+from core.database import get_db, AsyncSessionLocal
+from core.deps import get_current_user
+from core.security import decrypt_api_key
+from models.models import PublishedPost, RunLog, User, UserApiKey, UserWpSettings
+from schemas.schemas import (
     PipelineExecuteRequest,
     PublishedPostResponse,
     RunLogResponse,

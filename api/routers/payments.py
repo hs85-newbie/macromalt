@@ -8,11 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.config import settings
-from api.core.database import get_db
-from api.core.deps import get_current_user
-from api.models.models import Subscription, User
-from api.schemas.schemas import (
+from core.config import settings
+from core.database import get_db
+from core.deps import get_current_user
+from models.models import Subscription, User
+from schemas.schemas import (
     PaymentReadyRequest,
     PaymentReadyResponse,
     SubscriptionResponse,

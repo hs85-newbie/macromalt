@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import select
 
-from api.models.models import Subscription, User
+from models.models import Subscription, User
 
 
 async def _register_and_login(client, email="pay@example.com"):

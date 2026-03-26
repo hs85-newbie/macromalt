@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from api.core.database import Base
+from core.database import Base
 
 
 def _now():

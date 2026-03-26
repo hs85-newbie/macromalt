@@ -3,16 +3,16 @@ from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.database import get_db
-from api.core.security import (
+from core.database import get_db
+from core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
     hash_password,
     verify_password,
 )
-from api.models.models import User
-from api.schemas.schemas import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse
+from models.models import User
+from schemas.schemas import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 

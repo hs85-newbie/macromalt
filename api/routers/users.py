@@ -3,11 +3,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.database import get_db
-from api.core.deps import get_current_user
-from api.core.security import hash_password
-from api.models.models import User
-from api.schemas.schemas import UserResponse, UserUpdateRequest
+from core.database import get_db
+from core.deps import get_current_user
+from core.security import hash_password
+from models.models import User
+from schemas.schemas import UserResponse, UserUpdateRequest
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 

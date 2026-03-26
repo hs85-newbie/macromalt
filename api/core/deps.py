@@ -4,8 +4,8 @@ from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.database import get_db
-from api.core.security import decode_token
+from core.database import get_db
+from core.security import decode_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -15,7 +15,7 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ):
     # Import here to avoid circular imports
-    from api.models.models import User
+    from models.models import User
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
