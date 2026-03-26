@@ -28,6 +28,43 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── Phase 24 M2: UserContext 지원 ─────────────────────────────────────────────
+try:
+    from design.user_context import UserContext
+    _USERCONTEXT_AVAILABLE = True
+except ImportError:
+    _USERCONTEXT_AVAILABLE = False
+
+
+def _apply_ctx_to_env(ctx) -> None:
+    """ctx 값을 환경변수에 주입 — 기존 코드 변경 없이 멀티유저 지원."""
+    if ctx.openai_api_key:
+        os.environ["OPENAI_API_KEY"] = ctx.openai_api_key
+    if ctx.gemini_api_key:
+        os.environ["GEMINI_API_KEY"] = ctx.gemini_api_key
+    if ctx.wp_url:
+        os.environ["WORDPRESS_SITE_URL"] = ctx.wp_url
+    if ctx.wp_username:
+        os.environ["WORDPRESS_USERNAME"] = ctx.wp_username
+    if ctx.wp_password:
+        os.environ["WORDPRESS_PASSWORD"] = ctx.wp_password
+    if ctx.dart_api_key:
+        os.environ["DART_API_KEY"] = ctx.dart_api_key
+    if ctx.bok_api_key:
+        os.environ["BOK_API_KEY"] = ctx.bok_api_key
+    if ctx.fred_api_key:
+        os.environ["FRED_API_KEY"] = ctx.fred_api_key
+    if ctx.krx_api_key:
+        os.environ["KRX_API_KEY"] = ctx.krx_api_key
+    if ctx.unsplash_access_key:
+        os.environ["UNSPLASH_ACCESS_KEY"] = ctx.unsplash_access_key
+    if ctx.wp_category_analysis:
+        os.environ["WP_CATEGORY_ANALYSIS"] = str(ctx.wp_category_analysis)
+    if ctx.wp_category_picks:
+        os.environ["WP_CATEGORY_PICKS"] = str(ctx.wp_category_picks)
+    if ctx.wp_category_default:
+        os.environ["WP_CATEGORY_DEFAULT"] = str(ctx.wp_category_default)
+
 
 # ──────────────────────────────────────────────
 # 0. 슬롯 식별 — Phase 10
@@ -192,7 +229,21 @@ def step_publish(post: dict, category_ids: list, step_label: str,
 # ──────────────────────────────────────────────
 # 4. 메인 실행 진입점
 # ──────────────────────────────────────────────
-def main() -> None:
+def run_pipeline(ctx=None) -> None:
+    """
+    파이프라인 실행 진입점 (Phase 24 M2: UserContext 지원).
+
+    ctx: UserContext 인스턴스 (None이면 from_env()로 자동 생성)
+    API 서버에서 멀티유저 실행 시 ctx를 주입, 단독 실행 시 None.
+    """
+    if ctx is not None:
+        _apply_ctx_to_env(ctx)
+
+    _run_pipeline_main(ctx=ctx)
+
+
+def _run_pipeline_main(ctx=None) -> None:
+    """내부 파이프라인 실행 로직."""
     now    = datetime.now()
     run_id = now.strftime("%Y%m%d_%H%M%S")
     slot   = detect_slot(now)
@@ -425,6 +476,11 @@ def main() -> None:
     logger.info(f"✅ macromalt Phase 22 파이프라인 완료 [run_id: {run_id}]")
     logger.info(f"   Post1: {len(post1_results)}개 발행 | Post2: {len(posts2)}개 발행")
     logger.info("=" * 60)
+
+
+def main() -> None:
+    """기존 단독 실행 진입점 — 하위 호환 유지."""
+    run_pipeline()
 
 
 if __name__ == "__main__":
