@@ -1,6 +1,6 @@
 # macromalt 기술 종합 Know-How 보고서 V1
 
-> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 23 기준 (최종 갱신: 2026-03-26, Phase 16J/K + 17 항목 보강)
+> 작성일: 2026-03-26 | 대상: 내부 참조 / 신규 개발자 온보딩 | Phase 23 기준 (최종 갱신: 2026-03-26, Phase 4.3/5-A 항목 보강)
 
 ---
 
@@ -184,7 +184,8 @@ main() 실행
 
 | Phase | 날짜(추정) | 핵심 변경 내용 |
 |-------|-----------|--------------|
-| **Phase 5-A~D** | 2026-03-13 | DART 연동, PDF enrich (pdfplumber), WordPress 자동 발행 기초 |
+| **Phase 4.3** | 2026-03-13 | **리포트 밀도 복원·주제 집중도 강화** — REVISER 보존형 편집장 재정의(90% 보존 강제), `_strip_code_fences()` 공통화, 자동 검증 14/10 기준, P6/P8 프롬프트 강화 |
+| **Phase 5-A~D** | 2026-03-13 | DART 연동(corpCode.xml 캐시, 재무 YoY 비교), PDF enrich (pdfplumber), WordPress 자동 발행 기초 |
 | **Phase 6** | 2026-03-13 | 한경컨센서스 세션 로그인, DART XML 수정공시 처리 |
 | **Phase 7~9** | 2026-03-13 | 실 발행 검증 3회, 투자 권유 억제 (기준5: "매수/유망/담아야" 금지) |
 | **Phase 10** | 2026-03-16 | 슬롯 분기 (morning/evening/us_open/default) + 이력 반복 완화 |
@@ -886,7 +887,62 @@ def get_stock_price(ticker: str) -> float:
 
 ---
 
-### 6-9. [MEDIUM] DART API 공시 중복 수집
+### 6-9. [CRITICAL] DART `company.json` stock_code 파라미터 미지원 → corpCode.xml 캐시 방식 전환
+
+**증상**: `run_dart_financials(["005930"])` 호출 시 `status=100 message=필수값(corp_code)이 누락되었습니다` 오류, 재무 수치 0개 반환.
+
+**원인**: `company.json` API는 `corp_code`(8자리 고유번호)를 **입력**으로 받는 엔드포인트이지, `stock_code`(6자리 종목코드)로 역방향 조회를 지원하지 않는다. 초기 구현에서 이 방향을 잘못 가정했다.
+
+**해결** (Phase 5-A bugfix):
+```python
+# 1. corpCode.xml ZIP 다운로드 (전 상장사 코드 목록)
+CORP_CODE_CACHE_FILE = Path("dart_corp_codes.json")
+CORP_CODE_CACHE_TTL  = 86400  # 1일 (초)
+
+def _load_corp_code_map() -> dict:
+    """stock_code → corp_code 매핑 딕셔너리. 캐시 없거나 TTL 만료 시 재다운로드."""
+    if CORP_CODE_CACHE_FILE.exists():
+        data = json.loads(CORP_CODE_CACHE_FILE.read_text(encoding="utf-8"))
+        if time.time() - data.get("_ts", 0) < CORP_CODE_CACHE_TTL:
+            return data.get("map", {})
+
+    key = _get_dart_api_key()
+    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={key}"
+    resp = requests.get(url, timeout=30)
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+        xml_bytes = z.read("CORPCODE.xml")
+    root = ET.fromstring(xml_bytes)
+
+    mapping = {}
+    for item in root.findall("list"):
+        sc = (item.findtext("stock_code") or "").strip()
+        cc = (item.findtext("corp_code") or "").strip()
+        if sc and cc:
+            mapping[sc] = cc
+
+    CORP_CODE_CACHE_FILE.write_text(
+        json.dumps({"_ts": time.time(), "map": mapping}, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    return mapping
+
+def _stock_code_to_corp_code(stock_code: str) -> Optional[str]:
+    """캐시에서 stock_code → corp_code 변환. 캐시 미스 시 None 반환."""
+    corp_map = _load_corp_code_map()
+    return corp_map.get(stock_code.strip())
+```
+
+**결과**: 삼성전자(005930) CFS 재무 조회 성공, 기업정보 2개 종목 정상 반환 확인.
+
+**교훈**:
+- OpenDART `company.json`은 `corp_code`를 알고 있을 때만 사용 가능.
+- `stock_code → corp_code` 변환은 반드시 `corpCode.xml`(전체 목록 ZIP) 경유.
+- 캐시 TTL 1일로 설정하면 API 호출 1회/일로 절약.
+- `dart_corp_codes.json`은 `.gitignore`에 추가 (로컬 캐시 파일).
+
+---
+
+### 6-10. [MEDIUM] DART API 공시 중복 수집
 
 **증상**: 동일 공시가 여러 번 발행 기사에 반영됨
 
@@ -906,7 +962,118 @@ def deduplicate_disclosures(disclosures: list) -> list:
 
 ---
 
-### 6-10. [MEDIUM] GitHub Actions Secrets 주입 실패
+### 6-10. [MAJOR] Gemini REVISER 과도 축소 — 보존형 편집장 정책으로 해결
+
+**증상**: Step3 REVISER가 수정 후 GPT 초안 대비 70~80%로 축소. 메인픽 분량 400자 미달. 이전 대비 품질 저하.
+
+**원인**: REVISER 역할이 "편집자"로만 정의되어 분량 유지 목표 없이 자유롭게 축약.
+
+**해결** (Phase 4.3):
+```python
+# GEMINI_REVISER_SYSTEM 핵심 추가 내용
+"""
+[★ 분량 보존 원칙 — 최우선 준수]
+- 수정 후 HTML 총 글자 수는 원문의 90% 이상이어야 한다.
+- 문장을 삭제하지 말 것. 삭제 대신 표현만 교체하라.
+- 숫자, 출처, 인과관계 설명, 반대 포인트 — 이 4가지는 어떤 이유로도 삭제 금지.
+- 메인 픽: 400자 미만이면 4구조 보완하여 400자 이상으로 확장.
+- 보조 픽: 300자 미만이면 업황/반대포인트 추가하여 300자 이상으로 확장.
+[★ 위스키/바텐더 비유 금지]
+- 도입부에 이미 있는 경우, 수정 중 추가 생성 금지. 보강 목적 신규 비유 생성 금지.
+"""
+```
+
+**보존율 측정 코드 (verify_draft 내부)**:
+```python
+draft_len   = len(draft)
+revised_len = len(revised)
+ratio = revised_len / draft_len * 100 if draft_len else 0
+logger.info(f"Step3 수정본 채택 | GPT초안 {draft_len}자 → Step3수정본 {revised_len}자 ({ratio:.1f}% 보존)")
+if ratio < 90:
+    logger.warning(f"⚠ REVISER 과도 축소 감지: {draft_len - revised_len}자 감소")
+```
+
+**결과**: Post1 159.2%, Post2 115.8% 보존 실측 확인 (90% 기준 초과 달성).
+
+---
+
+### 6-11. [MAJOR] PICKS 주석 소실 + 검증 오류 (assemble_final_content 이후 검사 문제)
+
+**증상 1**: `assemble_final_content()` 이후 본문에서 `<!-- PICKS: [...] -->` 주석이 사라짐. P10 검증 항목이 항상 FAIL.
+
+**원인 1**: `assemble_final_content()`는 설계 상 PICKS 주석을 제거하는 함수. 그런데 P10 테스트를 최종 content에서 검사하면 항상 미존재 → FAIL.
+
+**증상 2**: REVISER가 수정 과정에서 PICKS 주석을 누락 생성.
+
+**해결**:
+```python
+# generate_stock_picks_report() 반환값에 raw 단계 플래그 추가
+picks_comment_in_raw = bool(re.search(r"<!--\s*PICKS:", raw_content))
+return {
+    ...,
+    "picks_comment_in_raw": picks_comment_in_raw,  # assemble 이전 raw 기준
+}
+
+# P10 검증: final_content 대신 picks_comment_in_raw 사용
+has_picks_comment = post2.get("picks_comment_in_raw", False)
+
+# PICKS 주석 자동 복원 (verify_draft 내부)
+picks_in_draft   = "<!-- PICKS:" in draft
+picks_in_revised = "<!-- PICKS:" in revised
+if picks_in_draft and not picks_in_revised:
+    picks_match = re.search(r"<!--\s*PICKS:.*?-->", draft, re.DOTALL)
+    if picks_match:
+        revised = revised.rstrip() + "\n" + picks_match.group(0)
+```
+
+**교훈**: 후처리 함수가 의도적으로 제거하는 마커를 최종 결과물에서 검증하면 항상 FAIL. 검증 기준을 처리 단계에 맞춰야 함.
+
+---
+
+### 6-12. [MEDIUM] 오탈자/중복 타이핑 — `[해해석]`, `미 미칠` 등 LLM 출력 패턴
+
+**증상**: GPT 또는 Gemini 출력물에 `[해해석]`, `[전전망]`, `[해 해석]`, `미 미칠`, `을 을` 등 단어/태그 이중 출력 발생.
+
+**원인**: LLM이 태그를 생성하다 중단 후 재시작하거나, 스트리밍 중 중복 입력 발생.
+
+**해결** (Phase 5-A 후처리):
+```python
+def _fix_double_typing(text: str) -> str:
+    """LLM 출력 오탈자 교정 — 태그/단어 이중 출력 제거"""
+    # 태그 이중: [해해석] → [해석], [전전망] → [전망]
+    text = re.sub(r'\[해\s*해석\]', '[해석]', text)
+    text = re.sub(r'\[전\s*전망\]', '[전망]', text)
+    # 한글 단어 즉시 중복: "미 미칠" → "미칠", "을 을" → "을"
+    text = re.sub(r'(\b\w+)\s+\1\b', r'\1', text)
+    # 연속 공백 정리
+    text = re.sub(r'  +', ' ', text)
+    return text
+```
+
+적용 위치: `assemble_final_content()`, `generate_deep_analysis()` Step3 수정본 채택 직후.
+
+---
+
+### 6-13. [MINOR] 참고 출처 섹션 단조로움 — 그룹화로 해결
+
+**증상**: 참고 출처가 `<p>NH투자증권, 한국경제, Bloomberg...</p>` 형태의 단일 문자열로 나열.
+
+**해결** (Phase 5-A):
+```python
+def _format_source_section(content: str) -> str:
+    """참고 출처 섹션을 증권사 리서치 / 뉴스 기사 / 기타로 그룹화"""
+    BROKER_KW = ["증권", "투자", "리서치", "자산운용", "캐피탈"]
+    NEWS_KW   = ["경제", "일보", "뉴스", "Reuters", "Bloomberg", "CNBC",
+                 "매경", "한경", "조선", "중앙", "동아", "연합"]
+    # 출처 문자열 파싱 → 분류 → <ul><li> 그룹 구조로 재구성
+    ...
+```
+
+**교훈**: 출처 분류는 키워드 기반이므로 신규 증권사(예: 카카오페이증권) 추가 시 `BROKER_KW` 확장 필요.
+
+---
+
+### 6-14. [MEDIUM] GitHub Actions Secrets 주입 실패
 
 **증상**: Actions에서 `OPENAI_API_KEY=None` 오류
 
@@ -1611,10 +1778,155 @@ Phase가 진행되면서 품질 검증 기준이 누적된 방식:
 | handoff 없이 대화 종료 | 다음 대화에서 맥락 완전 소실 | Phase 종료마다 통합 핸드오프 문서 작성 |
 | `ast.Assign`으로 타입 주석 할당 탐지 | `AnnAssign`은 탐지 못 함 (false "not found") | `isinstance(node, (ast.Assign, ast.AnnAssign))` 병용 |
 | CONDITIONAL GO 상태에서 계열 종료 진행 | 잔여 이슈가 누적될 경우 다음 세션에서 맥락 소실 | CONDITIONAL GO 종료 시 반드시 Phase 17 우선순위 항목 + 잔여 이슈 목록을 total handoff에 명시 |
+| OpenDART `company.json`에 stock_code 직접 전달 | `status=100` 오류, 재무 수치 0건 | `corpCode.xml` ZIP 다운로드 → 로컬 캐시 매핑 경유 (6-9 참조) |
+| REVISER를 역할 지정 없이 단순 편집자로 정의 | GPT 초안 대비 70~80% 축소, 품질 저하 | "보존형 편집장" 명시 + 90% 보존 강제 + 분량 미달 시 보강 규칙 (6-10 참조) |
+| PICKS 주석 검증을 assemble_final_content() 이후 content에서 수행 | 설계상 주석 제거 함수이므로 P10 항상 FAIL | 반환값에 `picks_comment_in_raw` 필드 추가 → raw 단계에서 검증 (6-11 참조) |
 
 ---
 
-### 14-6. 보고서 작성 기준 (Phase 17 확정)
+### 14-6. Phase 4.3 자동 검증 체계 Know-How
+
+#### 설계 배경
+
+글 생성 후 품질을 사람이 매번 확인하면 운영 비용 급증. `__main__` 진입점에 자동 검증 기준을 내장해 CI 수준의 품질 보증 구현.
+
+#### Post1 14개 기준 / Post2 10개 기준
+
+**Post1 핵심 기준:**
+
+| 번호 | 기준 | 판단 방식 |
+|------|------|---------|
+| 1 | Gemini 출력 구조화 JSON 여부 | `isinstance(materials, dict) and "theme" in materials` |
+| 8 | 위스키·바텐더 비유 1회 이하 | regex count (도입부 이후 제외) |
+| 11 | 숫자 없는 문단 연속 2개 미만 | 반대시각·체크포인트 섹션 **예외 처리** 적용 |
+| 12 | 완충 문장 4회 미만 | "긍정적이다", "수혜가 예상된다" 등 패턴 카운트 |
+
+**Post2 핵심 기준:**
+
+| 번호 | 기준 | 판단 방식 |
+|------|------|---------|
+| P4 | 보조픽 분량 ≥ 300자 | `_log_picks_section_lengths()` 실측값 |
+| P6 | 왜지금 구조 | 현재 시점 트리거 키워드 (`수주`, `실적`, `공시` 등) 포함 여부 |
+| P8 | 반영변수(PER/수급/괴리율) | 밸류에이션 키워드 포함 여부 |
+| P10 | PICKS 주석 존재 | `picks_comment_in_raw` 필드 — assemble 이전 raw 기준 |
+
+#### 11번 기준 예외 처리 (반대시각/체크포인트 섹션)
+
+반대 시각, 리스크 섹션은 의도적으로 정성적 서술. 숫자 없는 문단이 연속으로 나와도 정상.
+
+```python
+_EXEMPT_SECTIONS = ["반대 시각", "체크포인트", "반대포인트", "리스크 요인", "불확실"]
+_cur_h3 = ""
+for _tag in _soup.find_all(["h3", "p"]):
+    if _tag.name == "h3":
+        _cur_h3 = _tag.get_text(strip=True)
+        cur = 0
+    elif _tag.name == "p":
+        if any(kw in _cur_h3 for kw in _EXEMPT_SECTIONS):
+            continue  # 해당 섹션 카운터 제외
+```
+
+#### `_strip_code_fences()` 공통 헬퍼
+
+GPT/Gemini 출력에서 코드펜스, 백틱 래퍼, 설명 텍스트를 공통 제거. 모든 게시 경로에서 일관 적용.
+
+```python
+def _strip_code_fences(text: str) -> str:
+    text = re.sub(r"^```(?:html)?\s*\n?", "", text.strip(), flags=re.IGNORECASE)
+    text = re.sub(r"\n?```\s*$", "", text, flags=re.IGNORECASE)
+    # 문서 내 잔여 코드펜스, 따옴표 래퍼, HTML 앞뒤 설명 텍스트 추가 제거
+    ...
+    return text.strip()
+```
+
+**적용 위치**: `assemble_final_content()`, `generate_deep_analysis()` draft, `generate_stock_picks_report()` draft, `verify_draft()` Step3b 수정본 — 총 4곳.
+
+#### P6(왜지금) / P8(반영변수) 프롬프트 강화 패턴
+
+단순 "테마와 관련 있기 때문"이 P6를 통과하지 못하도록 GPT_WRITER_PICKS_SYSTEM에 ✅/❌ 예시 명시:
+
+```
+문장 1 — 왜 지금 이 종목인가 [P6 강화]
+✅ 충족: "이번 주 NVIDIA 실적 발표 후 HBM 공급사에 수주 문의가 집중됐기 때문이다"
+❌ 불충족: "AI 인프라 투자 확대 테마에서 수혜가 기대되는 종목이기 때문이다"
+
+문장 4 — 반영 변수 [P8 강화]
+✅ 충족: "HBM 기대감은 이미 주가에 반영돼 PER이 역사적 평균 대비 40% 프리미엄 구간이다"
+❌ 불충족: "글로벌 경기 둔화와 불확실성이 리스크로 존재한다"
+```
+
+---
+
+### 14-7. DART 공시 → Gemini facts 주입 파이프라인 (Phase 5-A)
+
+#### 전체 데이터 흐름
+
+```
+run_dart_disclosure_scan(days=14)        # 전체 시장 100건 공시 스캔 (심층분석용)
+    ↓ format_dart_for_prompt()
+    ↓ {dart_text} → GEMINI_ANALYST_USER 주입
+    ↓ Gemini가 공시 이벤트를 facts로 필터링 (테마 관련성 판단)
+
+gemini_select_tickers_v2()               # 픽 종목 확정 후
+    ↓
+run_dart_financials(kr_stock_codes)      # KR 픽 종목만 재무 조회 (좁게)
+run_dart_company_info(kr_stock_codes)
+    ↓ format_dart_for_prompt(financials=..., company_info=...)
+    ↓ context_text에 병합 → GPT_WRITER_PICKS_SYSTEM 참고 데이터로 주입
+```
+
+#### DART_DISCLOSURE_EVENT_MAP 키워드 매핑 (확장 가능 상수)
+
+```python
+DART_DISCLOSURE_EVENT_MAP: dict = {
+    "단일판매":      "수주계약",
+    "공급계약":      "수주계약",
+    "자기주식 취득": "자사주취득",
+    "유상증자":      "유상증자",
+    "전환사채":      "CB발행",
+    "신주인수권부사채": "BW발행",
+    "합병":          "합병",
+    "소송":          "소송",
+    ...
+}
+# → 새 이벤트 추가 시 이 딕셔너리만 수정. 코드 전체 변경 불필요.
+```
+
+#### 재무 수치 YoY 비교 구조
+
+```python
+# fnlttSinglAcnt 응답 → accounts 딕셔너리
+accounts["매출액"] = {
+    "thstrm": 300151643,  # 당기 (백만원)
+    "frmtrm": 258935494,  # 전기 (백만원) — YoY 비교 가능
+    "unit":   "백만원",
+}
+# 부채비율: 직접 계산 (부채총계 / 자본총계 × 100)
+# CFS(연결재무제표) 우선, 없으면 OFS(개별재무제표) fallback
+```
+
+#### API_KEY 미설정 시 파이프라인 안전 보장
+
+```python
+def _get_dart_api_key() -> str:
+    key = os.getenv("DART_API_KEY", "").strip()
+    if not key:
+        raise ValueError("DART_API_KEY 미설정")  # _dart_get() 내부에서 catch
+    return key
+
+def _dart_get(endpoint, params, label="") -> dict | None:
+    try:
+        key = _get_dart_api_key()
+    except ValueError as e:
+        logger.warning(f"[DART{label}] {e}")
+        return None  # ← None 반환으로 파이프라인 계속 진행
+```
+
+`dart_text=""` 기본값으로 DART 키 없는 환경에서도 `GEMINI_ANALYST_USER.format(dart_text="")` 정상 동작.
+
+---
+
+### 14-8. 보고서 작성 기준 (Phase 17 확정)
 
 Phase 17에서 확정된 상세 보고서 작성 기준 (`PHASE17_REPORT_FULL_BODY_REQUIREMENT.md`):
 
@@ -1639,4 +1951,5 @@ Phase 17에서 확정된 상세 보고서 작성 기준 (`PHASE17_REPORT_FULL_BO
 
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
 *Phase 23 기준 최종 갱신: 2026-03-26 (Phase 17 항목 보강 포함)*
+*2026-03-13 보강: Phase 4.3 자동 검증 체계 + Phase 5-A DART 연동 상세 + 에러 사례 6-9~6-13 신규 추가*
 *다음 갱신 예정: Phase 24 (FastAPI SaaS 서버) 또는 SEO/수익화 트랙 완료 시*
