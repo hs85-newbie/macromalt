@@ -2,10 +2,211 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>macromalt — 매크로 분석 자동화</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>macromalt — 매크로 분석, 자동으로</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { background-color: #1a1a2e; color: #fff; font-family: 'Noto Sans KR', sans-serif; }
+    .gradient-text {
+      background: linear-gradient(135deg, #6c63ff 0%, #a78bfa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .card-hover:hover { transform: translateY(-4px); box-shadow: 0 12px 40px rgba(108,99,255,0.2); }
+    .btn-primary { background: linear-gradient(135deg, #6c63ff, #8b85ff); transition: opacity 0.2s, transform 0.15s; display: inline-block; }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+  </style>
 </head>
-<body>
-  <h1>macromalt</h1>
-  <!-- M4에서 완성 -->
+<body style="background:#1a1a2e;min-height:100vh;">
+
+  <!-- 네비바 -->
+  <nav style="position:fixed;top:0;left:0;right:0;z-index:50;background:rgba(26,26,46,0.88);backdrop-filter:blur(12px);border-bottom:1px solid rgba(255,255,255,0.05);">
+    <div style="max-width:72rem;margin:0 auto;padding:0 1.5rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;height:4rem;">
+        <a href="/index.html" style="display:flex;align-items:center;gap:0.5rem;text-decoration:none;">
+          <div style="width:2rem;height:2rem;border-radius:0.5rem;background:#6c63ff;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:0.875rem;">M</div>
+          <span style="color:white;font-weight:700;font-size:1.125rem;letter-spacing:-0.02em;">macromalt</span>
+        </a>
+        <div style="display:flex;align-items:center;gap:0.75rem;">
+          <a href="/app/login.html" id="nav-login" style="color:rgba(255,255,255,0.65);font-size:0.875rem;font-weight:500;padding:0.5rem 0.75rem;border-radius:0.5rem;text-decoration:none;transition:color 0.2s;">로그인</a>
+          <a href="/app/login.html#register" id="nav-cta" class="btn-primary" style="color:white;font-size:0.875rem;font-weight:500;padding:0.5rem 1rem;border-radius:0.5rem;text-decoration:none;box-shadow:0 4px 16px rgba(108,99,255,0.35);">무료 시작</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- 히어로 -->
+  <section style="padding-top:8rem;padding-bottom:6rem;padding-left:1.5rem;padding-right:1.5rem;background:radial-gradient(ellipse at 60% 0%,rgba(108,99,255,0.16) 0%,transparent 65%),#1a1a2e;">
+    <div style="max-width:56rem;margin:0 auto;text-align:center;">
+      <div style="display:inline-flex;align-items:center;gap:0.5rem;background:rgba(108,99,255,0.1);border:1px solid rgba(108,99,255,0.3);border-radius:9999px;padding:0.375rem 1rem;margin-bottom:2rem;">
+        <span style="width:0.5rem;height:0.5rem;border-radius:9999px;background:#6c63ff;animation:pulse 2s infinite;"></span>
+        <span style="color:#8b85ff;font-size:0.875rem;font-weight:500;">AI 기반 매크로 분석 자동화</span>
+      </div>
+      <h1 style="font-size:clamp(2.5rem,6vw,4.5rem);font-weight:700;line-height:1.15;margin-bottom:1.5rem;">
+        매크로 분석,<br><span class="gradient-text">자동으로</span>
+      </h1>
+      <p style="font-size:1.25rem;color:rgba(255,255,255,0.6);max-width:36rem;margin:0 auto 2.5rem;line-height:1.7;">
+        OpenAI + Gemini가 글로벌 거시경제 데이터를 분석하고 WordPress에 자동 발행합니다. 매일, 아침저녁.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:1rem;">
+        <a href="/app/login.html#register" class="btn-primary" style="color:white;font-weight:600;padding:1rem 2rem;border-radius:0.75rem;font-size:1.125rem;text-decoration:none;box-shadow:0 8px 28px rgba(108,99,255,0.38);">무료로 시작하기</a>
+        <a href="#features" style="color:rgba(255,255,255,0.65);font-weight:500;padding:1rem 2rem;border-radius:0.75rem;font-size:1.125rem;border:1px solid rgba(255,255,255,0.12);text-decoration:none;transition:color 0.2s;">더 알아보기 →</a>
+      </div>
+      <!-- 통계 -->
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:2rem;margin-top:4rem;text-align:center;">
+        <div><div style="font-size:1.875rem;font-weight:700;" class="gradient-text">23+</div><div style="color:rgba(255,255,255,0.45);font-size:0.875rem;margin-top:0.25rem;">Phase 완성</div></div>
+        <div style="width:1px;background:rgba(255,255,255,0.1);align-self:stretch;"></div>
+        <div><div style="font-size:1.875rem;font-weight:700;" class="gradient-text">2회/일</div><div style="color:rgba(255,255,255,0.45);font-size:0.875rem;margin-top:0.25rem;">자동 발행</div></div>
+        <div style="width:1px;background:rgba(255,255,255,0.1);align-self:stretch;"></div>
+        <div><div style="font-size:1.875rem;font-weight:700;" class="gradient-text">₩250</div><div style="color:rgba(255,255,255,0.45);font-size:0.875rem;margin-top:0.25rem;">회당 평균 비용</div></div>
+        <div style="width:1px;background:rgba(255,255,255,0.1);align-self:stretch;"></div>
+        <div><div style="font-size:1.875rem;font-weight:700;" class="gradient-text">6종</div><div style="color:rgba(255,255,255,0.45);font-size:0.875rem;margin-top:0.25rem;">데이터 소스 연동</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 기능 카드 -->
+  <section id="features" style="padding:6rem 1.5rem;">
+    <div style="max-width:72rem;margin:0 auto;">
+      <div style="text-align:center;margin-bottom:4rem;">
+        <h2 style="font-size:2rem;font-weight:700;margin-bottom:1rem;">왜 macromalt인가?</h2>
+        <p style="color:rgba(255,255,255,0.5);font-size:1.125rem;">복잡한 매크로 분석을 완전 자동화하는 세 가지 핵심 기능</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.5rem;">
+
+        <div class="card-hover" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:1rem;padding:2rem;">
+          <div style="width:3.5rem;height:3.5rem;border-radius:1rem;background:rgba(108,99,255,0.15);display:flex;align-items:center;justify-content:center;margin-bottom:1.5rem;">
+            <svg style="width:1.75rem;height:1.75rem;color:#6c63ff;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          </div>
+          <h3 style="font-size:1.25rem;font-weight:700;margin-bottom:0.75rem;">AI 분석 자동화</h3>
+          <p style="color:rgba(255,255,255,0.5);font-size:0.9rem;line-height:1.7;">OpenAI GPT-4o + Gemini 1.5 Pro가 DART, BOK, FRED, KRX 데이터를 실시간 분석하여 심층 매크로 리포트를 자동 생성합니다.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:1.25rem;">
+            <span style="font-size:0.75rem;background:rgba(108,99,255,0.12);color:rgba(139,133,255,0.9);padding:0.25rem 0.75rem;border-radius:9999px;">GPT-4o</span>
+            <span style="font-size:0.75rem;background:rgba(108,99,255,0.12);color:rgba(139,133,255,0.9);padding:0.25rem 0.75rem;border-radius:9999px;">Gemini 1.5 Pro</span>
+            <span style="font-size:0.75rem;background:rgba(108,99,255,0.12);color:rgba(139,133,255,0.9);padding:0.25rem 0.75rem;border-radius:9999px;">6종 데이터소스</span>
+          </div>
+        </div>
+
+        <div class="card-hover" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:1rem;padding:2rem;">
+          <div style="width:3.5rem;height:3.5rem;border-radius:1rem;background:rgba(34,197,94,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:1.5rem;">
+            <svg style="width:1.75rem;height:1.75rem;" fill="none" stroke="#4ade80" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+          </div>
+          <h3 style="font-size:1.25rem;font-weight:700;margin-bottom:0.75rem;">WordPress 자동 발행</h3>
+          <p style="color:rgba(255,255,255,0.5);font-size:0.9rem;line-height:1.7;">생성된 분석 글이 WordPress 사이트에 자동 발행됩니다. 카테고리, 이미지, SEO 메타데이터까지 완전 자동 처리합니다.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:1.25rem;">
+            <span style="font-size:0.75rem;background:rgba(34,197,94,0.12);color:rgba(74,222,128,0.85);padding:0.25rem 0.75rem;border-radius:9999px;">REST API</span>
+            <span style="font-size:0.75rem;background:rgba(34,197,94,0.12);color:rgba(74,222,128,0.85);padding:0.25rem 0.75rem;border-radius:9999px;">아침/저녁 스케줄</span>
+            <span style="font-size:0.75rem;background:rgba(34,197,94,0.12);color:rgba(74,222,128,0.85);padding:0.25rem 0.75rem;border-radius:9999px;">SEO 최적화</span>
+          </div>
+        </div>
+
+        <div class="card-hover" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:1rem;padding:2rem;">
+          <div style="width:3.5rem;height:3.5rem;border-radius:1rem;background:rgba(245,158,11,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:1.5rem;">
+            <svg style="width:1.75rem;height:1.75rem;" fill="none" stroke="#fbbf24" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          </div>
+          <h3 style="font-size:1.25rem;font-weight:700;margin-bottom:0.75rem;">비용 투명 추적</h3>
+          <p style="color:rgba(255,255,255,0.5);font-size:0.9rem;line-height:1.7;">OpenAI 캐시 토큰 절감액 포함 실시간 비용 모니터링. 회당, 월별 원화(₩) 환산 비용을 대시보드에서 바로 확인합니다.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:1.25rem;">
+            <span style="font-size:0.75rem;background:rgba(245,158,11,0.12);color:rgba(251,191,36,0.85);padding:0.25rem 0.75rem;border-radius:9999px;">캐시 절감 추적</span>
+            <span style="font-size:0.75rem;background:rgba(245,158,11,0.12);color:rgba(251,191,36,0.85);padding:0.25rem 0.75rem;border-radius:9999px;">원화 환산</span>
+            <span style="font-size:0.75rem;background:rgba(245,158,11,0.12);color:rgba(251,191,36,0.85);padding:0.25rem 0.75rem;border-radius:9999px;">월별 집계</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 가격표 -->
+  <section id="pricing" style="padding:6rem 1.5rem;">
+    <div style="max-width:52rem;margin:0 auto;">
+      <div style="text-align:center;margin-bottom:4rem;">
+        <h2 style="font-size:2rem;font-weight:700;margin-bottom:1rem;">심플한 가격 정책</h2>
+        <p style="color:rgba(255,255,255,0.5);font-size:1.125rem;">필요한 기능만, 합리적인 가격으로</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:2rem;">
+
+        <!-- Free -->
+        <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:1.25rem;padding:2rem;">
+          <h3 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;">Free</h3>
+          <div style="display:flex;align-items:flex-end;gap:0.25rem;margin-bottom:0.75rem;">
+            <span style="font-size:3rem;font-weight:700;">₩0</span>
+            <span style="color:rgba(255,255,255,0.4);margin-bottom:0.5rem;">/월</span>
+          </div>
+          <p style="color:rgba(255,255,255,0.5);margin-bottom:1.5rem;font-size:0.9rem;">시작하기에 충분한 기본 기능</p>
+          <ul style="list-style:none;padding:0;margin:0 0 2rem;display:flex;flex-direction:column;gap:0.75rem;">
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 대시보드 접근</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> API 키 등록 및 관리</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> WordPress 연결 설정</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 실행 이력 조회</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.35);font-size:0.9rem;"><span style="color:rgba(255,255,255,0.2);">✗</span> 파이프라인 수동 실행</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.35);font-size:0.9rem;"><span style="color:rgba(255,255,255,0.2);">✗</span> 자동 스케줄 실행</li>
+          </ul>
+          <a href="/app/login.html#register" style="display:block;width:100%;text-align:center;padding:0.75rem;border-radius:0.75rem;border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.65);font-weight:600;text-decoration:none;transition:all 0.2s;">무료로 시작</a>
+        </div>
+
+        <!-- Pro -->
+        <div style="background:rgba(108,99,255,0.08);border:2px solid rgba(108,99,255,0.45);border-radius:1.25rem;padding:2rem;position:relative;overflow:hidden;">
+          <div style="position:absolute;top:1rem;right:1rem;background:#6c63ff;color:white;font-size:0.75rem;font-weight:700;padding:0.25rem 0.75rem;border-radius:9999px;">추천</div>
+          <h3 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;">Pro</h3>
+          <div style="display:flex;align-items:flex-end;gap:0.25rem;margin-bottom:0.75rem;">
+            <span style="font-size:3rem;font-weight:700;" class="gradient-text">₩49,900</span>
+            <span style="color:rgba(255,255,255,0.4);margin-bottom:0.5rem;">/월</span>
+          </div>
+          <p style="color:rgba(255,255,255,0.5);margin-bottom:1.5rem;font-size:0.9rem;">완전 자동화를 원하는 분을 위한 플랜</p>
+          <ul style="list-style:none;padding:0;margin:0 0 2rem;display:flex;flex-direction:column;gap:0.75rem;">
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> Free의 모든 기능</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 파이프라인 수동 실행 (무제한)</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 아침/저녁 자동 스케줄</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 회당 최대 10개 포스트 발행</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 비용 절감 분석 리포트</li>
+            <li style="display:flex;align-items:center;gap:0.75rem;color:rgba(255,255,255,0.7);font-size:0.9rem;"><span style="color:#4ade80;">✓</span> 이메일 알림</li>
+          </ul>
+          <a href="/app/login.html#register" class="btn-primary" style="display:block;width:100%;text-align:center;padding:0.75rem;border-radius:0.75rem;color:white;font-weight:600;text-decoration:none;box-shadow:0 6px 20px rgba(108,99,255,0.35);">Pro 시작하기</a>
+        </div>
+
+      </div>
+      <p style="text-align:center;color:rgba(255,255,255,0.25);font-size:0.875rem;margin-top:1.5rem;">AI API 사용 비용(OpenAI, Gemini)은 본인 API 키 기준으로 별도 과금됩니다. 평균 ₩250/회.</p>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section style="padding:6rem 1.5rem;text-align:center;">
+    <div style="max-width:42rem;margin:0 auto;">
+      <h2 style="font-size:2rem;font-weight:700;margin-bottom:1.5rem;">지금 바로 시작하세요</h2>
+      <p style="color:rgba(255,255,255,0.5);font-size:1.125rem;margin-bottom:2.5rem;">복잡한 설정 없이 5분 안에 첫 번째 매크로 분석 글을 자동 발행해보세요.</p>
+      <a href="/app/login.html#register" class="btn-primary" style="color:white;font-weight:600;padding:1rem 2.5rem;border-radius:0.75rem;font-size:1.125rem;text-decoration:none;box-shadow:0 8px 28px rgba(108,99,255,0.38);">무료로 시작하기 →</a>
+    </div>
+  </section>
+
+  <!-- 푸터 -->
+  <footer style="border-top:1px solid rgba(255,255,255,0.06);padding:3rem 1.5rem;">
+    <div style="max-width:72rem;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1.5rem;">
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        <div style="width:1.75rem;height:1.75rem;border-radius:0.5rem;background:#6c63ff;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:0.75rem;">M</div>
+        <span style="color:rgba(255,255,255,0.65);font-weight:600;">macromalt</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:1.5rem;color:rgba(255,255,255,0.3);font-size:0.875rem;">
+        <a href="#" style="color:rgba(255,255,255,0.3);text-decoration:none;">이용약관</a>
+        <a href="#" style="color:rgba(255,255,255,0.3);text-decoration:none;">개인정보처리방침</a>
+        <a href="mailto:support@macromalt.com" style="color:rgba(255,255,255,0.3);text-decoration:none;">문의</a>
+      </div>
+      <p style="color:rgba(255,255,255,0.2);font-size:0.875rem;">© 2026 macromalt. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    // 이미 로그인된 경우 링크 변경
+    if (localStorage.getItem('access_token')) {
+      var l = document.getElementById('nav-login');
+      var c = document.getElementById('nav-cta');
+      if (l) { l.textContent = '대시보드'; l.href = '/app/dashboard.html'; }
+      if (c) { c.textContent = '대시보드 열기'; c.href = '/app/dashboard.html'; }
+    }
+  </script>
 </body>
 </html>
