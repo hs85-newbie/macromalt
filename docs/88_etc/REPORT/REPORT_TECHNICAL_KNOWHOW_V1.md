@@ -3332,9 +3332,76 @@ TOSS_CLIENT_KEY = test_ck_...
 
 ---
 
+### 15-15. Railway 프로덕션 배포 Know-How (실제 발생 에러)
+
+Phase 24 Railway 배포 과정에서 발생한 에러 5종 순서대로 정리.
+
+#### 에러 1: `No module named 'api'`
+- **원인**: Railway Root Directory=`api/` 설정 시 컨테이너 내 `/app`=`api/` 폴더. `from api.core.xxx` 임포트가 실패.
+- **해결**: `api/` 내 모든 파일에서 `from api.xxx` → `from xxx`로 일괄 변경 (`sed -i 's/from api\./from /g'`)
+
+#### 에러 2: `No module named 'psycopg2'`
+- **원인**: Railway PostgreSQL URL이 `postgresql://`로 주입되는데, SQLAlchemy async engine은 `postgresql+asyncpg://` 필요.
+- **해결**: `database.py`에서 URL 자동 변환:
+```python
+if url.startswith("postgresql://") or url.startswith("postgres://"):
+    url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+```
+
+#### 에러 3: `email-validator is not installed`
+- **원인**: pydantic `EmailStr` 타입 사용 시 `email-validator` 패키지 필요. `api/requirements.txt`에 누락.
+- **해결**: `requirements.txt`에 `email-validator>=2.0` 추가.
+
+#### 에러 4: `can't subtract offset-naive and offset-aware datetimes`
+- **원인**: PostgreSQL `TIMESTAMP WITHOUT TIME ZONE` 컬럼에 timezone-aware datetime(`tzinfo=UTC`) 삽입 불가.
+- **해결**: `models.py`의 모든 `DateTime` → `DateTime(timezone=True)` 변경 (TIMESTAMPTZ 사용).
+
+#### 에러 5: `AES_SECRET_KEY must be exactly 32 bytes, got 64`
+- **원인**: Railway Variables에 입력한 AES 키가 hex string(64자) 형태.
+- **해결**: `security.py`에서 자동 처리:
+```python
+def _get_aes_key() -> bytes:
+    raw = settings.AES_SECRET_KEY
+    if len(raw) == 64:
+        try:
+            return bytes.fromhex(raw)  # hex decode → 32 bytes
+        except ValueError:
+            pass
+    return raw.encode()[:32]
+```
+
+---
+
+### 15-16. Toss 웹훅 버그 수정 (2026-03-26)
+
+#### Bug 1: billingKey 없으면 웹훅 처리 스킵
+- **원인**: `PAYMENT_STATUS_CHANGED` 이벤트는 `billingKey`를 항상 포함하지 않음. 기존 코드는 `billing_key` 없으면 즉시 `{"ok": True}` 반환.
+- **해결**: 3단계 fallback — `billingKey` → `customerKey` → `customerEmail` 순으로 구독 조회.
+
+#### Bug 2: PAYMENT_STATUS_CHANGED + status=CANCELED 미처리
+- **원인**: `is_cancel` 조건에 `"CANCEL"` 이벤트명만 있었으나 실제 Toss API는 이 이벤트를 보내지 않음.
+- **해결**: `is_cancel = event_type in ("BILLING_DELETED",) or (event_type == "PAYMENT_STATUS_CHANGED" and payment_status == "CANCELED")`
+
+---
+
+### 15-17. 프론트엔드 → API 서빙 구조
+
+Railway Root Directory=`api/`이므로 `web/` 폴더를 `api/web/`에 위치시키고 FastAPI StaticFiles로 마운트:
+
+```python
+# api/main.py
+_WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
+if os.path.isdir(_WEB_DIR):
+    app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")
+```
+
+**주의**: `app.mount("/", ...)`는 반드시 모든 API 라우터 `include_router` 이후에 선언해야 함. 앞에 선언 시 API 경로가 정적 파일로 가로채임.
+
+---
+
 *END — REPORT_TECHNICAL_KNOWHOW_V1.md*
-*최종 갱신: 2026-03-26 (Phase 24 M0~M4 전체 완료 - pytest 18/18 PASS)*
-*2026-03-26: M3 Toss 결제 (3bbc2ff), M2 Pipeline (cba7bea), M4 Frontend (c81ac24), M1 Backend (a4227b1), M0 설계 (84dcb0c)*
-*2026-03-26 (이전): Phase 5-B 운영 검증, 설계-구현 불일치 정리*
+*최종 갱신: 2026-03-26 (Phase 24 Railway 프로덕션 배포 + E2E 검증 완료)*
+*2026-03-26: Railway 배포 에러 5종 해결, Toss 웹훅 버그 2종 수정, 프론트엔드 서빙 완료 (b93129f)*
+*2026-03-26 (이전): M0~M4 구현, pytest 18/18 PASS*
 *2026-03-13: Phase 4.3~5-D 상세 추가*
-*다음 갱신 예정: Phase 24 E2E 통합 검증, Railway 프로덕션 배포 완료 시*
