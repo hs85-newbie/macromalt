@@ -258,10 +258,11 @@ def _run_pipeline_main(ctx=None) -> None:
 
     # ── 발행 시간 스케줄 (실행 시점 기준 상대 오프셋, 단위: 분) ──
     # 절대 시각 방식은 크론 실행 시간과 역전될 수 있어 상대 방식으로 변경.
-    # Post1 5개: +10, +40, +70, +100, +130분 후
-    # Post2 3개: +160, +190, +220분 후
-    _POST1_OFFSETS = [10, 40, 70, 100, 130]
-    _POST2_OFFSETS = [160, 190, 220]
+    # Post1 N개: +10분부터 30분 간격 동적 생성 (테마 수에 맞춤)
+    # Post2 3개: Post1 마지막 오프셋 이후 30분 간격
+    _POST1_INTERVAL = 30   # Post1 발행 간격 (분)
+    _POST1_BASE     = 10   # 첫 Post1 오프셋 (분)
+    _POST2_OFFSETS  = []   # 발행 시점에 동적 계산
 
     def _make_scheduled_at(offset_min: int) -> str:
         """실행 시점(now) 기준 offset_min분 후 ISO 8601 문자열 반환."""
@@ -290,7 +291,6 @@ def _run_pipeline_main(ctx=None) -> None:
             news_text=_news_txt,
             research_text=_res_txt,
             slot=slot,
-            n=5,
             history_context=_history_ctx,
         )
     except Exception as e:
@@ -399,12 +399,22 @@ def _run_pipeline_main(ctx=None) -> None:
     # ── Step 3: 발행 ─────────────────────────────────────────────
     from publisher import get_or_create_wp_category
 
+    # Post1 오프셋 동적 생성: _POST1_BASE 부터 _POST1_INTERVAL 간격
+    n_post1 = len(posts1)
+    post1_offsets = [_POST1_BASE + i * _POST1_INTERVAL for i in range(n_post1)]
+    # Post2 오프셋: Post1 마지막 오프셋 이후 30분 간격
+    post1_last = post1_offsets[-1] if post1_offsets else _POST1_BASE
+    _POST2_OFFSETS = [post1_last + 30 + i * 30 for i in range(len(posts2))]
+
+    logger.info(f"[Step 3] Post1 {n_post1}개 오프셋: {post1_offsets}")
+    logger.info(f"[Step 3] Post2 {len(posts2)}개 오프셋: {_POST2_OFFSETS}")
+
     post1_results = []
     for i, post1 in enumerate(posts1):
         try:
             theme_name = post1.get("_theme_info", {}).get("theme") or post1.get("theme", "")
             cat_id = get_or_create_wp_category(theme_name, _WP_ANALYSIS_PARENT)
-            sched  = _make_scheduled_at(_POST1_OFFSETS[i]) if i < len(_POST1_OFFSETS) else ""
+            sched  = _make_scheduled_at(post1_offsets[i])
             result = step_publish(
                 post1, [_WP_ANALYSIS_PARENT, cat_id], f"Step 3A-{i+1}",
                 scheduled_at=sched,
@@ -421,7 +431,7 @@ def _run_pipeline_main(ctx=None) -> None:
         try:
             theme_name = post2.get("_theme_info", {}).get("theme") or post2.get("theme", "")
             cat_id = get_or_create_wp_category(theme_name, _WP_PICKS_PARENT)
-            sched  = _make_scheduled_at(_POST2_OFFSETS[i]) if i < len(_POST2_OFFSETS) else ""
+            sched  = _make_scheduled_at(_POST2_OFFSETS[i])
             step_publish(
                 post2, [_WP_PICKS_PARENT, cat_id], f"Step 3B-{i+1}",
                 scheduled_at=sched,
