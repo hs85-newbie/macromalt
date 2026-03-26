@@ -1,6 +1,6 @@
 {
   "_comment": "macromalt 자동화 시스템 - 뉴스 데이터 소스 정의 파일",
-  "_updated": "2026-03-23 (이데일리·딜사이트·연합인포맥스 추가)",
+  "_updated": "2026-03-27 (MarketWatch·WSJ RSS 추가)",
   "_schema_version": "2.0",
   "_weight_guide": "1=일반뉴스, 3=공개리서치, 5=인증컨센서스",
   "sources": [
@@ -96,6 +96,32 @@
       "notes": "이데일리 전체 뉴스 RSS (경제·증권 중심, 비금융 기사는 GPT 필터 처리). edaily.co.kr RSS는 동작 안 함, rss.edaily.co.kr 사용."
     },
     {
+      "id": "marketwatch",
+      "name": "마켓워치",
+      "name_en": "MarketWatch",
+      "type": "RSS",
+      "url": "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines",
+      "category": "글로벌 금융/시장",
+      "language": "en",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 1,
+      "notes": "MarketWatch 실시간 헤드라인 RSS (Dow Jones 공개 피드). 미국 증시·경제 헤드라인 중심."
+    },
+    {
+      "id": "wsj_markets",
+      "name": "WSJ 마켓",
+      "name_en": "WSJ Markets",
+      "type": "RSS",
+      "url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+      "category": "글로벌 금융/시장",
+      "language": "en",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 1,
+      "notes": "Wall Street Journal Markets 섹션 RSS (Dow Jones 공개 피드). 미국 금융시장 심층 보도."
+    },
+    {
       "id": "dealsite",
       "name": "딜사이트",
       "name_en": "Dealsite",
@@ -107,6 +133,20 @@
       "fetch_limit": 10,
       "weight": 2,
       "notes": "M&A·IPO·채권·기업금융 전문. 무료공개 기사만 수집 (lock_clock/회원전용 없는 기사). a[href^='/articles/'] + span.mbsh-news-tit 패턴. fetch_dealsite() 함수로 처리."
+    },
+    {
+      "id": "sec_edgar",
+      "name": "SEC EDGAR",
+      "name_en": "SEC EDGAR",
+      "type": "WEB_EDGAR",
+      "url": "https://efts.sec.gov/LATEST/search-index",
+      "category": "미국 기업공시",
+      "language": "en",
+      "enabled": true,
+      "fetch_limit": 10,
+      "weight": 2,
+      "forms": ["8-K", "10-K", "10-Q"],
+      "notes": "SEC EDGAR 최신 공시 (8-K 현재보고서·10-K 연간보고서·10-Q 분기보고서). User-Agent: macromalt/1.0 contact@macromalt.com 헤더 필수. fetch_sec_edgar() 함수로 처리."
     },
     {
       "id": "naver_research",

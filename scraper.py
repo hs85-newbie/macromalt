@@ -360,6 +360,8 @@ def run_all_sources() -> list:
             articles = fetch_web(source)
         elif collect_type == "WEB_DEALSITE":
             articles = fetch_dealsite(source)
+        elif collect_type == "WEB_EDGAR":
+            articles = fetch_sec_edgar(source)
         elif collect_type.startswith("RESEARCH_"):
             # RESEARCH 타입은 run_research_sources()에서 처리 — 조용히 스킵
             continue
@@ -1952,6 +1954,87 @@ def run_dart_annual_report_sections(
             logger.debug(f"[DART/annual] {stock_code} 매칭 섹션 없음")
 
     return result
+
+
+# ──────────────────────────────────────────────
+# 13-B. SEC EDGAR 최신 공시 수집
+# ──────────────────────────────────────────────
+_SEC_EDGAR_HEADERS = {
+    "User-Agent": "macromalt/1.0 contact@macromalt.com",
+    "Accept-Encoding": "gzip, deflate",
+    "Host": "efts.sec.gov",
+}
+
+def fetch_sec_edgar(source: dict) -> list:
+    """
+    SEC EDGAR 전문 공시(8-K, 10-K, 10-Q) 최신 피드를 수집합니다.
+    EDGAR fair-use 정책에 따라 User-Agent에 연락처를 포함합니다.
+
+    반환값:
+        [{"source": "SEC EDGAR", "title": "...", "summary": "...", "url": "..."}]
+    """
+    results = []
+    name = source.get("name", "SEC EDGAR")
+    limit = source.get("fetch_limit", 10)
+    forms = source.get("forms", ["8-K", "10-K", "10-Q"])
+
+    try:
+        params = {
+            "q": " OR ".join(f'"{f}"' for f in forms),
+            "dateRange": "custom",
+            "startdt": (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
+            "enddt": datetime.now().strftime("%Y-%m-%d"),
+            "hits.hits._source": "period_of_report,entity_name,file_date,form_type",
+            "hits.hits.total.value": limit,
+        }
+        url = "https://efts.sec.gov/LATEST/search-index?q={q}&dateRange=custom&startdt={s}&enddt={e}&forms={f}".format(
+            q="+OR+".join(forms),
+            s=params["dateRange"],
+            e=params["enddt"],
+            f=",".join(forms),
+        )
+        # simpler EDGAR full-text search endpoint
+        search_url = "https://efts.sec.gov/LATEST/search-index"
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={
+                "q": '""',
+                "forms": ",".join(forms),
+                "dateRange": "custom",
+                "startdt": (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
+                "enddt": datetime.now().strftime("%Y-%m-%d"),
+            },
+            headers=_SEC_EDGAR_HEADERS,
+            timeout=15,
+        )
+        r.raise_for_status()
+        hits = r.json().get("hits", {}).get("hits", [])
+
+        for hit in hits[:limit]:
+            src = hit.get("_source", {})
+            entity = src.get("entity_name", "Unknown")
+            form_type = src.get("form_type", "")
+            filed = src.get("file_date", "")
+            accession = hit.get("_id", "").replace(":", "-")
+            filing_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type={form_type}&dateb=&owner=include&count=1&search_text=" if not accession else f"https://www.sec.gov/Archives/edgar/data/{accession}.txt"
+
+            results.append({
+                "source": name,
+                "type": "WEB_EDGAR",
+                "title": f"[{form_type}] {entity}",
+                "summary": f"{entity} filed {form_type} on {filed}",
+                "url": filing_url,
+                "published": filed,
+                "date_tier": _classify_date_tier(filed),
+                "collected_at": datetime.now().isoformat(),
+                "weight": source.get("weight", 2),
+            })
+
+        logger.info(f"[{name}] SEC EDGAR 수집 성공: {len(results)}건")
+    except Exception as e:
+        logger.error(f"[{name}] SEC EDGAR 수집 실패: {e}")
+
+    return results
 
 
 # ──────────────────────────────────────────────
