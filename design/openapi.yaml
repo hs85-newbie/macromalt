@@ -1,0 +1,500 @@
+openapi: "3.1.0"
+info:
+  title: macromalt API
+  version: "1.0.0"
+  description: macromalt SaaS 백엔드 API (Phase 24)
+
+servers:
+  - url: https://macromalt-production.up.railway.app
+    description: Production (Railway)
+  - url: http://localhost:8000
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # ── Auth ──────────────────────────────────────────────────
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        name:     { type: string }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:    { type: string }
+        password: { type: string }
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:  { type: string }
+        refresh_token: { type: string }
+        token_type:    { type: string, default: bearer }
+
+    # ── User ─────────────────────────────────────────────────
+    UserResponse:
+      type: object
+      properties:
+        id:         { type: integer }
+        email:      { type: string }
+        name:       { type: string }
+        plan:       { type: string, enum: [free, pro] }
+        created_at: { type: string, format: date-time }
+
+    # ── Settings ─────────────────────────────────────────────
+    ApiKeyRequest:
+      type: object
+      required: [provider, api_key]
+      properties:
+        provider: { type: string, enum: [openai, gemini, dart, bok, fred, krx] }
+        api_key:  { type: string }
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        provider:      { type: string }
+        is_valid:      { type: boolean }
+        last_tested_at: { type: string, format: date-time, nullable: true }
+
+    WpSettingsRequest:
+      type: object
+      required: [site_url, username, password]
+      properties:
+        site_url:          { type: string, format: uri }
+        username:          { type: string }
+        password:          { type: string }
+        category_analysis: { type: integer, default: 2 }
+        category_picks:    { type: integer, default: 3 }
+        category_default:  { type: integer, default: 1 }
+
+    WpSettingsResponse:
+      type: object
+      properties:
+        site_url:      { type: string }
+        username:      { type: string }
+        is_connected:  { type: boolean }
+        last_tested_at: { type: string, format: date-time, nullable: true }
+
+    PipelineSettingsRequest:
+      type: object
+      properties:
+        enabled:           { type: boolean }
+        slot:              { type: string, enum: [morning, evening, both] }
+        max_posts_per_run: { type: integer, minimum: 1, maximum: 10 }
+
+    # ── Pipeline ─────────────────────────────────────────────
+    PipelineExecuteRequest:
+      type: object
+      properties:
+        slot: { type: string, enum: [morning, evening], default: morning }
+
+    RunLogResponse:
+      type: object
+      properties:
+        id:            { type: integer }
+        status:        { type: string, enum: [running, success, failed] }
+        slot:          { type: string }
+        triggered_by:  { type: string }
+        started_at:    { type: string, format: date-time }
+        finished_at:   { type: string, format: date-time, nullable: true }
+        error_message: { type: string, nullable: true }
+        cost_usd:      { type: number }
+        cost_krw:      { type: integer }
+
+    PublishedPostResponse:
+      type: object
+      properties:
+        id:           { type: integer }
+        wp_post_id:   { type: integer, nullable: true }
+        wp_post_url:  { type: string, nullable: true }
+        title:        { type: string }
+        category:     { type: string }
+        published_at: { type: string, format: date-time }
+
+    # ── Payment ──────────────────────────────────────────────
+    PaymentReadyRequest:
+      type: object
+      required: [plan]
+      properties:
+        plan:   { type: string, enum: [pro] }
+        amount: { type: integer, default: 49900 }
+
+    PaymentReadyResponse:
+      type: object
+      properties:
+        checkout_url:  { type: string, format: uri }
+        customer_key:  { type: string }
+        order_id:      { type: string }
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        plan:           { type: string }
+        status:         { type: string }
+        amount:         { type: integer }
+        next_billing_at: { type: string, format: date-time, nullable: true }
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail: { type: string }
+
+paths:
+  # ── Health ────────────────────────────────────────────────
+  /health:
+    get:
+      summary: 헬스체크
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  # ── Auth ─────────────────────────────────────────────────
+  /api/auth/register:
+    post:
+      summary: 회원가입
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: 가입 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "409":
+          description: 이미 사용 중인 이메일
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/auth/login:
+    post:
+      summary: 로그인
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: 로그인 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401":
+          description: 이메일 또는 비밀번호 오류
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/auth/refresh:
+    post:
+      summary: 토큰 갱신
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: 갱신 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401":
+          description: 유효하지 않은 refresh_token
+
+  # ── Users ────────────────────────────────────────────────
+  /api/users/me:
+    get:
+      summary: 내 정보 조회
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+    patch:
+      summary: 내 정보 수정
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:     { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        "200":
+          description: 수정 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+
+  # ── Settings: API Keys ───────────────────────────────────
+  /api/settings/api-keys:
+    get:
+      summary: 등록된 API 키 목록 조회
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApiKeyResponse" }
+    post:
+      summary: API 키 등록 또는 업데이트
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiKeyRequest" }
+      responses:
+        "200":
+          description: 저장 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKeyResponse" }
+
+  /api/settings/api-keys/{provider}/test:
+    post:
+      summary: API 키 유효성 테스트
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 테스트 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  is_valid: { type: boolean }
+                  message:  { type: string }
+
+  # ── Settings: WordPress ──────────────────────────────────
+  /api/settings/wordpress:
+    get:
+      summary: WordPress 연결 정보 조회
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WpSettingsResponse" }
+    post:
+      summary: WordPress 연결 정보 저장
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WpSettingsRequest" }
+      responses:
+        "200":
+          description: 저장 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WpSettingsResponse" }
+
+  /api/settings/wordpress/test:
+    post:
+      summary: WordPress 연결 테스트
+      responses:
+        "200":
+          description: 테스트 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  is_connected: { type: boolean }
+                  message:      { type: string }
+
+  # ── Settings: Pipeline ──────────────────────────────────
+  /api/settings/pipeline:
+    get:
+      summary: 파이프라인 설정 조회
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PipelineSettingsRequest" }
+    patch:
+      summary: 파이프라인 설정 수정
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PipelineSettingsRequest" }
+      responses:
+        "200":
+          description: 수정 성공
+
+  # ── Pipeline ────────────────────────────────────────────
+  /api/pipeline/execute:
+    post:
+      summary: 파이프라인 수동 실행
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PipelineExecuteRequest" }
+      responses:
+        "202":
+          description: 실행 시작됨 (비동기)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_log_id: { type: integer }
+                  message:    { type: string }
+        "402":
+          description: Pro 플랜 필요
+        "409":
+          description: 이미 실행 중
+
+  /api/pipeline/runs:
+    get:
+      summary: 실행 이력 목록
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RunLogResponse" }
+
+  /api/pipeline/runs/{run_id}:
+    get:
+      summary: 특정 실행 상세 조회
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunLogResponse" }
+
+  /api/pipeline/posts:
+    get:
+      summary: 발행된 포스트 목록
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PublishedPostResponse" }
+
+  # ── Payment ──────────────────────────────────────────────
+  /api/payments/ready:
+    post:
+      summary: 결제 준비 (Toss 빌링키 발급 URL 반환)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentReadyRequest" }
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentReadyResponse" }
+
+  /api/payments/confirm:
+    post:
+      summary: 결제 승인 (Toss 콜백)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                authKey:     { type: string }
+                customerKey: { type: string }
+      responses:
+        "200":
+          description: 결제 승인 성공
+
+  /api/payments/webhook:
+    post:
+      summary: Toss 결제 웹훅 수신
+      security: []
+      description: |
+        Toss Payments → https://macromalt-production.up.railway.app/api/payments/webhook
+        이벤트: BILLING_SUCCESS, BILLING_FAILED, CANCEL
+      responses:
+        "200":
+          description: 처리 완료
+
+  /api/payments/subscription:
+    get:
+      summary: 구독 상태 조회
+      responses:
+        "200":
+          description: 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionResponse" }
+
+  /api/payments/subscription/cancel:
+    post:
+      summary: 구독 해지
+      responses:
+        "200":
+          description: 해지 접수 완료
