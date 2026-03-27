@@ -129,7 +129,30 @@ _HR_STYLE        = HR_STYLE
 _PICKS_DIV_STYLE = PICKS_DIV_STYLE
 _STRONG_STYLE    = STRONG_STYLE
 
-# ─── 인라인 출처 미니태그 스타일 (Phase 21) ──────────────────────────────────
-# 수치·통계 직후 <small style="{_CITE_STYLE}">(출처명, YYYY.MM)</small> 삽입
-CITE_STYLE  = "color:#888888;font-size:0.78em;margin-left:4px;font-style:normal;"
+# ─── 각주 시스템 스타일 (Phase 21 개편) ─────────────────────────────────────
+# 본문: 수치 직후 <sup style="{_FOOTNOTE_SUP_STYLE}">[N]</sup>
+# 글 하단: <div style="{_FOOTNOTE_SECTION_STYLE}"> 참고 자료 섹션
+
+FOOTNOTE_SUP_STYLE = (
+    "font-size:0.72em;color:#4a7fa5;vertical-align:super;"
+    "margin-left:1px;font-weight:normal;text-decoration:none;"
+)
+FOOTNOTE_SECTION_STYLE = (
+    f"margin-top:40px;padding:18px 20px;background:{COLOR_BG_SOURCE};"
+    f"border-left:{BORDER_SOURCE_LEFT};border-radius:{BORDER_SOURCE_RADIUS};"
+)
+FOOTNOTE_TITLE_STYLE = (
+    f"font-size:{FONT_SIZE_BODY};font-weight:{FONT_WEIGHT_STRONG};"
+    f"color:{COLOR_MUTED};margin:0 0 10px 0;"
+)
+FOOTNOTE_ITEM_STYLE = (
+    f"font-size:0.82em;line-height:1.7;color:{COLOR_MUTED};margin:3px 0;"
+)
+
+# 하위 호환 별칭
+CITE_STYLE  = FOOTNOTE_SUP_STYLE   # 기존 참조 코드 호환용
 _CITE_STYLE = CITE_STYLE
+_FOOTNOTE_SUP_STYLE     = FOOTNOTE_SUP_STYLE
+_FOOTNOTE_SECTION_STYLE = FOOTNOTE_SECTION_STYLE
+_FOOTNOTE_TITLE_STYLE   = FOOTNOTE_TITLE_STYLE
+_FOOTNOTE_ITEM_STYLE    = FOOTNOTE_ITEM_STYLE
