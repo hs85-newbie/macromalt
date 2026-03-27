@@ -1,0 +1,7 @@
+{
+  "_comment": "macromalt 모범 글 예시 — GPT 라이터 Few-shot 주입용",
+  "_updated": "2026-03-27",
+  "_guide": "excerpt는 실제 발행된 글에서 핵심 본문 1~2 섹션 발췌 (HTML 포함 가능, 최대 1500자)",
+  "examples": [
+  ]
+}
