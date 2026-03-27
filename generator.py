@@ -81,6 +81,18 @@ except ImportError:
     _PC_POST1_EDITORIAL_RULES = ""
     _PC_POST2_EDITORIAL_RULES = ""
 
+# ── Phase R: 거시경제 리포트 + Few-shot 예시 로더 ─────────────────────────────
+try:
+    from reference_loader import (
+        load_reference_reports,
+        format_reports_for_prompt,
+        load_few_shot_examples,
+        format_few_shot_for_prompt,
+    )
+    _REFERENCE_LOADER_AVAILABLE = True
+except ImportError:
+    _REFERENCE_LOADER_AVAILABLE = False
+
 load_dotenv()
 
 logger = logging.getLogger("macromalt")
@@ -6315,7 +6327,8 @@ def _extract_seo_title(html: str) -> str:
 
 def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default",
                        writer_contract: Optional[dict] = None,
-                       run_id: str = "") -> str:
+                       run_id: str = "",
+                       few_shot_suffix: str = "") -> str:
     """
     Step 2a: GPT 작성 엔진 — Post 1 심층 분석.
     Gemini 분석 재료를 HTML 형식의 심층 분석 글로 작성합니다.
@@ -6361,8 +6374,11 @@ def gpt_write_analysis(materials: dict, context_text: str, slot: str = "default"
             context_text=context_text,
         )
     )
+    # Phase R: Few-shot 예시가 있으면 system 프롬프트 뒤에 append
+    _pr_system = GPT_WRITER_ANALYSIS_SYSTEM + (few_shot_suffix if few_shot_suffix else "")
+
     draft = _call_gpt(
-        GPT_WRITER_ANALYSIS_SYSTEM,
+        _pr_system,
         user_msg,
         "Step2a:심층분석작성",
         temperature=0.7,
@@ -6966,6 +6982,23 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default",
         except Exception as _kb_e:
             logger.warning(f"[Phase B] KB 검색 실패 (비치명): {_kb_e}")
 
+    # ── Phase R: 거시경제 리포트 컨텍스트 주입 ────────────────────────────
+    _pr_few_shot_suffix = ""
+    if _REFERENCE_LOADER_AVAILABLE:
+        try:
+            _pr_reports = load_reference_reports()
+            _pr_report_ctx = format_reports_for_prompt(_pr_reports)
+            if _pr_report_ctx:
+                history_ctx = history_ctx + _pr_report_ctx
+                logger.info(f"[Phase R] 리포트 컨텍스트 주입 완료 ({len(_pr_report_ctx)}자, {len(_pr_reports.get('reports', []))}건)")
+            _pr_examples = load_few_shot_examples()
+            _pr_few_shot_suffix = format_few_shot_for_prompt(_pr_examples)
+            if _pr_few_shot_suffix:
+                logger.info(f"[Phase R] Few-shot 예시 {len(_pr_examples)}건 로드 완료")
+        except Exception as _pr_e:
+            logger.warning(f"[Phase R] 리포트/Few-shot 로드 실패 (비치명): {_pr_e}")
+            _pr_few_shot_suffix = ""
+
     # ── Step 1: Gemini 분석 재료 생성 ─────────────────────────────────────
     materials = gemini_analyze(news_text, research_text, dart_text=dart_text,
                                slot=slot, history_context=history_ctx,
@@ -6996,7 +7029,8 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default",
     # ── Step 2: GPT 심층 분석 초고 작성 ───────────────────────────────────
     draft = gpt_write_analysis(materials, context_text, slot=slot,
                                writer_contract=_p20_post1_contract,
-                               run_id=_p20_run_id)
+                               run_id=_p20_run_id,
+                               few_shot_suffix=_pr_few_shot_suffix)
     draft = _strip_code_fences(draft)  # Phase 4.3: 코드펜스/백틱 제거
 
     # ── Step 2.5: 후처리 밀도/반복 감지 (경고 로그만) ────────────────────
