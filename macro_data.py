@@ -1,7 +1,7 @@
 """
 macro_data.py — Phase A: 거시지표 실시간 조회 모듈
 =====================================================
-BOK ECOS + FRED API를 통해 한국·미국 핵심 거시지표를 수집하고
+BOK ECOS + FRED + KOSIS + IMF API를 통해 한국·미국·글로벌 핵심 거시지표를 수집하고
 생성 파이프라인에 주입할 프롬프트 텍스트를 반환합니다.
 
 캐시: 1시간 TTL (JSON 파일, data/macro_cache.json)
@@ -21,10 +21,12 @@ load_dotenv()
 
 logger = logging.getLogger("macromalt")
 
-BOK_KEY  = os.getenv("BOK_API_KEY", "")
-FRED_KEY = os.getenv("FRED_API_KEY", "")
-BOK_BASE  = "https://ecos.bok.or.kr/api"
-FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+BOK_KEY   = os.getenv("BOK_API_KEY", "")
+FRED_KEY  = os.getenv("FRED_API_KEY", "")
+KOSIS_KEY = os.getenv("KOSIS_API_KEY", "")
+BOK_BASE   = "https://ecos.bok.or.kr/api"
+FRED_BASE  = "https://api.stlouisfed.org/fred/series/observations"
+KOSIS_BASE = "https://kosis.kr/openapi/Param/statisticsParameterData.do"
 
 _CACHE_FILE      = Path(__file__).parent / "data" / "macro_cache.json"
 _CACHE_TTL_HOURS = 1
@@ -57,6 +59,51 @@ _IMF_SERIES: dict = {
     "kr_gdp_growth":    ("NGDP_RPCH", "542", "한국 실질GDP 성장률(%)"),
     "world_cpi":        ("PCPIPCH",   "001", "세계 소비자물가 상승률(%)"),
 }
+
+# ── KOSIS 통계 코드 정의 ─────────────────────────────────────────────────────
+# (orgId, tblId, itmId, 레이블)
+# KOSIS 통계표 코드는 https://kosis.kr/openapi 에서 조회
+_KOSIS_SERIES: dict = {
+    "gdp_growth":      ("301", "DT_200Y001", "T10", "한국 실질GDP 성장률(%)"),
+    "unemployment":    ("101", "DT_1DA7002S", "T20", "한국 실업률(%)"),
+    "trade_balance":   ("142", "DT_1R11006_OECD", "T10", "한국 무역수지(백만달러)"),
+    "industrial_prod": ("101", "DT_1J20006", "T10", "한국 광공업생산지수"),
+}
+
+
+# ── KOSIS 조회 ───────────────────────────────────────────────────────────────
+
+def _fetch_kosis_value(org_id: str, tbl_id: str, itm_id: str) -> Optional[str]:
+    """KOSIS 통계청 API에서 최신값 1건 조회. 실패 시 None 반환."""
+    if not KOSIS_KEY:
+        return None
+    now = datetime.now()
+    params = {
+        "method":       "getList",
+        "apiKey":       KOSIS_KEY,
+        "orgId":        org_id,
+        "tblId":        tbl_id,
+        "itmId":        itm_id,
+        "objL1":        "ALL",
+        "format":       "json",
+        "jsonVD":       "Y",
+        "prdSe":        "M",
+        "startPrdDe":   (now - timedelta(days=90)).strftime("%Y%m"),
+        "endPrdDe":     now.strftime("%Y%m"),
+        "outputFields":  "PRD_DE,DT",
+    }
+    try:
+        r = requests.get(KOSIS_BASE, params=params, timeout=10)
+        rows = r.json()
+        if isinstance(rows, list) and rows:
+            latest = rows[-1]
+            val = latest.get("DT", "")
+            period = latest.get("PRD_DE", "")
+            if val:
+                return f"{val} ({period})"
+    except Exception as e:
+        logger.warning(f"[macro_data] KOSIS 조회 실패 ({tbl_id}): {e}")
+    return None
 
 
 # ── IMF 조회 ─────────────────────────────────────────────────────────────────
@@ -232,6 +279,13 @@ def get_macro_snapshot(force_refresh: bool = False) -> dict:
         if val:
             logger.info(f"[macro_data] FRED {label}: {val}")
 
+    # KOSIS 조회
+    for key, (org_id, tbl_id, itm_id, label) in _KOSIS_SERIES.items():
+        val = _fetch_kosis_value(org_id, tbl_id, itm_id)
+        result["korea"][f"kosis_{key}"] = val or "조회 불가"
+        if val:
+            logger.info(f"[macro_data] KOSIS {label}: {val}")
+
     # IMF 조회
     for key, (indicator, country, label) in _IMF_SERIES.items():
         val = _fetch_imf_value(indicator, country)
@@ -280,6 +334,12 @@ def format_macro_for_prompt(snapshot: dict) -> str:
     lines.append(f"  달러/원:    {kr.get('usd_krw', 'N/A')}")
     lines.append(f"  소비자물가: {kr.get('cpi', 'N/A')}")
     lines.append(f"  M2 통화량:  {kr.get('m2', 'N/A')}")
+    if kr.get("kosis_gdp_growth") and kr["kosis_gdp_growth"] != "조회 불가":
+        lines.append(f"  GDP성장률:  {kr.get('kosis_gdp_growth', 'N/A')} (KOSIS)")
+    if kr.get("kosis_unemployment") and kr["kosis_unemployment"] != "조회 불가":
+        lines.append(f"  실업률:     {kr.get('kosis_unemployment', 'N/A')} (KOSIS)")
+    if kr.get("kosis_trade_balance") and kr["kosis_trade_balance"] != "조회 불가":
+        lines.append(f"  무역수지:   {kr.get('kosis_trade_balance', 'N/A')} (KOSIS)")
 
     us = snapshot.get("us", {})
     lines.append("\n■ 미국 거시지표")
