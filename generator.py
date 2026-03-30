@@ -5993,12 +5993,18 @@ def gemini_select_themes(
                        response_mime_type="application/json")
     result = _parse_json_response(raw) if raw else None
 
-    if result and isinstance(result, dict) and result.get("themes"):
-        themes = result["themes"]
+    themes = None
+    if result:
+        if isinstance(result, list):                   # Gemini가 리스트 직접 반환
+            themes = result
+        elif isinstance(result, dict) and result.get("themes"):
+            themes = result["themes"]
+
+    if themes and isinstance(themes, list) and len(themes) > 0:
         logger.info(f"[Phase 22] 테마 {len(themes)}개 선정: {[t.get('theme','')[:30] for t in themes]}")
         return themes
 
-    logger.warning("[Phase 22] 테마 선정 실패 — 기본 테마 1개로 fallback")
+    logger.warning(f"[Phase 22] 테마 선정 실패 — fallback. raw[:300]={str(raw)[:300]}")
     return [{"priority": 1, "theme": "글로벌 경제 주요 이슈", "picks_priority": 1, "reason": "fallback"}]
 
 
