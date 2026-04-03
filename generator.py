@@ -6573,9 +6573,11 @@ def _classify_parse_failed(raw: str, normalized: Optional[str] = None,
         return "TYPE_B"
     # TYPE_C: HTML 태그 파손 (닫는 태그 누락 또는 중첩 오류 의심)
     # [Phase 19] self-closing 요소(img, input, link, meta, br, hr)는 open_tag 카운트 제외
+    # [Phase 22] is_html_context=False(verifier JSON 컨텍스트)에서는 TYPE_C 체크 제외.
+    #   JSON 응답에 HTML 태그가 텍스트로 언급될 수 있어 카운트 오탐 발생.
     open_tags  = len(re.findall(r"<(?!/)(?!br|hr|img|input|link|meta|!)[a-zA-Z][^>]*>", raw))
     close_tags = len(re.findall(r"</[a-zA-Z]+>", raw))
-    if abs(open_tags - close_tags) > 5:
+    if is_html_context and abs(open_tags - close_tags) > 5:
         return "TYPE_C"
     # TYPE_D: source box / 체크포인트 / PICKS 주석 파싱 실패
     if "<!-- PICKS:" not in raw and len(raw) > 500:
