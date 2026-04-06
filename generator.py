@@ -5957,13 +5957,13 @@ _GEMINI_THEME_SELECTOR_SYSTEM = """
 [출력 규칙]
 JSON만 출력. 설명 텍스트 금지.
 
-{
+{{
   "themes": [
-    {"priority": 1, "theme": "테마 한 문장", "picks_priority": 1, "reason": "선정 이유 한 줄"},
-    {"priority": 2, "theme": "테마 한 문장", "picks_priority": 2, "reason": "선정 이유 한 줄"},
+    {{"priority": 1, "theme": "테마 한 문장", "picks_priority": 1, "reason": "선정 이유 한 줄"}},
+    {{"priority": 2, "theme": "테마 한 문장", "picks_priority": 2, "reason": "선정 이유 한 줄"}},
     ...
   ]
-}
+}}
 """
 
 def gemini_select_themes(
