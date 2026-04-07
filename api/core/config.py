@@ -1,3 +1,5 @@
+from typing import List
+
 from pydantic_settings import BaseSettings
 
 
@@ -11,7 +13,14 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     TOSS_SECRET_KEY: str = "test_sk_placeholder"
     TOSS_CLIENT_KEY: str = "test_ck_placeholder"
+    TOSS_WEBHOOK_SECRET_KEY: str = ""  # Toss 웹훅 서명 검증 키 (Railway Variables에서 설정)
     RAILWAY_URL: str = "https://macromalt-production.up.railway.app"
+    # 프로덕션에서는 ALLOWED_ORIGINS=https://your-domain.com 으로 환경변수 설정
+    ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://localhost:5173",
+    ]
 
     class Config:
         env_file = "../.env"

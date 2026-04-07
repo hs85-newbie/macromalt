@@ -1,7 +1,10 @@
 import base64
+import hashlib
+import hmac
+import json
 import uuid
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -28,6 +31,31 @@ def _toss_auth_header() -> str:
     return f"Basic {credentials}"
 
 
+def _verify_toss_signature(raw_body: bytes, signature_header: str) -> bool:
+    """Toss 웹훅 HMAC-SHA256 서명 검증.
+
+    Toss-Signature 헤더 형식: v1={base64_signature}
+    서명 대상: raw request body
+    """
+    if not settings.TOSS_WEBHOOK_SECRET_KEY:
+        # [SEC3] 프로덕션에서는 TOSS_WEBHOOK_SECRET_KEY 환경변수 반드시 설정
+        return True  # 개발 환경(키 미설정)에서는 검증 통과
+
+    if not signature_header or not signature_header.startswith("v1="):
+        return False
+
+    expected_sig = signature_header[3:]
+    computed_sig = base64.b64encode(
+        hmac.new(
+            settings.TOSS_WEBHOOK_SECRET_KEY.encode(),
+            raw_body,
+            hashlib.sha256,
+        ).digest()
+    ).decode()
+
+    return hmac.compare_digest(expected_sig, computed_sig)
+
+
 # ── 1. 결제 준비 ──────────────────────────────────────────────
 @router.post("/ready", response_model=PaymentReadyResponse)
 async def payment_ready(
@@ -37,6 +65,27 @@ async def payment_ready(
 ):
     customer_key = f"macromalt-{current_user.id}-{secrets.token_hex(8)}"
     order_id = f"order-{uuid.uuid4().hex[:16]}"
+
+    # [SEC2 수정] customerKey를 DB에 pending 상태로 저장하여 /confirm에서 DB 검증 가능하게 함
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.user_id == current_user.id,
+            Subscription.status == "pending",
+        )
+    )
+    pending_sub = result.scalar_one_or_none()
+    if pending_sub:
+        pending_sub.toss_customer_key = customer_key
+    else:
+        pending_sub = Subscription(
+            user_id=current_user.id,
+            toss_customer_key=customer_key,
+            plan="pro",
+            status="pending",
+            amount=49900,
+        )
+        db.add(pending_sub)
+    await db.commit()
 
     success_url = f"{settings.RAILWAY_URL}/api/payments/confirm"
     fail_url = f"{settings.RAILWAY_URL}/api/payments/fail"
@@ -72,6 +121,28 @@ async def payment_confirm(
             detail="authKey, customerKey 필요",
         )
 
+    # [SEC2 수정] customerKey를 DB에서 조회하여 우리 시스템이 발급한 키인지 검증
+    # 문자열 파싱으로 user_id를 추출하는 방식 제거 (조작 가능)
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.toss_customer_key == customer_key,
+            Subscription.status == "pending",
+        )
+    )
+    pending_sub = result.scalar_one_or_none()
+    if not pending_sub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 customerKey 또는 이미 처리된 요청",
+        )
+
+    user = await db.get(User, pending_sub.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자 없음",
+        )
+
     auth_header = _toss_auth_header()
 
     async with httpx.AsyncClient() as client:
@@ -92,22 +163,6 @@ async def payment_confirm(
 
     data = resp.json()
     billing_key = data["billingKey"]
-
-    # customerKey 형식: macromalt-{user_id}-{token}
-    try:
-        user_id = int(customer_key.split("-")[1])
-    except (IndexError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="customerKey 형식 오류",
-        )
-
-    user = await db.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="사용자 없음",
-        )
 
     # 즉시 첫 결제 실행
     order_id = f"order-{uuid.uuid4().hex[:16]}"
@@ -133,16 +188,10 @@ async def payment_confirm(
             detail=f"결제 실패: {charge_resp.text}",
         )
 
-    sub = Subscription(
-        user_id=user_id,
-        toss_billing_key=billing_key,
-        toss_customer_key=customer_key,
-        plan="pro",
-        status="active",
-        amount=49900,
-        next_billing_at=datetime.utcnow() + timedelta(days=30),
-    )
-    db.add(sub)
+    # pending 구독을 active로 전환
+    pending_sub.toss_billing_key = billing_key
+    pending_sub.status = "active"
+    pending_sub.next_billing_at = datetime.now(timezone.utc) + timedelta(days=30)
     user.plan = "pro"
     await db.commit()
 
@@ -155,7 +204,17 @@ async def payment_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    body = await request.json()
+    raw_body = await request.body()
+
+    # [SEC3 수정] Toss 웹훅 서명 검증 — 미검증 시 가짜 웹훅으로 구독 상태 조작 가능
+    toss_signature = request.headers.get("Toss-Signature", "")
+    if not _verify_toss_signature(raw_body, toss_signature):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="웹훅 서명 검증 실패",
+        )
+
+    body = json.loads(raw_body)
     # Toss 2024-06-01 API: eventType 필드로 구분
     event_type = body.get("eventType", "")
     data = body.get("data", {})
@@ -214,19 +273,20 @@ async def payment_webhook(
         or (event_type == "PAYMENT_STATUS_CHANGED" and payment_status == "CANCELED")
     )
 
+    now = datetime.now(timezone.utc)
     if is_success:
         sub.status = "active"
-        sub.next_billing_at = datetime.utcnow() + timedelta(days=30)
+        sub.next_billing_at = now + timedelta(days=30)
         if user:
             user.plan = "pro"
     elif is_failed:
         sub.status = "inactive"
-        sub.cancelled_at = datetime.utcnow()
+        sub.cancelled_at = now
         if user:
             user.plan = "free"
     elif is_cancel:
         sub.status = "cancelled"
-        sub.cancelled_at = datetime.utcnow()
+        sub.cancelled_at = now
         if user:
             user.plan = "free"
 
@@ -276,7 +336,7 @@ async def cancel_subscription(
         )
 
     sub.status = "cancelled"
-    sub.cancelled_at = datetime.utcnow()
+    sub.cancelled_at = datetime.now(timezone.utc)
     current_user.plan = "free"
     await db.commit()
 

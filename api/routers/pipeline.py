@@ -1,3 +1,4 @@
+import asyncio
 import concurrent.futures
 import sys
 import os
@@ -98,7 +99,8 @@ async def _execute_pipeline_task(run_log_id: int, user_id: int, slot: str) -> No
                 raise ValueError(f"설정 누락: {missing}")
 
             # 파이프라인은 동기 함수이므로 스레드풀에서 실행
-            loop = __import__("asyncio").get_event_loop()
+            # [B3 수정] get_event_loop() → get_running_loop() (Python 3.10+ deprecated)
+            loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 await loop.run_in_executor(executor, _run_pipeline_sync, ctx)
 
