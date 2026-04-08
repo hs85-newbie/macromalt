@@ -117,7 +117,7 @@ jobs:
             COMMENT="${COMMENT}📝 커밋:\n\`\`\`\n${COMMIT_LOG}\n\`\`\`\n\n"
             COMMENT="${COMMENT}📂 변경 파일:\n\`\`\`\n${CHANGED_FILES}\n\`\`\`\n\n"
             COMMENT="${COMMENT}🔗 Actions 로그: ${RUN_URL}\n\n"
-            COMMENT="${COMMENT}👉 승인하려면 이 이슈에 \`승인\` 코멘트를 남겨주세요."
+            COMMENT="${COMMENT}👉 반영하려면 이 이슈에 본문 내용 없이 '승인' 이라고만 코멘트를 남겨주세요."
           else
             STATUS="todo"
             COMMENT="❌ 작업 실패 — 재시도 필요\n\n🔗 Actions 로그: ${RUN_URL}"
