@@ -63,15 +63,30 @@ jobs:
           prompt: |
             작업: ${{ inputs.task || github.event.client_payload.task }}
 
-            지시사항:
-            - 위 작업을 수행하고 코드를 수정하세요.
-            - 수정 완료 후 아래 명령을 정확히 실행하세요:
+            컨텍스트:
+            - docs/ANALYSIS-*.md 파일이 있으면 먼저 읽고 이전 분석 내용을 참조하세요.
+            - 이슈 ID: ${{ github.event.client_payload.issue_id || 'manual' }}
+
+            작업 유형 판단:
+            - 작업 내용에 "점검", "분석", "제안", "검토"가 포함되면 → 분석 작업
+            - 그 외 → 코드 수정 작업
+
+            [분석 작업인 경우]
+            - 프로젝트를 분석하고 결과를 docs/ANALYSIS-${{ github.event.client_payload.issue_id || 'manual' }}.md 파일로 작성하세요.
+            - 파일 구성: 현황 요약, 발견 이슈 목록 (번호 매기기), 개선 제안, 우선순위
+            - 각 이슈 항목은 후속 Paperclip 이슈로 생성할 수 있도록 구체적으로 작성하세요.
+            - 코드 수정은 하지 마세요. 분석 파일만 생성하세요.
+
+            [코드 수정 작업인 경우]
+            - docs/ANALYSIS-*.md 파일이 있으면 참조하여 컨텍스트를 파악하세요.
+            - 코드를 수정하세요.
+
+            완료 후 실행:
               git checkout -b claude/${{ github.event.client_payload.issue_id || 'manual' }}
               git add -A
-              git commit -m "작업 내용 요약"
+              git commit -m "작업 내용 요약 (한국어)"
               git push origin claude/${{ github.event.client_payload.issue_id || 'manual' }}
             - 대상 브랜치: ${{ github.event.client_payload.branch || 'main' }}
-            - 커밋 메시지는 한국어로 작성하세요.
             - PR은 생성하지 마세요.
           claude_args: "--max-turns ${{ inputs.max_turns || github.event.client_payload.max_turns || '30' }} --dangerously-skip-permissions"
 
