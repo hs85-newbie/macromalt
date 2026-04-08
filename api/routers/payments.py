@@ -1,10 +1,13 @@
 import base64
+import logging
 import uuid
 import secrets
 from datetime import datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+logger = logging.getLogger("macromalt")
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -85,9 +88,10 @@ async def payment_confirm(
         )
 
     if resp.status_code != 200:
+        logger.error(f"[Toss] 빌링키 발급 실패 (HTTP {resp.status_code}): {resp.text}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"빌링키 발급 실패: {resp.text}",
+            detail="빌링키 발급 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
         )
 
     data = resp.json()
@@ -128,9 +132,10 @@ async def payment_confirm(
         )
 
     if charge_resp.status_code != 200:
+        logger.error(f"[Toss] 결제 실패 (HTTP {charge_resp.status_code}): {charge_resp.text}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"결제 실패: {charge_resp.text}",
+            detail="결제 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
         )
 
     sub = Subscription(

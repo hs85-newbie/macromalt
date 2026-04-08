@@ -13,6 +13,7 @@ import re
 
 import requests
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()
 
@@ -162,6 +163,30 @@ def _strip_leading_h1(content: str) -> str:
     )
 
 
+def _quality_gate(content: str) -> list[str]:
+    """발행 전 콘텐츠 구조 검사. 문제 항목 목록을 반환한다."""
+    issues = []
+    if len(content) < 8000:
+        issues.append(f"본문 길이 미달: {len(content)}자 (최소 8,000자)")
+    if "⚠" not in content and "리스크" not in content:
+        issues.append("리스크 섹션 누락")
+    if "단기(1~3개월)" not in content and "단기" not in content:
+        issues.append("투자 시계 단기 미기재")
+    if "중기(3~12개월)" not in content and "중기" not in content:
+        issues.append("투자 시계 중기 미기재")
+    return issues
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
+)
+def _wp_post(api_url: str, payload: dict, headers: dict, auth: tuple) -> requests.Response:
+    """WordPress REST API POST 요청 (tenacity 재시도 래퍼)."""
+    return requests.post(api_url, json=payload, headers=headers, auth=auth, timeout=30)
+
+
 def publish_draft(
     title: str,
     content: str,
@@ -241,14 +266,18 @@ def publish_draft(
             payload["slug"] = _slug
             logger.info(f"   SEO slug 설정: '{_slug}'")
 
+    # 발행 전 콘텐츠 품질 게이트
+    gate_issues = _quality_gate(content)
+    if gate_issues:
+        logger.warning(f"[품질 게이트] '{title}' 발행 경고: {gate_issues}")
+
     logger.info(f"WordPress 업로드 시작 | 제목: '{title}'")
 
-    response = requests.post(
+    response = _wp_post(
         config["api_url"],
-        json=payload,
-        headers=headers,
-        auth=(config["username"], config["password"]),  # Basic Auth (앱 비밀번호)
-        timeout=30,
+        payload,
+        headers,
+        (config["username"], config["password"]),
     )
 
     if response.status_code == 401:

@@ -36,21 +36,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ──────────────────────────────────────────────
-# 1. 로거 설정 (파일 + 콘솔 동시 출력)
+# 1. 로거 (설정은 main.py에서 일괄 처리)
 # ──────────────────────────────────────────────
-LOG_DIR = Path(__file__).parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-LOG_FILE = LOG_DIR / "macromalt_daily.log"
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
 logger = logging.getLogger("macromalt")
 
 
