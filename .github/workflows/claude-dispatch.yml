@@ -79,7 +79,9 @@ jobs:
 
             [코드 수정 작업인 경우]
             - docs/ANALYSIS-*.md 파일이 있으면 참조하여 컨텍스트를 파악하세요.
-            - 코드를 수정하세요.
+            - 작업 설명에 특정 항목이 지정되어 있으면 해당 항목만 수정하세요.
+            - 항목 지정이 없으면 ANALYSIS의 가장 우선순위 높은 1개 항목만 수정하세요.
+            - 여러 항목을 한 번에 수정하지 마세요.
 
             완료 후 실행:
               git checkout -b claude/${{ github.event.client_payload.issue_id || 'manual' }}
@@ -185,14 +187,79 @@ jobs:
                 COMMENT="📊 분석 완료 — PR 생성 실패 (수동 확인 필요)\n\n🔗 Actions 로그: ${RUN_URL}"
               fi
             else
-              # 코드 수정 → in_review, 승인 대기
-              STATUS="in_review"
-              COMMENT="✅ 코드 수정 완료 — 리뷰 대기 중\n\n"
-              COMMENT="${COMMENT}📌 브랜치: \`${WORK_BRANCH}\` → \`${BRANCH}\`\n\n"
-              COMMENT="${COMMENT}📝 커밋:\n\`\`\`\n${COMMIT_LOG}\n\`\`\`\n\n"
-              COMMENT="${COMMENT}📂 변경 파일:\n\`\`\`\n${CHANGED_FILES}\n\`\`\`\n\n"
-              COMMENT="${COMMENT}🔗 Actions 로그: ${RUN_URL}\n\n"
-              COMMENT="${COMMENT}👉 반영하려면 이 이슈에 본문 내용 없이 '승인' 이라고만 코멘트를 남겨주세요."
+              # 코드 수정 작업
+              # parent_id가 없고, 설명에 ANALYSIS 참조가 있으면 → sub-이슈 자동 분할
+              DESC_TEXT=$(echo "$TASK" | sed 's/^.*\. 상세: //')
+              ANALYSIS_REF=$(echo "$DESC_TEXT" | grep -oP 'docs/ANALYSIS-[A-Z]+-\d+\.md' | head -1 || echo "")
+              HAS_PARENT="${{ github.event.client_payload.parent_id || '' }}"
+
+              if [ -n "$ANALYSIS_REF" ] && [ -z "$HAS_PARENT" ] && [ -f "$ANALYSIS_REF" ]; then
+                # ANALYSIS 파일에서 항목 추출
+                SUB_ITEMS=$(grep -E '^\s*(([0-9]+\.|-))\s+' "$ANALYSIS_REF" | grep -iE '수정|추가|제거|변경|개선|리팩토링|fix|add|remove|update|refactor' | head -10 || echo "")
+                SUB_COUNT=$(echo "$SUB_ITEMS" | grep -c . || echo 0)
+
+                REPO_BRANCH_TAG="[$(echo "${{ github.repository }}" | cut -d/ -f2):${BRANCH}]"
+
+                if [ "$SUB_COUNT" -gt 1 ]; then
+                  # 항목 2개 이상 → sub-이슈 자동 생성 + 자동 머지 (현재 작업은 1개만 처리했으므로)
+                  PR_URL=$(gh pr create \
+                    --base "$BRANCH" \
+                    --head "$WORK_BRANCH" \
+                    --title "[${ISSUE_ID}] 코드 수정 (항목1)" \
+                    --body "ANALYSIS 기반 순차 수정 - 항목 1" \
+                    2>&1) || true
+
+                  if echo "$PR_URL" | grep -q "github.com"; then
+                    PR_NUM=$(echo "$PR_URL" | grep -oP '\d+$')
+                    gh pr merge "$PR_NUM" --merge --delete-branch 2>/dev/null || true
+                  fi
+
+                  # 나머지 항목으로 sub-이슈 생성 (2번째부터)
+                  echo "📋 ANALYSIS에서 ${SUB_COUNT}개 항목 발견 — 나머지 sub-이슈 생성"
+                  IDX=1
+                  echo "$SUB_ITEMS" | while IFS= read -r item; do
+                    if [ "$IDX" -gt 1 ]; then
+                      ITEM_CLEAN=$(echo "$item" | sed 's/^\s*[0-9]*[\.\)]\s*//' | sed 's/^\s*-\s*\[\s*\]\s*//' | sed 's/^\s*-\s*//' | head -c 100)
+                      if [ -n "$ITEM_CLEAN" ]; then
+                        SUB_TITLE="${REPO_BRANCH_TAG} ${ISSUE_ID} 항목${IDX}: ${ITEM_CLEAN}"
+                        SUB_DESC="상위 이슈: ${ISSUE_ID}\n참조: ${ANALYSIS_REF}\n\n${ITEM_CLEAN}"
+                        SUB_DESC_JSON=$(echo -e "$SUB_DESC" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo "\"\"")
+
+                        curl -sf -X POST "${PAPERCLIP_URL}/api/companies/b80076db-214e-44a4-b016-427d7f0e3044/issues" \
+                          -H "Authorization: Bearer ${PAPERCLIP_API_KEY}" \
+                          -H "Content-Type: application/json" \
+                          -d "{\"title\":\"${SUB_TITLE}\",\"description\":${SUB_DESC_JSON},\"parentId\":\"${ISSUE_UUID}\",\"status\":\"todo\",\"priority\":\"medium\"}" > /dev/null 2>&1 || true
+                        echo "  Sub-${IDX}: ${ITEM_CLEAN}"
+                      fi
+                    fi
+                    IDX=$((IDX + 1))
+                  done
+
+                  STATUS="done"
+                  COMMENT="✅ 항목1 수정 완료 + 자동 머지\n\n"
+                  COMMENT="${COMMENT}🎉 PR: ${PR_URL}\n\n"
+                  COMMENT="${COMMENT}📋 나머지 $((SUB_COUNT - 1))개 항목을 sub-이슈로 생성했습니다.\n"
+                  COMMENT="${COMMENT}각 sub-이슈가 순차적으로 실행됩니다."
+                else
+                  # 항목 1개 또는 추출 불가 → 기존 방식 (in_review, 승인 대기)
+                  STATUS="in_review"
+                  COMMENT="✅ 코드 수정 완료 — 리뷰 대기 중\n\n"
+                  COMMENT="${COMMENT}📌 브랜치: \`${WORK_BRANCH}\` → \`${BRANCH}\`\n\n"
+                  COMMENT="${COMMENT}📝 커밋:\n\`\`\`\n${COMMIT_LOG}\n\`\`\`\n\n"
+                  COMMENT="${COMMENT}📂 변경 파일:\n\`\`\`\n${CHANGED_FILES}\n\`\`\`\n\n"
+                  COMMENT="${COMMENT}🔗 Actions 로그: ${RUN_URL}\n\n"
+                  COMMENT="${COMMENT}👉 반영하려면 이 이슈에 본문 내용 없이 '승인' 이라고만 코멘트를 남겨주세요."
+                fi
+              else
+                # ANALYSIS 참조 없음 또는 sub-이슈 → 기존 방식 (in_review, 승인 대기)
+                STATUS="in_review"
+                COMMENT="✅ 코드 수정 완료 — 리뷰 대기 중\n\n"
+                COMMENT="${COMMENT}📌 브랜치: \`${WORK_BRANCH}\` → \`${BRANCH}\`\n\n"
+                COMMENT="${COMMENT}📝 커밋:\n\`\`\`\n${COMMIT_LOG}\n\`\`\`\n\n"
+                COMMENT="${COMMENT}📂 변경 파일:\n\`\`\`\n${CHANGED_FILES}\n\`\`\`\n\n"
+                COMMENT="${COMMENT}🔗 Actions 로그: ${RUN_URL}\n\n"
+                COMMENT="${COMMENT}👉 반영하려면 이 이슈에 본문 내용 없이 '승인' 이라고만 코멘트를 남겨주세요."
+              fi
             fi
           else
             STATUS="todo"
