@@ -235,12 +235,25 @@ jobs:
 
                 if [ "$SUB_COUNT" -gt 0 ]; then
                   echo "📋 ANALYSIS에서 ${SUB_COUNT}개 항목 발견 — sub-이슈 생성"
+
+                  # WHY: 멱등성 — 같은 parent 하위 기존 이슈 제목 목록 조회
+                  EXISTING_TITLES=$(curl -sf "${PAPERCLIP_URL}/api/companies/b80076db-214e-44a4-b016-427d7f0e3044/issues" \
+                    -H "Authorization: Bearer ${PAPERCLIP_API_KEY}" 2>/dev/null \
+                    | jq -r "[.[] | select(.parentId == \"${ISSUE_UUID}\")] | .[].title" 2>/dev/null || echo "")
+
                   IDX=1
                   echo "$SUB_ITEMS" | while IFS= read -r item; do
                     # "- [ ] **[보안] subtitle-projects PATCH 소유권 검증 추가**" → "[보안] subtitle-projects PATCH 소유권 검증 추가"
                     ITEM_CLEAN=$(echo "$item" | sed 's/^\s*-\s*\[\s*\]\s*\*\*//' | sed 's/\*\*\s*$//' | sed 's/^\s*//' | head -c 120)
                     if [ -n "$ITEM_CLEAN" ]; then
                       SUB_TITLE="${REPO_BRANCH_TAG} ${ITEM_CLEAN}"
+
+                      # 중복 차단
+                      if echo "$EXISTING_TITLES" | grep -qF "$SUB_TITLE"; then
+                        echo "  ⏭ Sub-${IDX}: 중복 — 스킵 (${ITEM_CLEAN})"
+                        IDX=$((IDX + 1))
+                        continue
+                      fi
 
                       # 해당 항목의 다음 2줄(파일, 설명)도 추출
                       LINE_NUM=$(grep -n "$(echo "$item" | head -c 50)" "$ANALYSIS_FILE" | head -1 | cut -d: -f1)
@@ -281,12 +294,19 @@ jobs:
               fi
             else
               # 코드 수정 작업
-              # parent_id가 없고, 설명에 ANALYSIS 참조가 있으면 → sub-이슈 자동 분할
+              # parent_id가 없고, 설명에 ANALYSIS 참조가 있으며,
+              # 현재 issue_id가 ANALYSIS 원본 ID와 일치할 때만 → sub-이슈 자동 분할
               DESC_TEXT=$(echo "$TASK" | sed 's/^.*\. 상세: //')
               ANALYSIS_REF=$(echo "$DESC_TEXT" | grep -oP 'docs/ANALYSIS-[A-Z]+-\d+\.md' | head -1 || echo "")
               HAS_PARENT="${{ github.event.client_payload.parent_id || '' }}"
 
-              if [ -n "$ANALYSIS_REF" ] && [ -z "$HAS_PARENT" ] && [ -f "$ANALYSIS_REF" ]; then
+              # WHY: 이중 가드 — ANALYSIS-HSD-13.md는 HSD-13만 분할 가능, HSD-23이 참조해도 차단
+              ANALYSIS_OWNER_ID=""
+              if [ -n "$ANALYSIS_REF" ]; then
+                ANALYSIS_OWNER_ID=$(echo "$ANALYSIS_REF" | grep -oP 'ANALYSIS-\K[A-Z]+-\d+' || echo "")
+              fi
+
+              if [ -n "$ANALYSIS_REF" ] && [ -z "$HAS_PARENT" ] && [ -f "$ANALYSIS_REF" ] && [ "$ANALYSIS_OWNER_ID" = "$ISSUE_ID" ]; then
                 # ANALYSIS 파일에서 항목 추출
                 SUB_ITEMS=$(grep -P '^\s*-\s*\[\s*\]\s*\*\*' "$ANALYSIS_REF" | head -15 || echo "")
                 SUB_COUNT=$(echo "$SUB_ITEMS" | grep -c '\*\*' || echo 0)
@@ -321,12 +341,26 @@ jobs:
 
                   # 나머지 항목으로 sub-이슈 생성 (2번째부터)
                   echo "📋 ANALYSIS에서 ${SUB_COUNT}개 항목 발견 — 나머지 sub-이슈 생성"
+
+                  # WHY: 멱등성 — 같은 parent 하위 기존 이슈 제목 목록 조회
+                  EXISTING_TITLES=$(curl -sf "${PAPERCLIP_URL}/api/companies/b80076db-214e-44a4-b016-427d7f0e3044/issues" \
+                    -H "Authorization: Bearer ${PAPERCLIP_API_KEY}" 2>/dev/null \
+                    | jq -r "[.[] | select(.parentId == \"${ISSUE_UUID}\")] | .[].title" 2>/dev/null || echo "")
+
                   IDX=1
                   echo "$SUB_ITEMS" | while IFS= read -r item; do
                     if [ "$IDX" -gt 1 ]; then
                       ITEM_CLEAN=$(echo "$item" | sed 's/^\s*-\s*\[\s*\]\s*\*\*//' | sed 's/\*\*\s*$//' | sed 's/^\s*//' | head -c 120)
                       if [ -n "$ITEM_CLEAN" ]; then
                         SUB_TITLE="${REPO_BRANCH_TAG} ${ITEM_CLEAN}"
+
+                        # 중복 차단
+                        if echo "$EXISTING_TITLES" | grep -qF "$SUB_TITLE"; then
+                          echo "  ⏭ Sub-${IDX}: 중복 — 스킵 (${ITEM_CLEAN})"
+                          IDX=$((IDX + 1))
+                          continue
+                        fi
+
                         SUB_DESC="상위 이슈: ${ISSUE_ID}\n참조: ${ANALYSIS_REF}\n\n${ITEM_CLEAN}"
                         SUB_DESC_JSON=$(echo -e "$SUB_DESC" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo "\"\"")
 
