@@ -73,9 +73,31 @@ jobs:
 
             [분석 작업인 경우]
             - 프로젝트를 분석하고 결과를 docs/ANALYSIS-${{ github.event.client_payload.issue_id || 'manual' }}.md 파일로 작성하세요.
-            - 파일 구성: 현황 요약, 발견 이슈 목록 (번호 매기기), 개선 제안, 우선순위
-            - 각 이슈 항목은 후속 Paperclip 이슈로 생성할 수 있도록 구체적으로 작성하세요.
+            - 파일 구성: 현황 요약, 상세 분석, 그리고 반드시 마지막에 "후속 작업 목록" 섹션
             - 코드 수정은 하지 마세요. 분석 파일만 생성하세요.
+            - "후속 작업 목록" 섹션은 반드시 아래 형식으로 작성하세요:
+
+            ```
+            ## 후속 작업 목록
+
+            ### P0 — Critical
+
+            - [ ] **[카테고리] 작업 제목**
+              - 파일: `경로/파일명`
+              - 설명: 구체적 설명
+
+            ### P1 — High
+
+            - [ ] **[카테고리] 작업 제목**
+              - 파일: `경로/파일명`
+              - 설명: 구체적 설명
+
+            ### P2 — Medium
+
+            - [ ] **[카테고리] 작업 제목**
+              - 파일: `경로/파일명`
+              - 설명: 구체적 설명
+            ```
 
             [코드 수정 작업인 경우]
             - docs/ANALYSIS-*.md 파일이 있으면 참조하여 컨텍스트를 파악하세요.
@@ -138,28 +160,33 @@ jobs:
                 SUB_ITEMS=""
                 SUB_COUNT=0
                 if [ -f "$ANALYSIS_FILE" ]; then
-                  # 번호 매겨진 항목 추출 (1. 2. 3. 또는 - [ ] 체크리스트)
-                  SUB_ITEMS=$(grep -E '^\s*(([0-9]+\.|-))\s+' "$ANALYSIS_FILE" | grep -iE '수정|추가|제거|변경|개선|리팩토링|fix|add|remove|update|refactor' | head -10 || echo "")
-                  SUB_COUNT=$(echo "$SUB_ITEMS" | grep -c . || echo 0)
+                  # C안 패턴: "- [ ] **[카테고리] 제목**" 추출
+                  SUB_ITEMS=$(grep -P '^\s*-\s*\[\s*\]\s*\*\*' "$ANALYSIS_FILE" | head -15 || echo "")
+                  SUB_COUNT=$(echo "$SUB_ITEMS" | grep -c '\*\*' || echo 0)
                 fi
 
-                REPO_TAG=$(echo "${{ github.event.client_payload.task }}" | sed 's/\. 상세:.*$//')
-                # 태그 없이 제목만 가져오기 위해 원본 이슈 제목에서 [repo:branch] 추출
                 REPO_BRANCH_TAG="[$(echo "${{ github.repository }}" | cut -d/ -f2):${BRANCH}]"
 
                 if [ "$SUB_COUNT" -gt 0 ]; then
-                  # sub-이슈 생성
                   echo "📋 ANALYSIS에서 ${SUB_COUNT}개 항목 발견 — sub-이슈 생성"
-                  SUB_LIST=""
                   IDX=1
                   echo "$SUB_ITEMS" | while IFS= read -r item; do
-                    ITEM_CLEAN=$(echo "$item" | sed 's/^\s*[0-9]*[\.\)]\s*//' | sed 's/^\s*-\s*\[\s*\]\s*//' | sed 's/^\s*-\s*//' | head -c 100)
+                    # "- [ ] **[보안] subtitle-projects PATCH 소유권 검증 추가**" → "[보안] subtitle-projects PATCH 소유권 검증 추가"
+                    ITEM_CLEAN=$(echo "$item" | sed 's/^\s*-\s*\[\s*\]\s*\*\*//' | sed 's/\*\*\s*$//' | sed 's/^\s*//' | head -c 120)
                     if [ -n "$ITEM_CLEAN" ]; then
-                      SUB_TITLE="${REPO_BRANCH_TAG} ${ISSUE_ID} 항목${IDX}: ${ITEM_CLEAN}"
-                      SUB_DESC="상위 이슈: ${ISSUE_ID}\n참조: ${ANALYSIS_FILE}\n\n${ITEM_CLEAN}"
+                      SUB_TITLE="${REPO_BRANCH_TAG} ${ITEM_CLEAN}"
+
+                      # 해당 항목의 다음 2줄(파일, 설명)도 추출
+                      LINE_NUM=$(grep -n "$(echo "$item" | head -c 50)" "$ANALYSIS_FILE" | head -1 | cut -d: -f1)
+                      SUB_DETAIL=""
+                      if [ -n "$LINE_NUM" ]; then
+                        SUB_DETAIL=$(sed -n "$((LINE_NUM+1)),$((LINE_NUM+2))p" "$ANALYSIS_FILE" | sed 's/^\s*-\s*//' | tr '\n' ' ')
+                      fi
+
+                      SUB_DESC="상위 이슈: ${ISSUE_ID}\n참조: ${ANALYSIS_FILE}\n\n${ITEM_CLEAN}\n${SUB_DETAIL}"
                       SUB_DESC_JSON=$(echo -e "$SUB_DESC" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo "\"\"")
 
-                      curl -sf -X POST "${PAPERCLIP_URL}/api/companies/${{ env.PAPERCLIP_COMPANY_ID || 'b80076db-214e-44a4-b016-427d7f0e3044' }}/issues" \
+                      curl -sf -X POST "${PAPERCLIP_URL}/api/companies/b80076db-214e-44a4-b016-427d7f0e3044/issues" \
                         -H "Authorization: Bearer ${PAPERCLIP_API_KEY}" \
                         -H "Content-Type: application/json" \
                         -d "{\"title\":\"${SUB_TITLE}\",\"description\":${SUB_DESC_JSON},\"parentId\":\"${ISSUE_UUID}\",\"status\":\"todo\",\"priority\":\"medium\"}" > /dev/null 2>&1 || true
@@ -195,8 +222,8 @@ jobs:
 
               if [ -n "$ANALYSIS_REF" ] && [ -z "$HAS_PARENT" ] && [ -f "$ANALYSIS_REF" ]; then
                 # ANALYSIS 파일에서 항목 추출
-                SUB_ITEMS=$(grep -E '^\s*(([0-9]+\.|-))\s+' "$ANALYSIS_REF" | grep -iE '수정|추가|제거|변경|개선|리팩토링|fix|add|remove|update|refactor' | head -10 || echo "")
-                SUB_COUNT=$(echo "$SUB_ITEMS" | grep -c . || echo 0)
+                SUB_ITEMS=$(grep -P '^\s*-\s*\[\s*\]\s*\*\*' "$ANALYSIS_REF" | head -15 || echo "")
+                SUB_COUNT=$(echo "$SUB_ITEMS" | grep -c '\*\*' || echo 0)
 
                 REPO_BRANCH_TAG="[$(echo "${{ github.repository }}" | cut -d/ -f2):${BRANCH}]"
 
@@ -219,9 +246,9 @@ jobs:
                   IDX=1
                   echo "$SUB_ITEMS" | while IFS= read -r item; do
                     if [ "$IDX" -gt 1 ]; then
-                      ITEM_CLEAN=$(echo "$item" | sed 's/^\s*[0-9]*[\.\)]\s*//' | sed 's/^\s*-\s*\[\s*\]\s*//' | sed 's/^\s*-\s*//' | head -c 100)
+                      ITEM_CLEAN=$(echo "$item" | sed 's/^\s*-\s*\[\s*\]\s*\*\*//' | sed 's/\*\*\s*$//' | sed 's/^\s*//' | head -c 120)
                       if [ -n "$ITEM_CLEAN" ]; then
-                        SUB_TITLE="${REPO_BRANCH_TAG} ${ISSUE_ID} 항목${IDX}: ${ITEM_CLEAN}"
+                        SUB_TITLE="${REPO_BRANCH_TAG} ${ITEM_CLEAN}"
                         SUB_DESC="상위 이슈: ${ISSUE_ID}\n참조: ${ANALYSIS_REF}\n\n${ITEM_CLEAN}"
                         SUB_DESC_JSON=$(echo -e "$SUB_DESC" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo "\"\"")
 
