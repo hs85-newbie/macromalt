@@ -106,9 +106,10 @@ jobs:
         run: |
           WORK_BRANCH="claude/${ISSUE_ID}"
 
-          # 분석 작업 여부 판단
+          # 분석 작업 여부 판단 (제목만 검사 — 설명에 키워드 있어도 코드수정으로 처리)
+          TITLE_ONLY=$(echo "$TASK" | sed 's/\. 상세:.*$//')
           IS_ANALYSIS=false
-          echo "$TASK" | grep -qE "점검|분석|제안|검토" && IS_ANALYSIS=true
+          echo "$TITLE_ONLY" | grep -qE "점검|분석|제안|검토" && IS_ANALYSIS=true
 
           if [ "$JOB_STATUS" = "success" ]; then
             git fetch origin 2>/dev/null || true
