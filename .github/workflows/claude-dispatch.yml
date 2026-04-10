@@ -152,13 +152,16 @@ jobs:
       - name: 변경사항 감지
         id: changes
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
+          # WHY: .claude-global은 워크플로우가 별도 checkout한 서브레포 — 변경사항으로 잡히면 false positive
+          # 2026-04-09 HSD-299/300/309/312 무한 재시도 사고 원인이었음
+          CHANGES=$(git status --porcelain | grep -v '^?? \.claude-global/$' || true)
+          if [ -n "$CHANGES" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "변경된 파일:"
-            git status --short
+            echo "$CHANGES"
           else
             echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "변경사항 없음"
+            echo "변경사항 없음 (.claude-global 제외)"
           fi
 
       - name: Git Commit & Push
@@ -182,7 +185,14 @@ jobs:
           echo ".claude-global" >> .gitignore
           git add -A
           git reset HEAD .gitignore
-          git commit -m "${COMMIT_MSG}"
+
+          # WHY: commit 실패(no changes 등) 시 push_success=false 명시 후 정상 종료
+          # 2026-04-09 사고: commit 실패로 step이 죽어서 output 빈값 → push 실패 분기 false positive
+          if ! git commit -m "${COMMIT_MSG}" 2>&1; then
+            echo "push_success=false" >> $GITHUB_OUTPUT
+            echo "❌ commit 실패 — 변경사항 없음 추정"
+            exit 0
+          fi
 
           # WHY: 네트워크 불안정 대비 재시도 (지수 백오프 2s→4s→8s)
           for i in 1 2 3; do
