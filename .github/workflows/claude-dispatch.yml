@@ -75,6 +75,63 @@ jobs:
           fi
           echo "작업 유형: $([ "$IS_ANALYSIS" = true ] && echo '분석' || echo '코드 수정')"
 
+      # WHY: task_type에 따라 분석/코드 수정 프롬프트 분기 — 토큰 50% 절약
+      - name: 프롬프트 생성
+        id: prompt
+        env:
+          TASK_TYPE: ${{ steps.task_type.outputs.type }}
+          USER_TASK: ${{ inputs.task || github.event.client_payload.task }}
+          ISSUE_ID: ${{ github.event.client_payload.issue_id || 'manual' }}
+        run: |
+          if [ "$TASK_TYPE" = "analysis" ]; then
+            cat > /tmp/prompt.txt <<'PROMPT_END'
+          작업: __TASK__
+
+          이슈 ID: __ISSUE_ID__
+
+          프로젝트를 분석하고 결과를 docs/ANALYSIS-__ISSUE_ID__.md 파일로 작성하세요.
+          - 파일 구성: 현황 요약, 상세 분석, 마지막에 "후속 작업 목록" 섹션
+          - 코드 수정 금지. 분석 파일만 생성.
+          - "후속 작업 목록"은 반드시 다음 형식:
+
+          ## 후속 작업 목록
+          ### P0 — Critical
+          - [ ] **[카테고리] 작업 제목**
+            - 파일: `경로/파일명`
+            - 설명: 구체적 설명
+          ### P1 — High
+          - [ ] **[카테고리] 작업 제목**
+            - 파일: `경로/파일명`
+            - 설명: 구체적 설명
+          ### P2 — Medium
+          - [ ] **[카테고리] 작업 제목**
+            - 파일: `경로/파일명`
+            - 설명: 구체적 설명
+
+          ⚠️ git 명령(checkout, add, commit, push) 금지. 파일 생성만.
+          PROMPT_END
+          else
+            cat > /tmp/prompt.txt <<'PROMPT_END'
+          작업: __TASK__
+
+          이슈 ID: __ISSUE_ID__
+
+          이슈 description의 [카테고리] 제목과 파일/설명만 보고 코드를 수정하세요.
+          docs/ANALYSIS-*.md 파일은 읽지 마세요 (token 절약).
+          여러 항목을 한 번에 수정하지 마세요. 1개 항목만 처리.
+
+          ⚠️ git 명령(checkout, add, commit, push) 금지. 파일 수정만.
+          PROMPT_END
+          fi
+          # 변수 치환
+          sed -i "s|__TASK__|${USER_TASK//|/\\|}|g" /tmp/prompt.txt 2>/dev/null || true
+          sed -i "s|__ISSUE_ID__|${ISSUE_ID}|g" /tmp/prompt.txt
+          {
+            echo "prompt<<EOF"
+            cat /tmp/prompt.txt
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Claude Code 실행
         id: claude
         continue-on-error: true
@@ -82,53 +139,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
-          prompt: |
-            작업: ${{ inputs.task || github.event.client_payload.task }}
-
-            컨텍스트:
-            - docs/ANALYSIS-*.md 파일이 있으면 먼저 읽고 이전 분석 내용을 참조하세요.
-            - 이슈 ID: ${{ github.event.client_payload.issue_id || 'manual' }}
-
-            작업 유형 판단:
-            - 작업 내용에 "점검", "분석", "제안", "검토"가 포함되면 → 분석 작업
-            - 그 외 → 코드 수정 작업
-
-            [분석 작업인 경우]
-            - 프로젝트를 분석하고 결과를 docs/ANALYSIS-${{ github.event.client_payload.issue_id || 'manual' }}.md 파일로 작성하세요.
-            - 파일 구성: 현황 요약, 상세 분석, 그리고 반드시 마지막에 "후속 작업 목록" 섹션
-            - 코드 수정은 하지 마세요. 분석 파일만 생성하세요.
-            - "후속 작업 목록" 섹션은 반드시 아래 형식으로 작성하세요:
-
-            ```
-            ## 후속 작업 목록
-
-            ### P0 — Critical
-
-            - [ ] **[카테고리] 작업 제목**
-              - 파일: `경로/파일명`
-              - 설명: 구체적 설명
-
-            ### P1 — High
-
-            - [ ] **[카테고리] 작업 제목**
-              - 파일: `경로/파일명`
-              - 설명: 구체적 설명
-
-            ### P2 — Medium
-
-            - [ ] **[카테고리] 작업 제목**
-              - 파일: `경로/파일명`
-              - 설명: 구체적 설명
-            ```
-
-            [코드 수정 작업인 경우]
-            - docs/ANALYSIS-*.md 파일이 있으면 참조하여 컨텍스트를 파악하세요.
-            - 작업 설명에 특정 항목이 지정되어 있으면 해당 항목만 수정하세요.
-            - 항목 지정이 없으면 ANALYSIS의 가장 우선순위 높은 1개 항목만 수정하세요.
-            - 여러 항목을 한 번에 수정하지 마세요.
-
-            ⚠️ 중요: git 명령(checkout, add, commit, push)은 절대 실행하지 마세요.
-            파일 생성/수정만 하면 워크플로우가 자동으로 커밋하고 푸시합니다.
+          prompt: ${{ steps.prompt.outputs.prompt }}
           claude_args: "--max-turns ${{ inputs.max_turns || github.event.client_payload.max_turns || steps.task_type.outputs.max_turns }} --dangerously-skip-permissions"
 
       # WHY: Claude 실패 종류를 분류 — max_turns/token_limit 같은 재시도 무의미 에러는 in_review로
