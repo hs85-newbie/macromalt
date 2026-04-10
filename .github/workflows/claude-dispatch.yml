@@ -55,6 +55,7 @@ jobs:
           cd ~/gstack && ./setup --host claude
 
       # WHY: 분석 작업(50턴)과 코드 수정(30턴)의 필요 턴 수가 다름
+      # 추가: 작업 유형/카테고리에 따라 모델도 분기 (opus/sonnet/haiku)
       - name: 작업 유형 판단
         id: task_type
         run: |
@@ -66,14 +67,28 @@ jobs:
           echo "$TITLE_ONLY" | grep -qE "점검|분석|제안|검토" && IS_ANALYSIS=true
           echo "$DESC_ONLY" | grep -qE "원인 분석|계획 수립|보고|점검|분석 후" && IS_ANALYSIS=true
 
+          # 카테고리 추출 (코드 수정 작업의 첫 번째 [카테고리])
+          CATEGORY=$(echo "$TITLE_ONLY" | grep -oP '\[\K[^\]]+' | head -1 || echo "")
+
           if [ "$IS_ANALYSIS" = true ]; then
+            # 분석: 깊은 추론 필요 → opus
             echo "type=analysis" >> $GITHUB_OUTPUT
             echo "max_turns=50" >> $GITHUB_OUTPUT
-          else
+            echo "model=claude-opus-4-6" >> $GITHUB_OUTPUT
+            echo "작업 유형: 분석 (opus, 50턴)"
+          elif [ "$CATEGORY" = "정리" ]; then
+            # 단순 정리: 패턴 치환 — haiku로 비용 1/10
             echo "type=code" >> $GITHUB_OUTPUT
             echo "max_turns=30" >> $GITHUB_OUTPUT
+            echo "model=claude-haiku-4-5" >> $GITHUB_OUTPUT
+            echo "작업 유형: 코드 수정 [정리] (haiku, 30턴)"
+          else
+            # 일반 코드 수정: sonnet (가성비)
+            echo "type=code" >> $GITHUB_OUTPUT
+            echo "max_turns=30" >> $GITHUB_OUTPUT
+            echo "model=claude-sonnet-4-6" >> $GITHUB_OUTPUT
+            echo "작업 유형: 코드 수정 [${CATEGORY:-일반}] (sonnet, 30턴)"
           fi
-          echo "작업 유형: $([ "$IS_ANALYSIS" = true ] && echo '분석' || echo '코드 수정')"
 
       # WHY: task_type에 따라 분석/코드 수정 프롬프트 분기 — 토큰 50% 절약
       - name: 프롬프트 생성
@@ -140,7 +155,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
           prompt: ${{ steps.prompt.outputs.prompt }}
-          claude_args: "--max-turns ${{ inputs.max_turns || github.event.client_payload.max_turns || steps.task_type.outputs.max_turns }} --dangerously-skip-permissions"
+          claude_args: "--max-turns ${{ inputs.max_turns || github.event.client_payload.max_turns || steps.task_type.outputs.max_turns }} --model ${{ steps.task_type.outputs.model }} --dangerously-skip-permissions"
 
       # WHY: Claude 실패 종류를 분류 — max_turns/token_limit 같은 재시도 무의미 에러는 in_review로
       - name: Claude 결과 분류
