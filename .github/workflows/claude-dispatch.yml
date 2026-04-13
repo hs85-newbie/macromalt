@@ -141,9 +141,16 @@ jobs:
           ⚠️ git 명령(checkout, add, commit, push) 금지. 파일 수정만.
           PROMPT_END
           fi
-          # 변수 치환
-          sed -i "s|__TASK__|${USER_TASK//|/\\|}|g" /tmp/prompt.txt 2>/dev/null || true
-          sed -i "s|__ISSUE_ID__|${ISSUE_ID}|g" /tmp/prompt.txt
+          # WHY: sed는 특수문자(backtick/pipe/newline) 치환 시 실패 — python으로 안전 처리
+          python3 -c "
+          import os
+          with open('/tmp/prompt.txt', 'r') as f:
+              content = f.read()
+          content = content.replace('__TASK__', os.environ['USER_TASK'])
+          content = content.replace('__ISSUE_ID__', os.environ['ISSUE_ID'])
+          with open('/tmp/prompt.txt', 'w') as f:
+              f.write(content)
+          "
           {
             echo "prompt<<EOF"
             cat /tmp/prompt.txt
