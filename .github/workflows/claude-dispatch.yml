@@ -58,8 +58,11 @@ jobs:
       # 추가: 작업 유형/카테고리에 따라 모델도 분기 (opus/sonnet/haiku)
       - name: 작업 유형 판단
         id: task_type
+        env:
+          TASK: ${{ inputs.task || github.event.client_payload.task }}
         run: |
-          TASK="${{ inputs.task || github.event.client_payload.task }}"
+          # WHY: TASK를 env로 받아 bash 특수문자(backtick 등) 안전 처리
+          # 2026-04-13 HSD-313: Railway 에러 로그의 backtick이 bash 명령 치환으로 해석되어 step 실패
           TITLE_ONLY=$(echo "$TASK" | sed 's/\. 상세:.*$//')
           DESC_ONLY=$(echo "$TASK" | grep -oP '상세: \K.*' || echo "")
 
