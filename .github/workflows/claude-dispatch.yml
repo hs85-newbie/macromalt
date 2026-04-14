@@ -54,6 +54,10 @@ jobs:
           fi
           cd ~/gstack && ./setup --host claude
 
+      # WHY: Claude가 TypeScript 컴파일/린트 실행 시 node_modules가 없으면 실패 (HSD-317)
+      - name: 의존성 설치
+        run: npm install
+
       # WHY: 분석 작업(50턴)과 코드 수정(30턴)의 필요 턴 수가 다름
       # 추가: 작업 유형/카테고리에 따라 모델도 분기 (opus/sonnet/haiku)
       - name: 작업 유형 판단
@@ -395,6 +399,8 @@ jobs:
                       echo "⚠️ Merge 실패 (${attempt}/3) — rebase 시도"
                       git fetch origin "$BRANCH" 2>/dev/null
                       git checkout "$WORK_BRANCH" 2>/dev/null
+                      # WHY: .gitignore 수정 잔재 등 unstaged changes가 rebase를 막음 (HSD-330 사고)
+                      git stash 2>/dev/null || true
                       if git rebase "origin/${BRANCH}" 2>&1; then
                         git push origin "$WORK_BRANCH" --force-with-lease 2>&1 || true
                         sleep 3
