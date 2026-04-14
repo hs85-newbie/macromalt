@@ -7948,7 +7948,12 @@ if __name__ == "__main__":
                 _verify_no_unsourced_price(content),
 
             " 6. [해석]·[전망]·'확실하지 않다' 규칙이 적용됐는가?":
-                "[해석]" in content or "[전망]" in content or "확실하지 않" in content,
+                bool(re.search(
+                    r"로 해석된다|라는 분석이다|로 전망된다|로 예상된다"
+                    r"|것으로 전망됩니다|것으로 분석됩니다|것으로 예상됩니다"
+                    r"|가능성이 높다는 분석|확실하지 않",
+                    content,
+                )),
 
             " 7. 참고 출처 섹션이 본문 데이터와 대응하는가?":
                 bool(re.search(r"참고\s*출처|Reference", content, re.IGNORECASE)),
