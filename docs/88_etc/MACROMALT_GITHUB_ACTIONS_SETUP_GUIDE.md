@@ -410,3 +410,62 @@ permissions:
 - [ ] 수동 Phase 20 run 성공
 - [ ] artifact 생성 확인
 - [ ] schedule 대기 상태 확인
+
+---
+
+## 12. 알려진 함정 — 실제 사고 사례 (HSD-323)
+
+### 12-1. bash 특수문자 변수 치환 실패
+
+**증상**: `sed`로 쉘 변수를 치환하는 step이 backtick(`` ` ``)이나 파이프(`|`)를 포함한 입력에서 명령 치환으로 해석되어 step 실패.
+
+**원인**: `sed 's/__VAR__/'"$VAR"'/'` 패턴은 `$VAR`에 backtick이 포함되면 bash가 명령으로 실행한다.
+
+**해결**: 변수를 `env:`로 전달한 뒤 `python3`으로 안전하게 치환한다.
+
+```yaml
+- name: 프롬프트 생성
+  env:
+    USER_TASK: ${{ inputs.task }}
+  run: |
+    python3 -c "
+    import os
+    with open('/tmp/prompt.txt', 'r') as f:
+        content = f.read()
+    content = content.replace('__TASK__', os.environ['USER_TASK'])
+    with open('/tmp/prompt.txt', 'w') as f:
+        f.write(content)
+    "
+```
+
+---
+
+### 12-2. 의존성 설치 step 무조건 실행
+
+**증상**: `npm install` 또는 `pip install` step이 `package.json` / `requirements.txt`가 없는 저장소에서 실패하여 이후 step 전체 중단.
+
+**원인**: 의존성 설치 step에 파일 존재 여부 확인 없이 항상 실행.
+
+**해결**: `hashFiles()` 조건을 추가하여 파일이 있을 때만 실행한다.
+
+```yaml
+- name: 의존성 설치
+  if: hashFiles('package.json') != ''
+  run: npm install
+```
+
+---
+
+### 12-3. auto-rebase 전 unstaged changes로 실패
+
+**증상**: `git rebase` 또는 `git pull --rebase` 실행 시 "cannot rebase: you have unstaged changes" 오류로 step 실패.
+
+**원인**: Claude가 파일을 수정한 뒤 rebase를 시도하면 working tree가 dirty 상태.
+
+**해결**: rebase 전에 `git stash`로 변경사항을 임시 저장하고, 완료 후 `git stash pop`으로 복원한다.
+
+```bash
+git stash
+git pull --rebase origin "$BASE_BRANCH"
+git stash pop
+```
