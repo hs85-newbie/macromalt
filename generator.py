@@ -4772,6 +4772,13 @@ def _format_source_section(content: str) -> str:
         news    = [i for i in items if any(k in i for k in NEWS_KW) and i not in brokers]
         others  = [i for i in items if i not in brokers and i not in news]
 
+        logger.info(
+            f"[참고출처] 증권사 리서치: {len(brokers)}건 | "
+            f"뉴스 기사: {len(news)}건 | "
+            f"기타: {len(others)}건 | "
+            f"합계: {len(items)}건"
+        )
+
         out = [f'<div style="{BOX_STYLE}">',
                f'<h3 style="{H_STYLE}">참고 출처</h3>']
 
