@@ -56,6 +56,7 @@ jobs:
 
       # WHY: Claude가 TypeScript 컴파일/린트 실행 시 node_modules가 없으면 실패 (HSD-317)
       - name: 의존성 설치
+        if: hashFiles('package.json') != ''
         run: npm install
 
       # WHY: 분석 작업(50턴)과 코드 수정(30턴)의 필요 턴 수가 다름
