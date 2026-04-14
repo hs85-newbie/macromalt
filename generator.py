@@ -5027,6 +5027,12 @@ facts의 id는 "fact_1", "fact_2" 순서로 부여한다. background_facts의 id
 background_facts는 있는 경우만 포함, 없으면 빈 배열 [].
 핵심 테마와 무관한 사실은 facts에 포함하지 말고 auxiliary_context에 한 줄로 요약.
 
+[facts 출처 다양성 규칙 — HSD-346]
+- facts 배열에서 동일 source 값을 가진 항목이 전체 facts의 60% 이상을 차지해서는 안 된다.
+- facts 배열은 반드시 2개 이상의 서로 다른 source에서 도출되어야 한다.
+- 단일 출처로 60% 이상 채워지면: 해당 출처 항목 중 relevance_to_theme가 낮은 것을 background_facts로 이동하고, 다른 출처의 사실로 대체한다.
+- 대체할 사실이 없는 경우: uncertainties에 "출처 편중 — [출처명] 외 교차 확인 필요"를 추가한다.
+
 [facts 필터링 규칙 — Phase 4.3 추가]
 - facts 배열에서 핵심 테마와 직접 관련이 없는 항목은 우선 제외한다.
 - 예: 핵심 테마가 "AI 반도체 수요 급증"이라면 유가·지정학·금리 관련 사실은 facts에서 제외하고 auxiliary_context로 이동.
