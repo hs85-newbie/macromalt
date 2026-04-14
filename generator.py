@@ -4768,6 +4768,27 @@ def _format_source_section(content: str) -> str:
         items = [p.strip(" \t\r-") for p in parts if len(p.strip()) > 2]
         items = [i for i in items if i.lower() not in ("참고 출처", "참고출처")]
 
+        # 정규화 → dedup → 날짜 필터
+        _date_re = re.compile(r"\d{4}[.\-/]\d{1,2}(?:[.\-/]\d{1,2})?")
+        _josa_re = re.compile(r"[은는이가을를에서의]+$")
+
+        def _norm_key(item: str) -> tuple:
+            m = _date_re.search(item)
+            date = m.group(0) if m else ""
+            src = (item[:m.start()] if m else item).strip(" ,")
+            src = re.sub(r"\s+", "", src)
+            src = _josa_re.sub("", src).lower()
+            return (src, date)
+
+        seen: set = set()
+        deduped: list = []
+        for item in items:
+            key = _norm_key(item)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(item)
+        items = [i for i in deduped if _date_re.search(i)]
+
         brokers = [i for i in items if any(k in i for k in BROKER_KW)]
         news    = [i for i in items if any(k in i for k in NEWS_KW) and i not in brokers]
         others  = [i for i in items if i not in brokers and i not in news]
