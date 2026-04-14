@@ -4734,6 +4734,20 @@ def _fix_double_typing(content: str) -> str:
     return content
 
 
+# ── 발행 직전 최종 안전망: [전망] / [해석] 텍스트 태그 일괄 제거 ─────────────────
+def _strip_all_jeonmang_haeseok_tags(content: str) -> str:
+    """발행 직전 [전망] / [해석] 텍스트 태그를 일괄 제거한다.
+
+    Phase 15D/15E/15F가 진단 로그로 개별 제거를 시도하지만,
+    누락 케이스를 막는 최종 안전망으로 이 함수 하나로 단일화한다.
+    """
+    stripped = re.sub(r"\[(전망|해석)\]\s*", "", content)
+    removed = content.count("[전망]") + content.count("[해석]")
+    if removed:
+        logger.info(f"[strip_tags] [전망]/[해석] 태그 {removed}건 최종 제거")
+    return stripped
+
+
 def _format_source_section(content: str) -> str:
     """
     '참고 출처' 섹션을 증권사 리서치 / 뉴스 기사 / 기타로 분류해
@@ -4847,8 +4861,9 @@ def assemble_final_content(raw_content: str, picks: list, prices: dict) -> str:
     content = re.sub(r"\n{3,}", "\n\n", content)
 
     # Phase 5-A 후처리
-    content = _fix_double_typing(content)      # 오탈자/중복 타이핑 교정
-    content = _format_source_section(content)  # 참고 출처 섹션 재구성
+    content = _fix_double_typing(content)                   # 오탈자/중복 타이핑 교정
+    content = _format_source_section(content)               # 참고 출처 섹션 재구성
+    content = _strip_all_jeonmang_haeseok_tags(content)     # 발행 직전 태그 일괄 제거
 
     return content.strip()
 
@@ -7131,6 +7146,7 @@ def generate_deep_analysis(news: list, research: list, slot: str = "default",
     # ── Phase 5-A 후처리 ─────────────────────────────────────────────────
     final_content = _fix_double_typing(final_content)
     final_content = _format_source_section(final_content)
+    final_content = _strip_all_jeonmang_haeseok_tags(final_content)  # 발행 직전 태그 일괄 제거
 
     # ── Phase 4.3: 보존율 요약 로그 ──────────────────────────────────────
     final_len = len(final_content)
