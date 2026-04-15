@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -33,3 +33,16 @@ async def update_me(
     await db.commit()
     await db.refresh(current_user)
     return current_user
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    current_user.is_active = False
+    current_user.updated_at = datetime.now(timezone.utc)
+
+    db.add(current_user)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
