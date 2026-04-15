@@ -130,6 +130,16 @@ class RunLog(Base):
     published_posts = relationship("PublishedPost", back_populates="run_log")
 
 
+class RefreshTokenBlacklist(Base):
+    __tablename__ = "refresh_token_blacklist"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # SHA-256(refresh_token) — 원문 저장 금지
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+
+
 class PublishedPost(Base):
     __tablename__ = "published_posts"
 

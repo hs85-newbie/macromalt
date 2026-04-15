@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = _DEV_SECRETS["JWT_SECRET_KEY"]
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     AES_SECRET_KEY: str = _DEV_SECRETS["AES_SECRET_KEY"]  # 반드시 32바이트
     ENVIRONMENT: str = "development"
     TOSS_SECRET_KEY: str = _DEV_SECRETS["TOSS_SECRET_KEY"]

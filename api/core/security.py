@@ -1,3 +1,4 @@
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -35,6 +36,11 @@ def create_refresh_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire, "type": "refresh"})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def hash_token(token: str) -> str:
+    """블랙리스트 저장용 SHA-256 해시 (원문 저장 금지)."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def decode_token(token: str) -> dict:
