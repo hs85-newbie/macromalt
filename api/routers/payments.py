@@ -7,6 +7,32 @@ from datetime import datetime, timedelta
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+# 재현공격 방지: 처리된 paymentKey 캐시 (단일 프로세스 기준, TTL 24h)
+_webhook_id_cache: dict[str, datetime] = {}
+_WEBHOOK_CACHE_TTL = timedelta(hours=24)
+_WEBHOOK_CACHE_MAX = 10_000
+
+
+def _verify_toss_webhook_signature(authorization: str) -> bool:
+    """Toss 웹훅 Authorization 헤더 서명 검증 (타이밍 공격 방지)"""
+    expected = _toss_auth_header()
+    return secrets.compare_digest(authorization, expected)
+
+
+def _is_replay(payment_key: str) -> bool:
+    """재현공격 감지: 이미 처리한 paymentKey 여부 확인"""
+    now = datetime.utcnow()
+    # 캐시 크기 초과 시 만료 항목 정리
+    if len(_webhook_id_cache) > _WEBHOOK_CACHE_MAX:
+        expired = [k for k, t in _webhook_id_cache.items() if now - t > _WEBHOOK_CACHE_TTL]
+        for k in expired:
+            del _webhook_id_cache[k]
+
+    if payment_key in _webhook_id_cache:
+        return True
+    _webhook_id_cache[payment_key] = now
+    return False
+
 logger = logging.getLogger("macromalt")
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -160,7 +186,23 @@ async def payment_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    # 1. 서명 검증: Authorization 헤더가 우리 시크릿과 일치하는지 확인
+    authorization = request.headers.get("Authorization", "")
+    if not _verify_toss_webhook_signature(authorization):
+        logger.warning("[Toss] 웹훅 서명 검증 실패")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="웹훅 서명 검증 실패",
+        )
+
     body = await request.json()
+
+    # 2. 재현공격 방지: paymentKey 중복 처리 차단
+    payment_key = body.get("data", {}).get("paymentKey", "")
+    if payment_key and _is_replay(payment_key):
+        logger.warning(f"[Toss] 중복 웹훅 무시 paymentKey={payment_key}")
+        return {"ok": True}
+
     # Toss 2024-06-01 API: eventType 필드로 구분
     event_type = body.get("eventType", "")
     data = body.get("data", {})
