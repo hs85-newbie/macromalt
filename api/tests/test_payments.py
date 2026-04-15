@@ -2,12 +2,20 @@
 Toss Payments 라우터 테스트
 실제 Toss API 호출은 mock 처리 — Toss 키 없이도 통과
 """
+import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
 
+from core.config import settings
 from models.models import Subscription, User
+
+
+def _toss_webhook_auth() -> str:
+    """웹훅 테스트용 Toss Authorization 헤더 (서명 검증 통과)"""
+    credentials = base64.b64encode(f"{settings.TOSS_SECRET_KEY}:".encode()).decode()
+    return f"Basic {credentials}"
 
 
 async def _register_and_login(client, email="pay@example.com"):
@@ -99,6 +107,7 @@ async def test_webhook_billing_success(client, async_session):
 
     resp = await client.post(
         "/api/payments/webhook",
+        headers={"Authorization": _toss_webhook_auth()},
         json={
             "eventType": "BILLING_SUCCESS",
             "data": {"billingKey": "test_billing_key_abc"},
@@ -139,6 +148,7 @@ async def test_webhook_billing_failed(client, async_session):
 
     resp = await client.post(
         "/api/payments/webhook",
+        headers={"Authorization": _toss_webhook_auth()},
         json={
             "eventType": "BILLING_FAILED",
             "data": {"billingKey": "test_billing_key_fail"},
@@ -159,10 +169,80 @@ async def test_webhook_billing_failed(client, async_session):
 async def test_webhook_no_billing_key(client):
     resp = await client.post(
         "/api/payments/webhook",
+        headers={"Authorization": _toss_webhook_auth()},
         json={"eventType": "BILLING_SUCCESS", "data": {}},
     )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+
+
+# ── 9. POST /api/payments/webhook (서명 검증 실패) → 401 ──────────────────────
+@pytest.mark.asyncio
+async def test_webhook_invalid_signature(client):
+    resp = await client.post(
+        "/api/payments/webhook",
+        headers={"Authorization": "Basic invalid_signature"},
+        json={"eventType": "BILLING_SUCCESS", "data": {}},
+    )
+    assert resp.status_code == 401
+
+
+# ── 10. POST /api/payments/webhook (재현공격 방지) → 두 번째는 무시 ─────────────
+@pytest.mark.asyncio
+async def test_webhook_replay_attack_prevention(client, async_session):
+    from routers.payments import _webhook_id_cache
+
+    payment_key = "unique_test_payment_key_replay_9999"
+    # 혹시 이전 테스트에서 남은 캐시 항목 제거
+    _webhook_id_cache.pop(payment_key, None)
+
+    token = await _register_and_login(client, "replay@example.com")
+    result = await async_session.execute(
+        select(User).where(User.email == "replay@example.com")
+    )
+    user = result.scalar_one()
+
+    sub = Subscription(
+        user_id=user.id,
+        toss_billing_key="test_billing_key_replay",
+        toss_customer_key=f"macromalt-{user.id}-replay001",
+        plan="pro",
+        status="inactive",
+        amount=49900,
+    )
+    async_session.add(sub)
+    await async_session.commit()
+
+    payload = {
+        "eventType": "BILLING_SUCCESS",
+        "data": {"billingKey": "test_billing_key_replay", "paymentKey": payment_key},
+    }
+
+    # 첫 번째 요청: 정상 처리
+    resp1 = await client.post(
+        "/api/payments/webhook",
+        headers={"Authorization": _toss_webhook_auth()},
+        json=payload,
+    )
+    assert resp1.status_code == 200
+
+    await async_session.refresh(sub)
+    assert sub.status == "active"
+
+    # 두 번째 요청 (동일 paymentKey): 재현공격 — 무시
+    sub.status = "inactive"
+    await async_session.commit()
+
+    resp2 = await client.post(
+        "/api/payments/webhook",
+        headers={"Authorization": _toss_webhook_auth()},
+        json=payload,
+    )
+    assert resp2.status_code == 200
+
+    # 두 번째 요청은 무시되어 DB 상태 변경 없음
+    await async_session.refresh(sub)
+    assert sub.status == "inactive"
 
 
 # ── 8. POST /api/payments/subscription/cancel (활성 구독) → 해지 성공 ───────────
