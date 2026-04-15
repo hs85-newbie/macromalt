@@ -36,10 +36,7 @@ async def _build_user_context(user_id: int, slot: str, run_log_id: int, session:
         select(UserApiKey).where(UserApiKey.user_id == user_id)
     )
     for key_row in result.scalars():
-        try:
-            keys[key_row.provider] = decrypt_api_key(key_row.key_enc, key_row.iv)
-        except Exception:
-            keys[key_row.provider] = None
+        keys[key_row.provider] = decrypt_api_key(key_row.key_enc, key_row.iv)
 
     # WP 설정 조회
     wp_result = await session.execute(
@@ -52,10 +49,7 @@ async def _build_user_context(user_id: int, slot: str, run_log_id: int, session:
 
     wp_password = None
     if wp:
-        try:
-            wp_password = decrypt_api_key(wp.password_enc, wp.iv)
-        except Exception:
-            wp_password = None
+        wp_password = decrypt_api_key(wp.password_enc, wp.iv)
 
     return UserContext(
         user_id=user_id,
