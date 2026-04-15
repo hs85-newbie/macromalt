@@ -1,0 +1,13 @@
+# ============================================================
+# macromalt pre-commit hooks
+# 시크릿 사고(2026-03-20 SECURITY.md f679a7e) 재발 방지용.
+# 설치: pre-commit install
+# 수동 실행: pre-commit run --all-files
+# ============================================================
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        name: gitleaks (시크릿 스캔)
+        description: 커밋에 실제 API 키/비밀번호 포함 여부 검사
