@@ -515,8 +515,8 @@ def _build_history_context(slot: str) -> str:
             pub_dt    = datetime.fromisoformat(pub_str)
             age_h     = (now - pub_dt).total_seconds() / 3600
             age_label = f"{age_h:.0f}시간 전"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("이력 항목 날짜 파싱 실패 (pub_str=%r): %s", pub_str, e)
 
         lines.append(
             f"- [{e_slot}] {age_label} | theme_fp={theme_fp} | "
