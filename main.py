@@ -226,75 +226,24 @@ def step_publish(post: dict, category_ids: list, step_label: str,
     return result
 
 
-# ──────────────────────────────────────────────
-# 4. 메인 실행 진입점
-# ──────────────────────────────────────────────
-def run_pipeline(ctx=None) -> None:
-    """
-    파이프라인 실행 진입점 (Phase 24 M2: UserContext 지원).
-
-    ctx: UserContext 인스턴스 (None이면 from_env()로 자동 생성)
-    API 서버에서 멀티유저 실행 시 ctx를 주입, 단독 실행 시 None.
-    """
-    if ctx is not None:
-        _apply_ctx_to_env(ctx)
-
-    _run_pipeline_main(ctx=ctx)
-
-
-def _run_pipeline_main(ctx=None) -> None:
-    """내부 파이프라인 실행 로직."""
-    now    = datetime.now()
-    run_id = now.strftime("%Y%m%d_%H%M%S")
-    slot   = detect_slot(now)
-
-    import cost_tracker as _ct
-    _ct.record_run_start()
-
-    logger.info("=" * 60)
-    logger.info(f"macromalt Phase 22 다중 테마 파이프라인 시작 [run_id: {run_id}]")
-    logger.info(f"[Phase 22] 슬롯: {slot} | run_id: {run_id}")
-    logger.info("=" * 60)
-
-    # ── 발행 시간 스케줄 (실행 시점 기준 상대 오프셋, 단위: 분) ──
-    # 절대 시각 방식은 크론 실행 시간과 역전될 수 있어 상대 방식으로 변경.
-    # Post1 N개: +10분부터 30분 간격 동적 생성 (테마 수에 맞춤)
-    # Post2 3개: Post1 마지막 오프셋 이후 30분 간격
-    _POST1_INTERVAL = 30   # Post1 발행 간격 (분)
-    _POST1_BASE     = 10   # 첫 Post1 오프셋 (분)
-    _POST2_OFFSETS  = []   # 발행 시점에 동적 계산
-
-    def _make_scheduled_at(offset_min: int) -> str:
-        """실행 시점(now) 기준 offset_min분 후 ISO 8601 문자열 반환."""
-        target = now + timedelta(minutes=offset_min)
-        return target.strftime("%Y-%m-%dT%H:%M:%S")
-
-    # ── 카테고리 ID ─────────────────────────────────────────────
-    _WP_ANALYSIS_PARENT = 2   # Phase 22: ANALYSIS 부모 ID
-    _WP_PICKS_PARENT    = 3   # Phase 22: PICKS 부모 ID
-
-    # ── Step 1: 수집 (1회 — 모든 테마 공유) ─────────────────────
+def _step_select_themes(news: list[dict], research: list[dict], slot: str) -> list[dict]:
+    """Step 0: Gemini 테마 선정. 실패 시 단일 테마 fallback."""
     try:
-        news     = step_scrape_news()
-        research = step_scrape_research()
-    except RuntimeError as e:
-        logger.error(f"❌ [Step 1] 수집 실패: {e}")
-        sys.exit(1)
-
-    # ── Step 0: 테마 선정 ────────────────────────────────────────
-    try:
-        from generator import gemini_select_themes, format_articles_for_prompt, format_research_for_prompt, _build_history_context
-        _news_txt    = format_articles_for_prompt(news)
-        _res_txt     = format_research_for_prompt(research)
-        _history_ctx = _build_history_context(slot)   # 최근 발행 이력 → 중복 테마 방지
+        from generator import (
+            gemini_select_themes, format_articles_for_prompt,
+            format_research_for_prompt, _build_history_context,
+        )
+        news_txt    = format_articles_for_prompt(news)
+        res_txt     = format_research_for_prompt(research)
+        history_ctx = _build_history_context(slot)
         themes = gemini_select_themes(
-            news_text=_news_txt,
-            research_text=_res_txt,
+            news_text=news_txt,
+            research_text=res_txt,
             slot=slot,
             n=10,
-            history_context=_history_ctx,
+            history_context=history_ctx,
         )
-        themes = themes[:10]  # 최대 10개 상한
+        themes = themes[:10]
     except Exception as e:
         logger.warning(f"⚠ [Step 0] 테마 선정 실패 — 단일 테마 fallback: {e}")
         themes = [{"priority": 1, "theme": "", "picks_priority": 1, "reason": "fallback"}]
@@ -302,41 +251,45 @@ def _run_pipeline_main(ctx=None) -> None:
     logger.info(f"[Phase 22] 선정 테마 {len(themes)}개:")
     for t in themes:
         logger.info(f"   [{t.get('priority')}] {t.get('theme','')[:60]} (픽 우선순위: {t.get('picks_priority')})")
+    return themes
 
-    # ── Step 2A: Post1 생성 루프 (테마별) ───────────────────────
+
+def _step_generate_posts1(news: list[dict], research: list[dict],
+                           themes: list[dict], slot: str) -> list[dict]:
+    """Step 2A: 테마별 Post1 생성 루프. 전체 실패 시 RuntimeError."""
     from generator import generate_deep_analysis
     posts1 = []
     for i, theme_info in enumerate(themes):
         theme_name = theme_info.get("theme", "")
         try:
             logger.info(f"▶ [Step 2A-{i+1}] Post1 생성: '{theme_name[:50]}'")
-            post1 = generate_deep_analysis(news, research, slot=slot,
-                                           forced_theme=theme_name)
-            post1["_theme_info"] = theme_info  # 메타 보존
+            post1 = generate_deep_analysis(news, research, slot=slot, forced_theme=theme_name)
+            post1["_theme_info"] = theme_info
             posts1.append(post1)
             logger.info(f"✅ [Step 2A-{i+1}] Post1 완료: '{post1['title'][:50]}'")
         except Exception as e:
             logger.error(f"❌ [Step 2A-{i+1}] Post1 생성 실패 — 건너뜀: {e}")
 
     if not posts1:
-        logger.error("❌ 모든 Post1 생성 실패 — 파이프라인 중단")
-        sys.exit(1)
+        raise RuntimeError("모든 Post1 생성 실패")
+    return posts1
 
-    # ── Step 2B: Post2 생성 (picks_priority 상위 3개) ───────────
+
+def _step_generate_posts2(news: list[dict], research: list[dict],
+                           themes: list[dict], posts1: list[dict], slot: str) -> list[dict]:
+    """Step 2B: picks_priority 상위 3개 테마 Post2 생성."""
     from generator import generate_stock_picks_report
-    # picks_priority 낮은 순으로 정렬 (1=최우선)
     picks_candidates = sorted(
         [t for t in themes if t.get("picks_priority", 99) <= 3],
-        key=lambda x: x.get("picks_priority", 99)
+        key=lambda x: x.get("picks_priority", 99),
     )[:3]
 
     posts2 = []
     for i, theme_info in enumerate(picks_candidates):
         theme_name = theme_info.get("theme", "")
-        # 해당 테마의 post1 찾기
         matching_post1 = next(
             (p for p in posts1 if p.get("_theme_info", {}).get("theme") == theme_name),
-            posts1[0]  # fallback: 첫 번째 post1
+            posts1[0],
         )
         try:
             logger.info(f"▶ [Step 2B-{i+1}] Post2 생성: '{theme_name[:50]}'")
@@ -354,27 +307,30 @@ def _run_pipeline_main(ctx=None) -> None:
             logger.info(f"✅ [Step 2B-{i+1}] Post2 완료: '{post2['title'][:50]}'")
         except Exception as e:
             logger.error(f"❌ [Step 2B-{i+1}] Post2 생성 실패 — 건너뜀: {e}")
+    return posts2
 
-    # ── Step 2C: 이미지 준비 ─────────────────────────────────────
+
+def _step_prepare_images(posts1: list[dict], posts2: list[dict]) -> None:
+    """Step 2C: 이미지 준비 (post 딕셔너리 in-place 수정)."""
     from images import attach_post1_image, attach_post2_image, inject_chart_into_content
     from publisher import _strip_leading_h1
     import re as _re
 
     for post1 in posts1:
         try:
-            media_id, img_url, attribution = attach_post1_image(post1.get("theme", ""))
+            _media_id, img_url, attribution = attach_post1_image(post1.get("theme", ""))
             if img_url:
-                _img_figure = (
+                img_figure = (
                     f'\n<figure class="mm-featured-figure" style="margin:1.5em 0;text-align:center;">'
                     f'<img src="{img_url}" alt="{post1.get("theme","")}" '
                     f'style="max-width:100%;height:auto;" /></figure>\n'
                 )
-                _h1_m = _re.search(r"</h1>", post1.get("content", ""))
-                if _h1_m:
-                    _pos = _h1_m.end()
-                    post1["content"] = post1["content"][:_pos] + _img_figure + post1["content"][_pos:]
+                h1_m = _re.search(r"</h1>", post1.get("content", ""))
+                if h1_m:
+                    pos = h1_m.end()
+                    post1["content"] = post1["content"][:pos] + img_figure + post1["content"][pos:]
                 else:
-                    post1["content"] = _img_figure + post1.get("content", "")
+                    post1["content"] = img_figure + post1.get("content", "")
             if attribution:
                 post1["content"] += (
                     f'\n<p class="mm-image-credit" style="font-size:11px;color:#aaa;text-align:right;margin-top:2em;">'
@@ -387,61 +343,71 @@ def _run_pipeline_main(ctx=None) -> None:
         try:
             _, img_html, chart_src = attach_post2_image(post2.get("picks", []))
             if img_html:
-                _url_m = _re.search(r'src="([^"]+)"', img_html)
-                _alt_m = _re.search(r'alt="([^"]+)"', img_html)
-                if _url_m:
+                url_m = _re.search(r'src="([^"]+)"', img_html)
+                alt_m = _re.search(r'alt="([^"]+)"', img_html)
+                if url_m:
                     post2["content"] = _strip_leading_h1(post2["content"])
                     post2["content"] = inject_chart_into_content(
-                        post2["content"], _url_m.group(1),
-                        _alt_m.group(1) if _alt_m else "", source=chart_src,
+                        post2["content"], url_m.group(1),
+                        alt_m.group(1) if alt_m else "", source=chart_src,
                     )
         except Exception as e:
             logger.warning(f"⚠ Post2 이미지 준비 실패 (비치명): {e}")
 
-    # ── Step 3: 발행 ─────────────────────────────────────────────
+
+def _step_publish_all(posts1: list[dict], posts2: list[dict], now: datetime) -> list[dict]:
+    """Step 3: Post1 → Post2 순서 발행. Post1 전체 실패 시 RuntimeError."""
     from publisher import get_or_create_wp_category
 
-    # Post1 오프셋 동적 생성: _POST1_BASE 부터 _POST1_INTERVAL 간격
-    n_post1 = len(posts1)
+    _POST1_INTERVAL     = 30
+    _POST1_BASE         = 10
+    _WP_ANALYSIS_PARENT = 2
+    _WP_PICKS_PARENT    = 3
+
+    def _make_scheduled_at(offset_min: int) -> str:
+        return (now + timedelta(minutes=offset_min)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    n_post1       = len(posts1)
     post1_offsets = [_POST1_BASE + i * _POST1_INTERVAL for i in range(n_post1)]
-    # Post2 오프셋: Post1 마지막 오프셋 이후 30분 간격
-    post1_last = post1_offsets[-1] if post1_offsets else _POST1_BASE
-    _POST2_OFFSETS = [post1_last + 30 + i * 30 for i in range(len(posts2))]
+    post1_last    = post1_offsets[-1] if post1_offsets else _POST1_BASE
+    post2_offsets = [post1_last + 30 + i * 30 for i in range(len(posts2))]
 
     logger.info(f"[Step 3] Post1 {n_post1}개 오프셋: {post1_offsets}")
-    logger.info(f"[Step 3] Post2 {len(posts2)}개 오프셋: {_POST2_OFFSETS}")
+    logger.info(f"[Step 3] Post2 {len(posts2)}개 오프셋: {post2_offsets}")
 
     post1_results = []
     for i, post1 in enumerate(posts1):
         try:
             theme_name = post1.get("_theme_info", {}).get("theme") or post1.get("theme", "")
             cat_id = get_or_create_wp_category(theme_name, _WP_ANALYSIS_PARENT)
-            sched  = _make_scheduled_at(post1_offsets[i])
             result = step_publish(
                 post1, [_WP_ANALYSIS_PARENT, cat_id], f"Step 3A-{i+1}",
-                scheduled_at=sched,
+                scheduled_at=_make_scheduled_at(post1_offsets[i]),
             )
             post1_results.append(result)
         except Exception as e:
             logger.error(f"❌ [Step 3A-{i+1}] Post1 발행 실패: {e}")
 
     if not post1_results:
-        logger.error("❌ Post1 발행 전체 실패")
-        sys.exit(1)
+        raise RuntimeError("Post1 발행 전체 실패")
 
     for i, post2 in enumerate(posts2):
         try:
             theme_name = post2.get("_theme_info", {}).get("theme") or post2.get("theme", "")
             cat_id = get_or_create_wp_category(theme_name, _WP_PICKS_PARENT)
-            sched  = _make_scheduled_at(_POST2_OFFSETS[i])
             step_publish(
                 post2, [_WP_PICKS_PARENT, cat_id], f"Step 3B-{i+1}",
-                scheduled_at=sched,
+                scheduled_at=_make_scheduled_at(post2_offsets[i]),
             )
         except Exception as e:
             logger.error(f"⚠ [Step 3B-{i+1}] Post2 발행 실패: {e}")
 
-    # ── Phase 19: 정상 발행 품질 로그 (다중 포스트) ──────────────
+    return post1_results
+
+
+def _step_post_run(posts1: list[dict], posts2: list[dict], post1_results: list[dict],
+                   run_id: str, slot: str, _ct) -> None:
+    """발행 후처리: 품질 로그, 이력 저장, 비용 요약."""
     try:
         from generator import _log_normal_publish_event
         for i, (post1, result) in enumerate(zip(posts1, post1_results)):
@@ -459,11 +425,9 @@ def _run_pipeline_main(ctx=None) -> None:
     except Exception as e:
         logger.warning(f"⚠ Phase 19 품질로그 실패 (비치명): {e}")
 
-    # ── Phase 10: 발행 이력 저장 ─────────────────────────────────
     if post1_results:
         try:
             from generator import save_publish_history
-            # 대표 post1/post2 (첫 번째)로 이력 저장
             save_publish_history(
                 slot=slot,
                 post1=posts1[0],
@@ -472,7 +436,6 @@ def _run_pipeline_main(ctx=None) -> None:
         except Exception as e:
             logger.warning(f"⚠ 발행 이력 저장 실패 (비치명): {e}")
 
-    # ── 비용 요약 ─────────────────────────────────────────────────
     try:
         run_summary = _ct.get_run_summary()
         logger.info(
@@ -483,6 +446,63 @@ def _run_pipeline_main(ctx=None) -> None:
         )
     except Exception:
         pass
+
+
+# ──────────────────────────────────────────────
+# 4. 메인 실행 진입점
+# ──────────────────────────────────────────────
+def run_pipeline(ctx=None) -> None:
+    """
+    파이프라인 실행 진입점 (Phase 24 M2: UserContext 지원).
+
+    ctx: UserContext 인스턴스 (None이면 from_env()로 자동 생성)
+    API 서버에서 멀티유저 실행 시 ctx를 주입, 단독 실행 시 None.
+    """
+    if ctx is not None:
+        _apply_ctx_to_env(ctx)
+
+    _run_pipeline_main(ctx=ctx)
+
+
+def _run_pipeline_main(ctx=None) -> None:
+    """내부 파이프라인 실행 로직 — step orchestrator."""
+    now    = datetime.now()
+    run_id = now.strftime("%Y%m%d_%H%M%S")
+    slot   = detect_slot(now)
+
+    import cost_tracker as _ct
+    _ct.record_run_start()
+
+    logger.info("=" * 60)
+    logger.info(f"macromalt Phase 22 다중 테마 파이프라인 시작 [run_id: {run_id}]")
+    logger.info(f"[Phase 22] 슬롯: {slot} | run_id: {run_id}")
+    logger.info("=" * 60)
+
+    try:
+        news     = step_scrape_news()
+        research = step_scrape_research()
+    except RuntimeError as e:
+        logger.error(f"❌ [Step 1] 수집 실패: {e}")
+        sys.exit(1)
+
+    themes = _step_select_themes(news, research, slot)
+
+    try:
+        posts1 = _step_generate_posts1(news, research, themes, slot)
+    except RuntimeError as e:
+        logger.error(f"❌ {e} — 파이프라인 중단")
+        sys.exit(1)
+
+    posts2 = _step_generate_posts2(news, research, themes, posts1, slot)
+    _step_prepare_images(posts1, posts2)
+
+    try:
+        post1_results = _step_publish_all(posts1, posts2, now)
+    except RuntimeError as e:
+        logger.error(f"❌ {e}")
+        sys.exit(1)
+
+    _step_post_run(posts1, posts2, post1_results, run_id, slot, _ct)
 
     logger.info("=" * 60)
     logger.info(f"✅ macromalt Phase 22 파이프라인 완료 [run_id: {run_id}]")
