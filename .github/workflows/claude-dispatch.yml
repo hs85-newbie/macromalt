@@ -92,10 +92,11 @@ jobs:
             echo "작업 유형: 코드 수정 [정리] (haiku, 30턴)"
           else
             # 일반 코드 수정: sonnet (가성비)
+            # WHY: 30턴은 [기능] 등 복잡한 작업에서 부족 (HSD-344 사례) → 45턴
             echo "type=code" >> $GITHUB_OUTPUT
-            echo "max_turns=30" >> $GITHUB_OUTPUT
+            echo "max_turns=45" >> $GITHUB_OUTPUT
             echo "model=claude-sonnet-4-6" >> $GITHUB_OUTPUT
-            echo "작업 유형: 코드 수정 [${CATEGORY:-일반}] (sonnet, 30턴)"
+            echo "작업 유형: 코드 수정 [${CATEGORY:-일반}] (sonnet, 45턴)"
           fi
 
       # WHY: task_type에 따라 분석/코드 수정 프롬프트 분기 — 토큰 50% 절약
