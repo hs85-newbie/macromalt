@@ -7908,6 +7908,17 @@ if __name__ == "__main__":
                 if any(kw in clean_h3 for kw in kws):
                     active_themes_in_h3.add(tname)
 
+        # 참고 출처 섹션 내 <li> 개수 (섹션 존재만 검사 → 개수 검사로 강화)
+        _src_section = re.search(
+            r"<h3[^>]*>\s*참고\s*출처\s*</h3>(.*?)(?=<h3|$)",
+            content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        source_li_count = (
+            len(re.findall(r"<li[^>]*>", _src_section.group(1)))
+            if _src_section else 0
+        )
+
         criteria = {
             # ── v3 기존 기준 ────────────────────────────────────────────
             " 1. Gemini 결과가 구조화 JSON으로 출력됐는가?":
@@ -7933,8 +7944,8 @@ if __name__ == "__main__":
                     content,
                 )),
 
-            " 7. 참고 출처 섹션이 본문 데이터와 대응하는가?":
-                bool(re.search(r"참고\s*출처|Reference", content, re.IGNORECASE)),
+            " 7. 참고 출처가 3건 이상 있는가?":
+                source_li_count >= 3,
 
             " 8. 위스키·바텐더 비유가 1회를 넘지 않았는가?":
                 _count_whisky_metaphors(content) <= 2,
