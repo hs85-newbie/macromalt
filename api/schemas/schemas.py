@@ -155,6 +155,11 @@ class SubscriptionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RefundResponse(BaseModel):
+    message: str
+    refund_amount: int
+
+
 # ── Published Posts ───────────────────────────────────────────────────────────
 
 class PublishedPostResponse(BaseModel):

@@ -18,6 +18,7 @@ from models.models import Subscription, User
 from schemas.schemas import (
     PaymentReadyRequest,
     PaymentReadyResponse,
+    RefundResponse,
     SubscriptionResponse,
 )
 
@@ -138,10 +139,12 @@ async def payment_confirm(
             detail="결제 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
         )
 
+    charge_data = charge_resp.json()
     sub = Subscription(
         user_id=user_id,
         toss_billing_key=billing_key,
         toss_customer_key=customer_key,
+        last_payment_key=charge_data.get("paymentKey"),
         plan="pro",
         status="active",
         amount=49900,
@@ -222,6 +225,9 @@ async def payment_webhook(
     if is_success:
         sub.status = "active"
         sub.next_billing_at = datetime.utcnow() + timedelta(days=30)
+        payment_key = data.get("paymentKey") or data.get("payment", {}).get("paymentKey")
+        if payment_key:
+            sub.last_payment_key = payment_key
         if user:
             user.plan = "pro"
     elif is_failed:
@@ -288,7 +294,59 @@ async def cancel_subscription(
     return {"message": "구독 해지 완료. 현재 기간 만료 후 Free로 전환됩니다."}
 
 
-# ── 6. 실패 콜백 ──────────────────────────────────────────────
+# ── 6. 환불 ──────────────────────────────────────────────────
+@router.post("/refund", response_model=RefundResponse)
+async def refund_payment(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.user_id == current_user.id,
+            Subscription.status == "active",
+        )
+    )
+    sub = result.scalar_one_or_none()
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="활성 구독 없음",
+        )
+    if not sub.last_payment_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="환불 가능한 결제 내역이 없습니다",
+        )
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{TOSS_BASE}/payments/{sub.last_payment_key}/cancel",
+            headers={
+                "Authorization": _toss_auth_header(),
+                "Content-Type": "application/json",
+            },
+            json={"cancelReason": "고객 요청 환불"},
+        )
+
+    if resp.status_code != 200:
+        logger.error(f"[Toss] 환불 실패 (HTTP {resp.status_code}): {resp.text}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="환불 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+        )
+
+    refund_data = resp.json()
+    refund_amount = refund_data.get("totalAmount", sub.amount)
+
+    sub.status = "cancelled"
+    sub.cancelled_at = datetime.utcnow()
+    current_user.plan = "free"
+    await db.commit()
+
+    return RefundResponse(message="환불 완료. 영업일 기준 3~5일 내 처리됩니다.", refund_amount=refund_amount)
+
+
+# ── 7. 실패 콜백 ──────────────────────────────────────────────
 @router.get("/fail")
 async def payment_fail(request: Request):
     return {"message": "결제가 취소되었습니다."}

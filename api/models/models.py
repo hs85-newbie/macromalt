@@ -49,6 +49,7 @@ class Subscription(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     toss_billing_key = Column(String(255))
     toss_customer_key = Column(String(255))
+    last_payment_key = Column(String(255))  # Toss paymentKey (환불용)
     plan = Column(String(20), nullable=False, default="pro")
     status = Column(String(20), nullable=False, default="inactive")
     amount = Column(Integer, nullable=False, default=49900)

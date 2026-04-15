@@ -2,6 +2,7 @@
 Toss Payments 라우터 테스트
 실제 Toss API 호출은 mock 처리 — Toss 키 없이도 통과
 """
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -200,3 +201,94 @@ async def test_cancel_subscription_active(client, async_session):
 
     await async_session.refresh(user)
     assert user.plan == "free"
+
+
+# ── 9. POST /api/payments/refund (정상) → 환불 완료 ────────────────────────────
+@pytest.mark.asyncio
+async def test_refund_success(client, async_session):
+    token = await _register_and_login(client, "refund_ok@example.com")
+
+    result = await async_session.execute(
+        select(User).where(User.email == "refund_ok@example.com")
+    )
+    user = result.scalar_one()
+    user.plan = "pro"
+
+    sub = Subscription(
+        user_id=user.id,
+        toss_billing_key="bk_refund_ok",
+        toss_customer_key=f"macromalt-{user.id}-aaaa1111",
+        last_payment_key="pk_refund_ok_12345",
+        plan="pro",
+        status="active",
+        amount=49900,
+    )
+    async_session.add(sub)
+    await async_session.commit()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"totalAmount": 49900}
+
+    mock_http = AsyncMock()
+    mock_http.post.return_value = mock_resp
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("routers.payments.httpx.AsyncClient", return_value=mock_http):
+        resp = await client.post(
+            "/api/payments/refund",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "환불" in data["message"]
+    assert data["refund_amount"] == 49900
+
+    await async_session.refresh(sub)
+    assert sub.status == "cancelled"
+    assert sub.cancelled_at is not None
+
+    await async_session.refresh(user)
+    assert user.plan == "free"
+
+
+# ── 10. POST /api/payments/refund (구독 없음) → 404 ────────────────────────────
+@pytest.mark.asyncio
+async def test_refund_no_subscription(client):
+    token = await _register_and_login(client, "refund_none@example.com")
+    resp = await client.post(
+        "/api/payments/refund",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+# ── 11. POST /api/payments/refund (paymentKey 없음) → 400 ──────────────────────
+@pytest.mark.asyncio
+async def test_refund_no_payment_key(client, async_session):
+    token = await _register_and_login(client, "refund_nopk@example.com")
+
+    result = await async_session.execute(
+        select(User).where(User.email == "refund_nopk@example.com")
+    )
+    user = result.scalar_one()
+
+    sub = Subscription(
+        user_id=user.id,
+        toss_billing_key="bk_nopk",
+        toss_customer_key=f"macromalt-{user.id}-bbbb2222",
+        last_payment_key=None,
+        plan="pro",
+        status="active",
+        amount=49900,
+    )
+    async_session.add(sub)
+    await async_session.commit()
+
+    resp = await client.post(
+        "/api/payments/refund",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 400
