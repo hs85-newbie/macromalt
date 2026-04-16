@@ -225,25 +225,47 @@ _KOREAN_FONT_PATHS = [
     "/System/Library/Fonts/Supplemental/AppleGothic.ttf",  # macOS fallback
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",      # Ubuntu
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Ubuntu fallback
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",   # Fedora/RHEL
+    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",  # Fedora alternate
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",  # Ubuntu alternate path
+    "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",           # Debian alternate
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",  # 마지막 폴백
 ]
 
 def _setup_korean_font() -> None:
     """한글 폰트를 matplotlib에 직접 등록하고 설정합니다 (파일 경로 기반, 확실한 방법)."""
     import os as _os
+    import subprocess
+    import matplotlib
     import matplotlib.font_manager as fm
 
+    def _apply_font(path: str) -> bool:
+        try:
+            fm.fontManager.addfont(path)
+            prop = fm.FontProperties(fname=path)
+            matplotlib.rcParams["font.family"] = prop.get_name()
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            logger.info(f"  [images] 한글 폰트 설정: {prop.get_name()} ({path})")
+            return True
+        except Exception as e:
+            logger.warning(f"  [images] 폰트 로드 실패 ({path}): {e}")
+            return False
+
     for path in _KOREAN_FONT_PATHS:
-        if _os.path.exists(path):
-            try:
-                fm.fontManager.addfont(path)
-                prop = fm.FontProperties(fname=path)
-                import matplotlib
-                matplotlib.rcParams["font.family"] = prop.get_name()
-                matplotlib.rcParams["axes.unicode_minus"] = False
-                logger.info(f"  [images] 한글 폰트 설정: {prop.get_name()} ({path})")
-                return
-            except Exception as e:
-                logger.warning(f"  [images] 폰트 로드 실패 ({path}): {e}")
+        if _os.path.exists(path) and _apply_font(path):
+            return
+
+    # fc-match로 시스템에서 한글 지원 폰트 동적 탐색
+    try:
+        result = subprocess.run(
+            ["fc-match", ":lang=ko", "--format=%{file}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        path = result.stdout.strip()
+        if path and _os.path.exists(path) and _apply_font(path):
+            return
+    except Exception as e:
+        logger.warning(f"  [images] fc-match 폰트 탐색 실패: {e}")
 
     logger.warning("  [images] 한글 폰트 없음 — 폰트 깨짐 가능")
 
